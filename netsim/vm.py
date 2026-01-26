@@ -3,11 +3,14 @@ Libvirt (KVM/QEMU) VM management.
 """
 
 import xml.etree.ElementTree as ET
+import os
 import subprocess
 import time
 from pathlib import Path
 from typing import Optional, List
 from dataclasses import dataclass, field
+
+import libvirt
 
 
 @dataclass
@@ -257,103 +260,90 @@ class LibvirtVM:
 
     def start(self):
         """Create and start or resume the VM via libvirt."""
+        # Generate domain XML (which creates the COW disk)
         try:
-            # Generate domain XML (which creates the COW disk)
+            xml = self._generate_domain_xml()
+        except RuntimeError as e:
+            raise RuntimeError(f"Failed to prepare VM disk: {e}")
+
+        conn = self._get_conn()
+        try:
+            # If domain exists, handle existing state or redefine
+            dom = None
             try:
-                xml = self._generate_domain_xml()
-            except RuntimeError as e:
-                raise RuntimeError(f"Failed to prepare VM disk: {e}")
+                dom = conn.lookupByName(self.config.name)
+            except libvirt.libvirtError:
+                dom = None
 
-            # Check if domain already exists
-            result = subprocess.run(
-                ["virsh", "domstate", self.config.name], capture_output=True, timeout=5
-            )
-
-            if result.returncode == 0:
-                state = result.stdout.decode().strip()
-                if state == "paused":
-                    subprocess.run(
-                        ["virsh", "resume", self.config.name],
-                        check=True,
-                        capture_output=True,
-                        timeout=5,
-                    )
+            if dom is not None:
+                state, _ = dom.state()
+                if state == libvirt.VIR_DOMAIN_PAUSED:
+                    dom.resume()
                     return
-                if state == "running":
+                if state == libvirt.VIR_DOMAIN_RUNNING:
                     return
+                # Undefine to refresh XML for shutoff/crashed domains
+                try:
+                    dom.undefine()
+                except libvirt.libvirtError:
+                    pass
 
-                # Undefine the old domain so we can recreate it (covers shut off or crashed)
-                subprocess.run(
-                    ["virsh", "undefine", self.config.name],
-                    capture_output=True,
-                    timeout=5,
-                )
+            # Define and start
+            dom = conn.defineXML(xml)
+            if dom is None:
+                raise RuntimeError(f"Failed to define domain {self.config.name}")
 
-            # Create and start the domain with updated XML
-            xml_file = self.vm_dir / f"{self.config.name}.xml"
-            xml_file.write_text(xml)
-
-            subprocess.run(
-                ["virsh", "define", str(xml_file)], check=True, capture_output=True
-            )
-
-            subprocess.run(
-                ["virsh", "start", self.config.name], check=True, capture_output=True
-            )
+            dom.create()
 
             # Wait for VM to be running
             timeout = 10
             start_time = time.time()
-            while not self.is_running():
+            while True:
+                state, _ = dom.state()
+                if state == libvirt.VIR_DOMAIN_RUNNING:
+                    return
                 if time.time() - start_time > timeout:
                     raise RuntimeError(
                         f"VM {self.config.name} failed to start within {timeout}s"
                     )
                 time.sleep(0.2)
-
-        except subprocess.CalledProcessError as e:
-            stderr = e.stderr.decode() if isinstance(e.stderr, bytes) else str(e.stderr)
-            stdout = e.stdout.decode() if isinstance(e.stdout, bytes) else str(e.stdout)
-            raise RuntimeError(
-                f"Failed to start VM {self.config.name}: {stderr or stdout}"
-            )
+        finally:
+            conn.close()
 
     def stop(self):
         """Suspend the VM (keep memory for fast resume)."""
         try:
-            if self.is_running():
-                subprocess.run(
-                    ["virsh", "suspend", self.config.name],
-                    check=True,
-                    capture_output=True,
-                    timeout=5,
-                )
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(
-                f"Failed to suspend VM {self.config.name}: {e.stderr.decode()}"
-            )
-        except subprocess.TimeoutExpired:
-            raise RuntimeError(f"Timeout suspending VM {self.config.name}")
+            conn = self._get_conn()
+            try:
+                dom = conn.lookupByName(self.config.name)
+            except libvirt.libvirtError:
+                return
+            state, _ = dom.state()
+            if state == libvirt.VIR_DOMAIN_RUNNING:
+                dom.suspend()
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     def destroy(self):
         """Permanently delete the VM and its data."""
+        conn = self._get_conn()
         try:
-            # Stop if running
-            if self.is_running():
-                subprocess.run(
-                    ["virsh", "destroy", self.config.name],
-                    check=False,
-                    capture_output=True,
-                    timeout=5,
-                )
+            try:
+                dom = conn.lookupByName(self.config.name)
+            except libvirt.libvirtError:
+                dom = None
 
-            # Undefine the domain
-            subprocess.run(
-                ["virsh", "undefine", self.config.name],
-                check=False,
-                capture_output=True,
-                timeout=5,
-            )
+            if dom is not None:
+                state, _ = dom.state()
+                if state == libvirt.VIR_DOMAIN_RUNNING:
+                    dom.destroy()
+                try:
+                    dom.undefine()
+                except libvirt.libvirtError:
+                    pass
 
             # Remove runtime artifacts for this VM (COW disk, XML)
             try:
@@ -367,45 +357,74 @@ class LibvirtVM:
                     self.vm_dir.rmdir()
             except Exception:
                 pass
-        except subprocess.TimeoutExpired:
-            raise RuntimeError(f"Timeout destroying VM {self.config.name}")
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     def is_running(self) -> bool:
         """Check if VM is running."""
         try:
-            result = subprocess.run(
-                ["virsh", "domstate", self.config.name], capture_output=True, timeout=5
-            )
-            if result.returncode == 0:
-                state = result.stdout.decode().strip()
-                return state == "running"
-            return False
-        except subprocess.TimeoutExpired:
-            return False
+            conn = self._get_conn()
+            try:
+                dom = conn.lookupByName(self.config.name)
+            except libvirt.libvirtError:
+                return False
+            state, _ = dom.state()
+            return state == libvirt.VIR_DOMAIN_RUNNING
         except Exception:
             return False
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     def get_info(self) -> dict:
         """Get VM information."""
+        conn = self._get_conn()
         try:
-            result = subprocess.run(
-                ["virsh", "dominfo", self.config.name], capture_output=True, timeout=5
-            )
-            if result.returncode != 0:
+            try:
+                dom = conn.lookupByName(self.config.name)
+            except libvirt.libvirtError:
                 return {"state": "undefined"}
 
-            info = {}
-            for line in result.stdout.decode().split("\n"):
-                if ":" in line:
-                    key, val = line.split(":", 1)
-                    info[key.strip().lower()] = val.strip()
-
+            info = dom.info()
+            state = info[0]
             return {
                 "name": self.config.name,
-                "state": info.get("state", "unknown"),
-                "memory_mb": int(info.get("used memory", "0").split()[0]),
-                "max_memory_mb": int(info.get("max memory", "0").split()[0]),
-                "vcpus": int(info.get("cpu(s)", "0")),
+                "state": self._state_to_str(state),
+                "memory_mb": int(info[2] / 1024),
+                "max_memory_mb": int(info[1] / 1024),
+                "vcpus": int(info[3]),
             }
         except Exception:
             return {"state": "error"}
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def _get_conn(self) -> libvirt.virConnect:
+        """Open a libvirt connection (session by default)."""
+        uri = os.environ.get("NETSIM_LIBVIRT_URI", "qemu:///session")
+        conn = libvirt.open(uri)
+        if conn is None:
+            raise RuntimeError(f"Failed to open libvirt connection to {uri}")
+        return conn
+
+    @staticmethod
+    def _state_to_str(state: int) -> str:
+        mapping = {
+            libvirt.VIR_DOMAIN_NOSTATE: "nostate",
+            libvirt.VIR_DOMAIN_RUNNING: "running",
+            libvirt.VIR_DOMAIN_BLOCKED: "blocked",
+            libvirt.VIR_DOMAIN_PAUSED: "paused",
+            libvirt.VIR_DOMAIN_SHUTDOWN: "shutdown",
+            libvirt.VIR_DOMAIN_SHUTOFF: "shutoff",
+            libvirt.VIR_DOMAIN_CRASHED: "crashed",
+            libvirt.VIR_DOMAIN_PMSUSPENDED: "pmsuspended",
+        }
+        return mapping.get(state, "unknown")

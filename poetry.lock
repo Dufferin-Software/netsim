@@ -88,6 +88,17 @@ files = [
 ]
 
 [[package]]
+name = "libvirt-python"
+version = "12.0.0"
+description = "The libvirt virtualization API python binding"
+optional = false
+python-versions = ">=3.6"
+groups = ["main"]
+files = [
+    {file = "libvirt_python-12.0.0.tar.gz", hash = "sha256:7b4de7d2dde2bc380cf4e108d1eeb8aad50beb3ae351ab9265a7fedc587742bc"},
+]
+
+[[package]]
 name = "mypy"
 version = "1.19.1"
 description = "Optional static typing for Python"
@@ -376,4 +387,4 @@ files = [
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.9,<4.0"
-content-hash = "5497b3d2542bb2b19577a437f208706f9d15174385607bf5a34775381dec400c"
+content-hash = "6d63eb65388c1208b589161410c05637a67c69c031549b80bbb37928818c1b5a"
