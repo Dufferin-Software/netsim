@@ -1,0 +1,35 @@
+name: "two-node-topology"
+version: "1.0"
+
+networks:
+  - name: "net1"
+    subnet: "10.0.1.0/24"
+    mtu: 1500
+
+nodes:
+  # Example 1: Direct path to local image
+  - name: "node1"
+    image:
+      name: "debian-13-genericcloud"
+      url: "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2"
+      checksum: "ff30b54d70c1292f9ff1115b2ba95d171e067e784b72d02a1d4bc9d8a6a25ed9"
+    memory: 512
+    vcpus: 1
+    interfaces:
+      - name: "eth0"
+        network: "net1"
+        ip: "10.0.1.10/24"
+
+  # Example 2: Debian 13 cloud image with auto-download from official source
+  # Image and checksum from: https://cloud.debian.org/images/cloud/trixie/latest/
+  - name: "node2"
+    image:
+      name: "debian-13-genericcloud"
+      url: "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2"
+      checksum: "ff30b54d70c1292f9ff1115b2ba95d171e067e784b72d02a1d4bc9d8a6a25ed9"
+    memory: 512
+    vcpus: 1
+    interfaces:
+      - name: "eth0"
+        network: "net1"
+        ip: "10.0.1.11/24"

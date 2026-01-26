@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "netsim"
+version = "0.1.0"
+description = "Network Topology Simulator for eBPF XDP Development"
+authors = ["Peter <peter@gmail.com>"]
+readme = "README.md"
+packages = [{include = "netsim"}]
+
+[tool.poetry.dependencies]
+python = "^3.8"
+PyYAML = "*"
+
+[tool.poetry.scripts]
+netsim = "netsim.cli:main"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
