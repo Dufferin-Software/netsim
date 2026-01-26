@@ -75,17 +75,16 @@ def _show_connection_info(topology, simulator, target_node=None):
             # Show console access method
             print(f"  Console access: virsh console {node_name}")
 
-            # Show IP addresses from topology
-            if node.interfaces:
-                print("  Network interfaces (configured):")
-                for iface in node.interfaces:
-                    ip_info = f"{iface.ip}" if iface.ip else "DHCP"
-                    print(f"    - {iface.name}: {iface.network} ({ip_info})")
+            # Show auto-allocated interfaces
+            if node_name in simulator.node_interfaces:
+                print("  Network interfaces (auto-allocated):")
+                for idx, (net_name, ip_cidr) in enumerate(simulator.node_interfaces[node_name]):
+                    print(f"    - eth{idx}: {net_name} ({ip_cidr})")
 
             mgmt_port = 2200 + name_to_idx.get(node_name, 0)
             print(f"  SSH (management): ssh -p {mgmt_port} netsim@localhost")
             print("    (User-mode NAT with port forwarding; always available)")
-            if node.interfaces:
+            if len(node.networks) > 1:
                 print("  Data interfaces:")
                 print("    Use the configured IPs above for traffic tests")
         else:

@@ -17,15 +17,6 @@ class Network:
 
 
 @dataclass
-class NodeInterface:
-    """Network interface configuration for a node."""
-
-    name: str
-    network: str  # reference to network name
-    ip: str  # IP address for this interface
-
-
-@dataclass
 class Node:
     """Represents a VM node in the topology."""
 
@@ -35,7 +26,7 @@ class Node:
     ]  # Either a path or {name, url, checksum} reference
     memory: int = 512  # MB
     vcpus: int = 1
-    interfaces: List[NodeInterface] = field(default_factory=list)
+    networks: List[str] = field(default_factory=list)  # List of network names; first is mgmt
 
 
 @dataclass
@@ -87,15 +78,8 @@ class TopologyParser:
         # Parse nodes
         nodes = []
         for node_data in data.get("nodes", []):
-            interfaces = []
-            for iface_data in node_data.get("interfaces", []):
-                interfaces.append(
-                    NodeInterface(
-                        name=iface_data["name"],
-                        network=iface_data["network"],
-                        ip=iface_data["ip"],
-                    )
-                )
+            # Get list of network names this node connects to
+            node_networks = node_data.get("networks", [])
 
             nodes.append(
                 Node(
@@ -103,7 +87,7 @@ class TopologyParser:
                     image=node_data["image"],
                     memory=node_data.get("memory", 512),
                     vcpus=node_data.get("vcpus", 1),
-                    interfaces=interfaces,
+                    networks=node_networks,
                 )
             )
 
@@ -123,8 +107,8 @@ class TopologyParser:
         network_names = {n.name for n in networks}
 
         for node in nodes:
-            for iface in node.interfaces:
-                if iface.network not in network_names:
+            for net_name in node.networks:
+                if net_name not in network_names:
                     raise ValueError(
-                        f"Node {node.name} references unknown network {iface.network}"
+                        f"Node {node.name} references unknown network {net_name}"
                     )

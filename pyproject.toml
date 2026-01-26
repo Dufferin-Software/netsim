@@ -10,9 +10,13 @@ packages = [{include = "netsim"}]
 python = ">=3.9,<4.0"
 PyYAML = "*"
 libvirt-python = "*"
+
+[tool.poetry.group.dev.dependencies]
 ruff = "^0.14.14"
 mypy = "^1.19.1"
 types-pyyaml = "^6.0.12.20250915"
+pytest = "^7.0"
+paramiko = "^3.0"
 
 [tool.poetry.scripts]
 netsim = "netsim.cli:main"

@@ -5,7 +5,8 @@ Main topology simulator orchestrating VMs and networks.
 import logging
 import shutil
 import yaml
-from typing import Dict, Optional
+import ipaddress
+from typing import Dict, Optional, List, Tuple
 from pathlib import Path
 
 from netsim.topology import Topology
@@ -43,8 +44,10 @@ class TopologySimulator:
         self.runtime_dir = runtime_dir
         self.image_manager = ImageManager(cache_dir=image_cache_dir)
         self.vms: Dict[str, LibvirtVM] = {}
-        self.tap_devices: Dict[str, str] = {}  # Maps (node, iface) -> tap_name
+        self.tap_devices: Dict[Tuple[str, int], str] = {}  # Maps (node_name, iface_idx) -> tap_name
+        self.node_interfaces: Dict[str, List[Tuple[str, str]]] = {}  # Maps node_name -> [(net_name, ip_cidr), ...]
         self.bridges: Dict[str, str] = {}  # Maps network_name -> bridge_name
+        self.net_allocators: Dict[str, ipaddress.IPv4Network] = {}  # Track IP allocation per network
 
     def setup(self):
         """Setup topology: create bridges, tap devices, configure VMs."""
@@ -93,20 +96,31 @@ class TopologySimulator:
         for idx, node in enumerate(self.topology.nodes):
             logger.debug(f"Creating VM: {node.name}")
 
-            # Create tap interfaces for this node
+            # Auto-allocate tap interfaces and IPs based on node.networks
             tap_devices = []
-            for iface in node.interfaces:
-                tap_name = f"tap-{node.name}-{iface.name}"
-                logger.debug(f"Creating tap interface: {tap_name}")
+            node_ifaces = []  # List of (network_name, ip_cidr)
+
+            for net_idx, net_name in enumerate(node.networks):
+                # Generate tap name
+                if_name = f"eth{net_idx}"
+                tap_name = f"tap-{node.name}-{if_name}"
+                logger.debug(f"Creating tap interface: {tap_name} for {net_name}")
 
                 NetworkManager.create_tap(tap_name)
 
                 # Add to appropriate bridge
-                bridge_name = self.bridges[iface.network]
+                bridge_name = self.bridges[net_name]
                 NetworkManager.bridge_tap(bridge_name, tap_name)
 
                 tap_devices.append(tap_name)
-                self.tap_devices[(node.name, iface.name)] = tap_name
+                self.tap_devices[(node.name, net_idx)] = tap_name
+
+                # Auto-allocate IP from network
+                ip_cidr = self._allocate_ip(net_name)
+                node_ifaces.append((net_name, ip_cidr))
+                logger.debug(f"Allocated {if_name}: {ip_cidr} on {net_name}")
+
+            self.node_interfaces[node.name] = node_ifaces
 
             # Resolve image path (may download from cache)
             logger.debug(f"Resolving image for {node.name}: {node.image}")
@@ -163,6 +177,7 @@ class TopologySimulator:
                         "name": "netsim",
                         "groups": ["sudo"],
                         "shell": "/bin/bash",
+                        "sudo": ["ALL=(ALL) NOPASSWD:ALL"],
                         "ssh_authorized_keys": [ssh_key],
                     }
                 ]
@@ -291,9 +306,9 @@ class TopologySimulator:
 
         if not self.tap_devices:
             for node in self.topology.nodes:
-                for iface in node.interfaces:
-                    tap_name = f"tap-{node.name}-{iface.name}"
-                    self.tap_devices[(node.name, iface.name)] = tap_name
+                for iface_idx in range(len(node.networks)):
+                    tap_name = f"tap-{node.name}-eth{iface_idx}"
+                    self.tap_devices[(node.name, iface_idx)] = tap_name
 
         if not self.vms:
             for idx, node in enumerate(self.topology.nodes):
@@ -380,3 +395,41 @@ class TopologySimulator:
         parts = subnet_ip.split(".")
         parts[-1] = "1"
         return f"{'.'.join(parts)}/{prefix}"
+    def _allocate_ip(self, net_name: str) -> str:
+        """Allocate next IP address from a network.
+
+        Gateway (.1) is reserved, IPs start from .10
+
+        Args:
+            net_name: Name of network
+
+        Returns:
+            IP address in CIDR notation (e.g., "10.0.1.10/24")
+        """
+        # Initialize allocator if not present
+        if net_name not in self.net_allocators:
+            network = self.topology.get_network(net_name)
+            if not network:
+                raise ValueError(f"Unknown network: {net_name}")
+
+            net = ipaddress.IPv4Network(network.subnet, strict=False)
+            self.net_allocators[net_name] = net
+
+            # Start allocation from .10 (index 9, since hosts[0] is .1)
+            # Skip .1 which is gateway, .2-.9 reserved
+            self.net_allocators[net_name]._current_alloc = 9
+        else:
+            self.net_allocators[net_name]._current_alloc += 1
+
+        net = self.net_allocators[net_name]
+        alloc_idx = net._current_alloc
+
+        # Generate IP address
+        hosts = list(net.hosts())
+        if alloc_idx >= len(hosts):
+            raise ValueError(
+                f"IP pool exhausted for network {net_name}. Subnet too small."
+            )
+
+        ip_addr = hosts[alloc_idx]
+        return f"{ip_addr}/{net.prefixlen}"

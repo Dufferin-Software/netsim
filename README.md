@@ -54,7 +54,9 @@ netsim destroy examples/two-node-topology.yaml
 
 ## Topology Basics
 - Networks: name, subnet, mtu
-- Nodes: name, image (path or {name,url,checksum}), memory, vcpus, interfaces (name, network, ip)
+- Nodes: name, image (path or {name,url,checksum}), memory, vcpus, networks (list of network names to connect)
+- Interfaces: auto-allocated at start time. First network = eth0 (management), additional networks = eth1, eth2, etc.
+- IPs: auto-allocated from each subnet starting at .10 (gateway is .1)
 - Example: see `examples/two-node-topology.yaml`
 
 ## Cloud-Init
