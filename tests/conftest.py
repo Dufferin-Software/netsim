@@ -5,11 +5,13 @@ Provides:
 - Topology loading
 - SSH access to nodes
 - Interface configuration with netplan
+- Pause on failure for debugging
 """
 
 import subprocess
 import tempfile
 import logging
+import os
 from pathlib import Path
 from typing import Dict, List, Tuple
 import pytest
@@ -23,6 +25,26 @@ logger = logging.getLogger(__name__)
 
 # Session-level variable to store discovered topology path
 _topology_path: Path = None
+
+# Track if any test failed
+_test_failed: bool = False
+
+
+def pytest_addoption(parser):
+    """Add custom command-line options."""
+    parser.addoption(
+        "--pause-on-failure",
+        action="store_true",
+        default=False,
+        help="Keep topology running and pause for debugging when tests fail"
+    )
+
+
+def pytest_runtest_makereport(item, call):
+    """Track test failures."""
+    global _test_failed
+    if call.when == "call" and call.excinfo is not None:
+        _test_failed = True
 
 
 def pytest_collection_modifyitems(session, config, items):
@@ -63,17 +85,23 @@ def topology(topology_path: Path):
 
 
 @pytest.fixture(scope="session")
-def running_topology(topology):
+def running_topology(topology, request):
     """
     Auto-start topology for entire test session, clean up after.
     
     This fixture ensures VMs are running before any tests execute.
+    Supports --pause-on-failure to keep VMs running for debugging.
     """
     import time
+    global _test_failed
     
     logger.info(f"=" * 60)
     logger.info(f"Starting topology: {topology.name}")
     logger.info(f"=" * 60)
+    
+    # Check if pause on failure is enabled (CLI option or env var)
+    pause_on_failure = request.config.getoption("--pause-on-failure", False) or \
+                      os.environ.get("NETSIM_PAUSE_ON_FAILURE", "").lower() in ("1", "true", "yes")
     
     with tempfile.TemporaryDirectory(prefix="netsim-test-") as runtime_dir:
         simulator = TopologySimulator(topology, runtime_dir=runtime_dir)
@@ -130,6 +158,23 @@ def running_topology(topology):
             yield simulator
             
         finally:
+            # Check if we should pause before teardown
+            if pause_on_failure and _test_failed:
+                logger.info(f"=" * 60)
+                logger.info(f"⚠ TEST FAILURE DETECTED - PAUSING FOR DEBUGGING")
+                logger.info(f"=" * 60)
+                logger.info(f"Topology is still running. SSH access:")
+                for idx, node in enumerate(topology.nodes):
+                    ssh_port = 2200 + idx
+                    logger.info(f"  {node.name}: ssh -p {ssh_port} netsim@localhost")
+                logger.info(f"")
+                logger.info(f"Press ENTER to tear down topology and continue...")
+                logger.info(f"=" * 60)
+                try:
+                    input()
+                except (EOFError, KeyboardInterrupt):
+                    logger.info(f"Proceeding with teardown...")
+            
             logger.info(f"=" * 60)
             logger.info(f"Tearing down topology")
             logger.info(f"=" * 60)

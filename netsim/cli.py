@@ -78,7 +78,9 @@ def _show_connection_info(topology, simulator, target_node=None):
             # Show auto-allocated interfaces
             if node_name in simulator.node_interfaces:
                 print("  Network interfaces (auto-allocated):")
-                for idx, (net_name, ip_cidr) in enumerate(simulator.node_interfaces[node_name]):
+                for idx, (net_name, ip_cidr) in enumerate(
+                    simulator.node_interfaces[node_name]
+                ):
                     print(f"    - eth{idx}: {net_name} ({ip_cidr})")
 
             mgmt_port = 2200 + name_to_idx.get(node_name, 0)

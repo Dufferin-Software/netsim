@@ -44,10 +44,16 @@ class TopologySimulator:
         self.runtime_dir = runtime_dir
         self.image_manager = ImageManager(cache_dir=image_cache_dir)
         self.vms: Dict[str, LibvirtVM] = {}
-        self.tap_devices: Dict[Tuple[str, int], str] = {}  # Maps (node_name, iface_idx) -> tap_name
-        self.node_interfaces: Dict[str, List[Tuple[str, str]]] = {}  # Maps node_name -> [(net_name, ip_cidr), ...]
+        self.tap_devices: Dict[
+            Tuple[str, int], str
+        ] = {}  # Maps (node_name, iface_idx) -> tap_name
+        self.node_interfaces: Dict[
+            str, List[Tuple[str, str]]
+        ] = {}  # Maps node_name -> [(net_name, ip_cidr), ...]
         self.bridges: Dict[str, str] = {}  # Maps network_name -> bridge_name
-        self.net_allocators: Dict[str, ipaddress.IPv4Network] = {}  # Track IP allocation per network
+        self.net_allocators: Dict[
+            str, ipaddress.IPv4Network
+        ] = {}  # Track IP allocation per network
 
     def setup(self):
         """Setup topology: create bridges, tap devices, configure VMs."""
@@ -395,6 +401,7 @@ class TopologySimulator:
         parts = subnet_ip.split(".")
         parts[-1] = "1"
         return f"{'.'.join(parts)}/{prefix}"
+
     def _allocate_ip(self, net_name: str) -> str:
         """Allocate next IP address from a network.
 

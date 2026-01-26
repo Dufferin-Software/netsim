@@ -26,7 +26,9 @@ class Node:
     ]  # Either a path or {name, url, checksum} reference
     memory: int = 512  # MB
     vcpus: int = 1
-    networks: List[str] = field(default_factory=list)  # List of network names; first is mgmt
+    networks: List[str] = field(
+        default_factory=list
+    )  # List of network names; first is mgmt
 
 
 @dataclass
