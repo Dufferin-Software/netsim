@@ -54,6 +54,9 @@ class TopologySimulator:
         self.net_allocators: Dict[
             str, ipaddress.IPv4Network
         ] = {}  # Track IP allocation per network
+        self.net_alloc_indices: Dict[
+            str, int
+        ] = {}  # Track current allocation index per network
 
     def setup(self):
         """Setup topology: create bridges, tap devices, configure VMs."""
@@ -424,12 +427,12 @@ class TopologySimulator:
 
             # Start allocation from .10 (index 9, since hosts[0] is .1)
             # Skip .1 which is gateway, .2-.9 reserved
-            self.net_allocators[net_name]._current_alloc = 9
+            self.net_alloc_indices[net_name] = 9
         else:
-            self.net_allocators[net_name]._current_alloc += 1
+            self.net_alloc_indices[net_name] += 1
 
         net = self.net_allocators[net_name]
-        alloc_idx = net._current_alloc
+        alloc_idx = self.net_alloc_indices[net_name]
 
         # Generate IP address
         hosts = list(net.hosts())

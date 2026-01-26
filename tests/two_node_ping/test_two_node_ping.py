@@ -1,16 +1,8 @@
 """
-Example tests for two-node topology.
+Two-node ping connectivity tests.
 
-This test suite demonstrates:
-- Inheriting from BaseTopologyTests for standard validation
-- Adding topology-specific tests
-
-The base tests automatically validate:
-- Node and interface configuration
-- Interface discovery
-- IP assignment
-- Connectivity between nodes
-- Interface control (up/down)
+This test suite validates basic ICMP connectivity between two nodes.
+Inherits standard validation tests from BaseTopologyTests.
 """
 
 import subprocess
@@ -18,7 +10,7 @@ import pytest
 from tests.conftest import BaseTopologyTests
 
 
-class TestTwoNodeConnectivity(BaseTopologyTests):
+class TestTwoNodePing(BaseTopologyTests):
     """Test connectivity between two nodes.
     
     Inherits standard tests from BaseTopologyTests.

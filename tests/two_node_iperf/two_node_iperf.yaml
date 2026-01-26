@@ -1,0 +1,30 @@
+name: "two-node-topology"
+version: "1.0"
+
+networks:
+  - name: "net1"
+    subnet: "10.0.1.0/24"
+    mtu: 1500
+
+nodes:
+  # Node 1: connects to net1
+  - name: "server"
+    image:
+      name: "debian-13-genericcloud"
+      url: "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2"
+      checksum: "ff30b54d70c1292f9ff1115b2ba95d171e067e784b72d02a1d4bc9d8a6a25ed9"
+    memory: 512
+    vcpus: 1
+    networks:
+      - "net1"
+
+  # Node 2: connects to net1
+  - name: "client"
+    image:
+      name: "debian-13-genericcloud"
+      url: "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2"
+      checksum: "ff30b54d70c1292f9ff1115b2ba95d171e067e784b72d02a1d4bc9d8a6a25ed9"
+    memory: 512
+    vcpus: 1
+    networks:
+      - "net1"

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional, List
 from dataclasses import dataclass, field
 
-import libvirt
+import libvirt  # type: ignore[import-untyped]
 
 
 @dataclass

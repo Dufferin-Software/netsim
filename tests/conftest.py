@@ -278,6 +278,59 @@ def ssh_command() -> callable:
     return _ssh_run
 
 
+@pytest.fixture(scope="session")
+def install_packages(ssh_command, node_ssh_port):
+    """
+    Fixture for installing packages on nodes.
+    
+    Returns a callable: install_packages(node_name, packages)
+    
+    Example:
+        def test_example(install_packages):
+            install_packages("node1", ["iperf3", "tcpdump"])
+    """
+    installed_cache = {}  # Track what's been installed to avoid duplicates
+    
+    def _install(node_name: str, packages: list[str]) -> None:
+        """
+        Install packages on a node using apt (Debian/Ubuntu).
+        
+        Args:
+            node_name: Name of the node
+            packages: List of package names to install
+        """
+        cache_key = (node_name, tuple(sorted(packages)))
+        if cache_key in installed_cache:
+            logger.debug(f"{node_name}: packages {packages} already installed")
+            return
+        
+        ssh_port = node_ssh_port(node_name)
+        package_list = " ".join(packages)
+        
+        logger.info(f"{node_name}: installing packages: {package_list}")
+        
+        try:
+            # Update package list
+            ssh_command(ssh_port, "sudo apt-get update -qq", timeout=60)
+            
+            # Install packages (non-interactive)
+            ssh_command(
+                ssh_port,
+                f"sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq {package_list}",
+                timeout=120
+            )
+            
+            installed_cache[cache_key] = True
+            logger.info(f"✓ {node_name}: packages installed: {package_list}")
+            
+        except subprocess.CalledProcessError as e:
+            logger.error(f"✗ {node_name}: failed to install {package_list}")
+            logger.error(f"  Stderr: {e.stderr if e.stderr else 'none'}")
+            raise RuntimeError(f"Package installation failed on {node_name}: {e}")
+    
+    return _install
+
+
 @pytest.fixture
 def configure_node_interfaces(node_interfaces, node_allocations, ssh_command):
     """
