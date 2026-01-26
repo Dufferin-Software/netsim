@@ -2,7 +2,6 @@
 Image management and caching.
 """
 
-import os
 import hashlib
 import logging
 from pathlib import Path
@@ -18,6 +17,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ImageReference:
     """Reference to a VM image."""
+
     name: str
     url: str
     checksum: Optional[str] = None  # SHA256 checksum for validation
@@ -31,7 +31,7 @@ class ImageManager:
     def __init__(self, cache_dir: Optional[str] = None):
         """
         Initialize image manager.
-        
+
         Args:
             cache_dir: Directory for caching images. Defaults to ~/.netsim/images
         """
@@ -46,13 +46,13 @@ class ImageManager:
     def resolve_image(self, image_spec: Dict[str, Any] | str) -> str:
         """
         Resolve image specification to a file path.
-        
+
         Args:
             image_spec: Either a path string or dict with {name, url, checksum}
-            
+
         Returns:
             Path to image file
-            
+
         Raises:
             FileNotFoundError: If image not found and cannot be downloaded
             ValueError: If image specification is invalid
@@ -71,7 +71,7 @@ class ImageManager:
                     ImageReference(
                         name=image_spec["name"],
                         url=image_spec["url"],
-                        checksum=image_spec.get("checksum")
+                        checksum=image_spec.get("checksum"),
                     )
                 )
             elif "path" in image_spec:
@@ -106,7 +106,9 @@ class ImageManager:
         if ref.checksum:
             if not self._validate_checksum(cached_path, ref.checksum):
                 cached_path.unlink()
-                raise RuntimeError(f"Downloaded image failed checksum validation: {ref.name}")
+                raise RuntimeError(
+                    f"Downloaded image failed checksum validation: {ref.name}"
+                )
 
         logger.info(f"Image ready: {ref.name}")
         return str(cached_path)
@@ -132,7 +134,9 @@ class ImageManager:
 
                         if total_size:
                             percent = (downloaded / total_size) * 100
-                            logger.debug(f"Downloaded {percent:.1f}% ({downloaded}/{total_size} bytes)")
+                            logger.debug(
+                                f"Downloaded {percent:.1f}% ({downloaded}/{total_size} bytes)"
+                            )
 
         except urllib.error.URLError as e:
             if dest.exists():
@@ -163,7 +167,7 @@ class ImageManager:
 
     def list_cached_images(self) -> Dict[str, Dict[str, Any]]:
         """List all cached images with metadata."""
-        images = {}
+        images: Dict[str, Dict[str, Any]] = {}
 
         if not self.cache_dir.exists():
             return images

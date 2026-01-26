@@ -32,21 +32,22 @@ def setup_logging(verbose: bool = False):
 
 def _show_connection_info(topology, simulator, target_node=None):
     """Show connection information for topology nodes."""
-    import subprocess
-    
+
     print(f"\nConnection information for topology '{topology.name}':\n")
-    
+
     nodes_to_show = []
     if target_node:
         # Show specific node
-        nodes_to_show = [target_node] if any(n.name == target_node for n in topology.nodes) else []
+        nodes_to_show = (
+            [target_node] if any(n.name == target_node for n in topology.nodes) else []
+        )
         if not nodes_to_show:
             print(f"Error: Node '{target_node}' not found in topology")
             return
     else:
         # Show all nodes
         nodes_to_show = [n.name for n in topology.nodes]
-    
+
     name_to_idx = {n.name: i for i, n in enumerate(topology.nodes)}
 
     for node_name in nodes_to_show:
@@ -54,39 +55,39 @@ def _show_connection_info(topology, simulator, target_node=None):
         node = next((n for n in topology.nodes if n.name == node_name), None)
         if not node:
             continue
-            
+
         # Check if VM is running
         try:
             result = subprocess.run(
                 ["virsh", "domstate", node_name],
                 capture_output=True,
                 text=True,
-                timeout=5
+                timeout=5,
             )
             is_running = result.returncode == 0 and "running" in result.stdout.lower()
-        except:
+        except Exception as _e:
             is_running = False
-        
+
         status = "🟢 RUNNING" if is_running else "🔴 STOPPED"
         print(f"{node_name}: {status}")
-        
+
         if is_running:
             # Show console access method
             print(f"  Console access: virsh console {node_name}")
-            
+
             # Show IP addresses from topology
             if node.interfaces:
-                print(f"  Network interfaces (configured):")
+                print("  Network interfaces (configured):")
                 for iface in node.interfaces:
                     ip_info = f"{iface.ip}" if iface.ip else "DHCP"
                     print(f"    - {iface.name}: {iface.network} ({ip_info})")
-            
+
             mgmt_port = 2200 + name_to_idx.get(node_name, 0)
             print(f"  SSH (management): ssh -p {mgmt_port} netsim@localhost")
-            print(f"    (User-mode NAT with port forwarding; always available)")
+            print("    (User-mode NAT with port forwarding; always available)")
             if node.interfaces:
-                print(f"  Data interfaces:")
-                print(f"    Use the configured IPs above for traffic tests")
+                print("  Data interfaces:")
+                print("    Use the configured IPs above for traffic tests")
         else:
             print(f"  Start the topology to connect: netsim start {topology.name}")
         print()
@@ -97,143 +98,108 @@ def main():
         description="NetSim - Network Topology Simulator for eBPF XDP Development"
     )
     parser.add_argument(
-        "-v", "--verbose",
-        action="store_true",
-        help="Enable verbose logging"
+        "-v", "--verbose", action="store_true", help="Enable verbose logging"
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
 
     # Start command
     start_parser = subparsers.add_parser("start", help="Setup and start topology")
-    start_parser.add_argument(
-        "topology",
-        type=str,
-        help="Path to topology YAML file"
-    )
+    start_parser.add_argument("topology", type=str, help="Path to topology YAML file")
     start_parser.add_argument(
         "--runtime-dir",
         type=str,
-        help="Runtime directory for VM data (default: /tmp/{user}/netsim/{topology}_{timestamp})"
+        help="Runtime directory for VM data (default: /tmp/{user}/netsim/{topology}_{timestamp})",
     )
     start_parser.add_argument(
         "--image-cache-dir",
         type=str,
-        help="Image cache directory (default: ~/.netsim/images)"
+        help="Image cache directory (default: ~/.netsim/images)",
     )
 
     # Stop command
     stop_parser = subparsers.add_parser("stop", help="Suspend topology")
-    stop_parser.add_argument(
-        "topology",
-        type=str,
-        help="Path to topology YAML file"
-    )
+    stop_parser.add_argument("topology", type=str, help="Path to topology YAML file")
     stop_parser.add_argument(
         "--runtime-dir",
         type=str,
-        help="Runtime directory for VM data (default: /tmp/{user}/netsim/{topology}_{timestamp})"
+        help="Runtime directory for VM data (default: /tmp/{user}/netsim/{topology}_{timestamp})",
     )
 
     # Status command
     status_parser = subparsers.add_parser("status", help="Show topology status")
-    status_parser.add_argument(
-        "topology",
-        type=str,
-        help="Path to topology YAML file"
-    )
+    status_parser.add_argument("topology", type=str, help="Path to topology YAML file")
     status_parser.add_argument(
         "--runtime-dir",
         type=str,
-        help="Runtime directory for VM data (default: /tmp/{user}/netsim/{topology}_{timestamp})"
+        help="Runtime directory for VM data (default: /tmp/{user}/netsim/{topology}_{timestamp})",
     )
 
     # Connect command
-    connect_parser = subparsers.add_parser("connect", help="Show connection details for topology nodes")
-    connect_parser.add_argument(
-        "topology",
-        type=str,
-        help="Path to topology YAML file"
+    connect_parser = subparsers.add_parser(
+        "connect", help="Show connection details for topology nodes"
     )
+    connect_parser.add_argument("topology", type=str, help="Path to topology YAML file")
     connect_parser.add_argument(
-        "node",
-        nargs="?",
-        type=str,
-        help="Optional: specific node to connect to"
+        "node", nargs="?", type=str, help="Optional: specific node to connect to"
     )
     connect_parser.add_argument(
         "--runtime-dir",
         type=str,
-        help="Runtime directory for VM data (default: /tmp/{user}/netsim/{topology}_{timestamp})"
+        help="Runtime directory for VM data (default: /tmp/{user}/netsim/{topology}_{timestamp})",
     )
 
     # Destroy command
-    destroy_parser = subparsers.add_parser("destroy", help="Tear down VMs, bridges, taps, and remove runtime directory")
-    destroy_parser.add_argument(
-        "topology",
-        type=str,
-        help="Path to topology YAML file"
+    destroy_parser = subparsers.add_parser(
+        "destroy", help="Tear down VMs, bridges, taps, and remove runtime directory"
     )
+    destroy_parser.add_argument("topology", type=str, help="Path to topology YAML file")
     destroy_parser.add_argument(
         "--runtime-dir",
         type=str,
-        help="Runtime directory for VM data (default: /tmp/{user}/netsim/{topology}_{timestamp})"
+        help="Runtime directory for VM data (default: /tmp/{user}/netsim/{topology}_{timestamp})",
     )
 
     # Image cache commands
     image_parser = subparsers.add_parser("image", help="Manage image cache")
-    image_subparsers = image_parser.add_subparsers(dest="image_command", help="Image command")
+    image_subparsers = image_parser.add_subparsers(
+        dest="image_command", help="Image command"
+    )
 
     # Image list command
     image_list_parser = image_subparsers.add_parser("list", help="List cached images")
     image_list_parser.add_argument(
-        "--cache-dir",
-        type=str,
-        help="Image cache directory"
+        "--cache-dir", type=str, help="Image cache directory"
     )
 
     # Image download command
-    image_download_parser = image_subparsers.add_parser("download", help="Download image")
+    image_download_parser = image_subparsers.add_parser(
+        "download", help="Download image"
+    )
+    image_download_parser.add_argument("name", type=str, help="Image name")
+    image_download_parser.add_argument("url", type=str, help="Image URL")
     image_download_parser.add_argument(
-        "name",
-        type=str,
-        help="Image name"
+        "--checksum", type=str, help="SHA256 checksum for validation"
     )
     image_download_parser.add_argument(
-        "url",
-        type=str,
-        help="Image URL"
-    )
-    image_download_parser.add_argument(
-        "--checksum",
-        type=str,
-        help="SHA256 checksum for validation"
-    )
-    image_download_parser.add_argument(
-        "--cache-dir",
-        type=str,
-        help="Image cache directory"
+        "--cache-dir", type=str, help="Image cache directory"
     )
 
     # Image remove command
-    image_remove_parser = image_subparsers.add_parser("remove", help="Remove cached image")
-    image_remove_parser.add_argument(
-        "name",
-        type=str,
-        help="Image name"
+    image_remove_parser = image_subparsers.add_parser(
+        "remove", help="Remove cached image"
     )
+    image_remove_parser.add_argument("name", type=str, help="Image name")
     image_remove_parser.add_argument(
-        "--cache-dir",
-        type=str,
-        help="Image cache directory"
+        "--cache-dir", type=str, help="Image cache directory"
     )
 
     # Image clear command
-    image_clear_parser = image_subparsers.add_parser("clear", help="Clear all cached images")
+    image_clear_parser = image_subparsers.add_parser(
+        "clear", help="Clear all cached images"
+    )
     image_clear_parser.add_argument(
-        "--cache-dir",
-        type=str,
-        help="Image cache directory"
+        "--cache-dir", type=str, help="Image cache directory"
     )
 
     args = parser.parse_args()
@@ -262,15 +228,16 @@ def main():
                     for name, info in images.items():
                         size_mb = info["size_mb"]
                         total_size += size_mb
-                        print(f"  {name}: {size_mb:.1f} MB (modified: {info['modified']})")
+                        print(
+                            f"  {name}: {size_mb:.1f} MB (modified: {info['modified']})"
+                        )
                     print(f"Total: {total_size:.1f} MB")
 
             elif args.image_command == "download":
                 from netsim.images import ImageReference
+
                 ref = ImageReference(
-                    name=args.name,
-                    url=args.url,
-                    checksum=args.checksum
+                    name=args.name, url=args.url, checksum=args.checksum
                 )
                 path = image_manager._resolve_image_reference(ref)
                 print(f"Image downloaded: {path}")
@@ -307,7 +274,7 @@ def main():
     simulator = TopologySimulator(
         topology,
         runtime_dir=runtime_dir,
-        image_cache_dir=args.__dict__.get("image_cache_dir")
+        image_cache_dir=args.__dict__.get("image_cache_dir"),
     )
 
     try:

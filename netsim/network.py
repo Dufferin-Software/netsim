@@ -7,30 +7,33 @@ import re
 import os
 import getpass
 import pwd
-from typing import List, Tuple
-from pathlib import Path
+from typing import List
 
 
 class NetworkManager:
     """Manage Linux bridges and tap interfaces for VMs."""
 
     @staticmethod
-    def _run_cmd(cmd: List[str], sudo: bool = False, ignore_exists: bool = False) -> None:
+    def _run_cmd(
+        cmd: List[str], sudo: bool = False, ignore_exists: bool = False
+    ) -> None:
         """Run a command, automatically using sudo if permission denied.
-        
+
         Args:
             cmd: Command to run (without sudo prefix)
             sudo: Whether sudo has been attempted (internal use)
             ignore_exists: If True, ignore "File exists" errors
         """
         cmd_to_run = ["sudo"] + cmd if sudo else cmd
-            
+
         try:
             subprocess.run(cmd_to_run, check=True, capture_output=True)
         except subprocess.CalledProcessError as e:
             if b"Operation not permitted" in e.stderr and not sudo:
                 # Retry with sudo
-                return NetworkManager._run_cmd(cmd, sudo=True, ignore_exists=ignore_exists)
+                return NetworkManager._run_cmd(
+                    cmd, sudo=True, ignore_exists=ignore_exists
+                )
             elif ignore_exists and b"File exists" in e.stderr:
                 # Resource already exists, that's ok
                 return
@@ -76,8 +79,12 @@ class NetworkManager:
     def create_bridge(name: str, mtu: int = 1500) -> None:
         """Create a Linux bridge."""
         try:
-            NetworkManager._run_cmd(["ip", "link", "add", name, "type", "bridge"], ignore_exists=True)
-            NetworkManager._run_cmd(["ip", "link", "set", name, "up"], ignore_exists=True)
+            NetworkManager._run_cmd(
+                ["ip", "link", "add", name, "type", "bridge"], ignore_exists=True
+            )
+            NetworkManager._run_cmd(
+                ["ip", "link", "set", name, "up"], ignore_exists=True
+            )
             NetworkManager._run_cmd(["ip", "link", "set", name, "mtu", str(mtu)])
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"Failed to create bridge {name}: {e.stderr.decode()}")
@@ -99,16 +106,12 @@ class NetworkManager:
 
             # Check if tap already exists
             result = subprocess.run(
-                ["ip", "link", "show", name],
-                capture_output=True,
-                text=True
+                ["ip", "link", "show", name], capture_output=True, text=True
             )
             if result.returncode == 0:
                 # Interface already exists; ensure ownership matches the expected tap owner
                 detail = subprocess.run(
-                    ["ip", "-d", "link", "show", name],
-                    capture_output=True,
-                    text=True
+                    ["ip", "-d", "link", "show", name], capture_output=True, text=True
                 )
                 detail_out = detail.stdout + detail.stderr
                 owner_match = re.search(r"user (\S+)", detail_out)
@@ -116,15 +119,24 @@ class NetworkManager:
 
                 if current_owner and current_owner != tap_owner:
                     # Recreate with correct owner so QEMU can open it
-                    NetworkManager._run_cmd(["ip", "tuntap", "del", name, "mode", "tap"], ignore_exists=True)
+                    NetworkManager._run_cmd(
+                        ["ip", "tuntap", "del", name, "mode", "tap"], ignore_exists=True
+                    )
                 else:
-                    NetworkManager._run_cmd(["ip", "link", "set", name, "up"], ignore_exists=True)
+                    NetworkManager._run_cmd(
+                        ["ip", "link", "set", name, "up"], ignore_exists=True
+                    )
                     return name
-                
+
             # Create tap owned by libvirt-qemu so the hypervisor process can open it without extra caps
-            NetworkManager._run_cmd(["ip", "tuntap", "add", name, "mode", "tap", "user", tap_owner], ignore_exists=True)
-            NetworkManager._run_cmd(["ip", "link", "set", name, "up"], ignore_exists=True)
-            
+            NetworkManager._run_cmd(
+                ["ip", "tuntap", "add", name, "mode", "tap", "user", tap_owner],
+                ignore_exists=True,
+            )
+            NetworkManager._run_cmd(
+                ["ip", "link", "set", name, "up"], ignore_exists=True
+            )
+
             return name
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"Failed to create tap {name}: {e.stderr.decode()}")
@@ -142,9 +154,13 @@ class NetworkManager:
     def bridge_tap(bridge_name: str, tap_name: str) -> None:
         """Add a tap interface to a bridge."""
         try:
-            NetworkManager._run_cmd(["ip", "link", "set", tap_name, "master", bridge_name])
+            NetworkManager._run_cmd(
+                ["ip", "link", "set", tap_name, "master", bridge_name]
+            )
         except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"Failed to bridge {tap_name} to {bridge_name}: {e.stderr.decode()}")
+            raise RuntimeError(
+                f"Failed to bridge {tap_name} to {bridge_name}: {e.stderr.decode()}"
+            )
 
     @staticmethod
     def set_bridge_ip(bridge_name: str, ip_cidr: str) -> None:
@@ -159,9 +175,7 @@ class NetworkManager:
         """Check if bridge exists."""
         try:
             result = subprocess.run(
-                ["ip", "link", "show", name],
-                check=True,
-                capture_output=True
+                ["ip", "link", "show", name], check=True, capture_output=True
             )
             return "bridge" in result.stdout.decode()
         except subprocess.CalledProcessError:
@@ -174,7 +188,7 @@ class NetworkManager:
             result = subprocess.run(
                 ["ip", "link", "show", "type", "bridge"],
                 check=True,
-                capture_output=True
+                capture_output=True,
             )
             bridges = []
             for line in result.stdout.decode().split("\n"):

@@ -8,7 +8,7 @@ import yaml
 from typing import Dict, Optional
 from pathlib import Path
 
-from netsim.topology import Topology, TopologyParser, Network, Node, NodeInterface
+from netsim.topology import Topology
 from netsim.vm import LibvirtVM, VMConfig
 from netsim.network import NetworkManager
 from netsim.images import ImageManager
@@ -18,16 +18,22 @@ logger = logging.getLogger(__name__)
 
 class SimulatorError(Exception):
     """Simulator-related errors."""
+
     pass
 
 
 class TopologySimulator:
     """Orchestrate a network topology of KVM/QEMU VMs via libvirt."""
 
-    def __init__(self, topology: Topology, runtime_dir: str = "/tmp/netsim", image_cache_dir: Optional[str] = None):
+    def __init__(
+        self,
+        topology: Topology,
+        runtime_dir: str = "/tmp/netsim",
+        image_cache_dir: Optional[str] = None,
+    ):
         """
         Initialize simulator.
-        
+
         Args:
             topology: Parsed topology definition
             runtime_dir: Directory for VM runtime data
@@ -94,7 +100,7 @@ class TopologySimulator:
                 logger.debug(f"Creating tap interface: {tap_name}")
 
                 NetworkManager.create_tap(tap_name)
-                
+
                 # Add to appropriate bridge
                 bridge_name = self.bridges[iface.network]
                 NetworkManager.bridge_tap(bridge_name, tap_name)
@@ -124,32 +130,32 @@ class TopologySimulator:
 
     def _get_or_generate_cloudinit_iso(self) -> str:
         """Generate or retrieve cached cloud-init ISO with netsim user and SSH key.
-        
+
         Returns:
             Path to the cloud-init ISO file.
         """
         iso_cache_dir = Path.home() / ".netsim" / "cloud-init"
         iso_cache_dir.mkdir(parents=True, exist_ok=True)
         iso_path = iso_cache_dir / "cloud-init-netsim.iso"
-        
+
         if iso_path.exists():
             logger.debug(f"Using cached cloud-init ISO: {iso_path}")
             return str(iso_path)
-        
+
         logger.info(f"Generating cloud-init ISO: {iso_path}")
-        
+
         try:
             import subprocess
             import tempfile
-            
+
             # Read SSH public key
             ssh_key_path = Path.home() / ".ssh" / "id_rsa.pub"
             if not ssh_key_path.exists():
                 raise RuntimeError(f"SSH key not found at {ssh_key_path}")
-            
+
             ssh_key = ssh_key_path.read_text().strip()
             logger.debug(f"Using SSH key from {ssh_key_path}")
-            
+
             # Create cloud-config YAML
             cloud_config = {
                 "users": [
@@ -161,32 +167,34 @@ class TopologySimulator:
                     }
                 ]
             }
-            
+
             cloud_config_yaml = yaml.dump(cloud_config, default_flow_style=False)
             user_data = f"#cloud-config\n{cloud_config_yaml}"
-            
+
             with tempfile.TemporaryDirectory() as tmpdir:
                 tmpdir_path = Path(tmpdir)
-                
+
                 # Write cloud-init files
                 user_data_path = tmpdir_path / "user-data"
                 user_data_path.write_text(user_data)
-                
+
                 meta_data_path = tmpdir_path / "meta-data"
                 meta_data_path.write_text("instance-id: netsim\n")
-                
+
                 # Generate ISO using genisoimage or mkisofs
                 iso_tmp = tmpdir_path / "cloud-init.iso"
                 cmd = None
-                
+
                 # Try genisoimage first, fall back to mkisofs
                 for tool in ["genisoimage", "mkisofs"]:
                     try:
                         subprocess.run(["which", tool], check=True, capture_output=True)
                         cmd = [
                             tool,
-                            "-output", str(iso_tmp),
-                            "-volid", "cidata",
+                            "-output",
+                            str(iso_tmp),
+                            "-volid",
+                            "cidata",
                             "-joliet",
                             "-rock",
                             str(user_data_path),
@@ -195,24 +203,26 @@ class TopologySimulator:
                         break
                     except subprocess.CalledProcessError:
                         continue
-                
+
                 if not cmd:
-                    raise RuntimeError("Neither genisoimage nor mkisofs found. Install one of: apt install genisoimage")
-                
+                    raise RuntimeError(
+                        "Neither genisoimage nor mkisofs found. Install one of: apt install genisoimage"
+                    )
+
                 subprocess.run(cmd, check=True, capture_output=True)
-                
+
                 # Make readable and move to cache
                 subprocess.run(
                     ["sudo", "cp", str(iso_tmp), str(iso_path)],
                     check=True,
-                    capture_output=True
+                    capture_output=True,
                 )
                 subprocess.run(
                     ["sudo", "chmod", "a+r", str(iso_path)],
                     capture_output=True,
-                    timeout=5
+                    timeout=5,
                 )
-            
+
             logger.info(f"Cloud-init ISO created and cached: {iso_path}")
             return str(iso_path)
         except Exception as e:
@@ -312,29 +322,34 @@ class TopologySimulator:
 
     def status(self) -> Dict[str, bool]:
         """Get status of all VMs in this topology.
-        
+
         First checks self.vms (VMs loaded in memory), then queries libvirt
         for any VMs matching this topology's nodes.
         """
         status = {}
-        
+
         # First, check VMs we know about in memory
         for name, vm in self.vms.items():
             status[name] = vm.is_running()
-        
+
         # If no VMs in memory, query libvirt for VMs matching topology nodes
         if not status and self.topology.nodes:
             logger.debug("No VMs loaded in memory, querying libvirt...")
             import subprocess
+
             try:
                 result = subprocess.run(
                     ["virsh", "list", "--all", "--name"],
                     capture_output=True,
                     text=True,
-                    check=True
+                    check=True,
                 )
-                existing_vms = set(result.stdout.strip().split("\n")) if result.stdout.strip() else set()
-                
+                existing_vms = (
+                    set(result.stdout.strip().split("\n"))
+                    if result.stdout.strip()
+                    else set()
+                )
+
                 # Check which topology nodes exist in libvirt
                 for node in self.topology.nodes:
                     if node.name in existing_vms:
@@ -344,7 +359,7 @@ class TopologySimulator:
                                 ["virsh", "domstate", node.name],
                                 capture_output=True,
                                 text=True,
-                                check=True
+                                check=True,
                             )
                             is_running = "running" in state_result.stdout.lower()
                             status[node.name] = is_running
@@ -353,10 +368,10 @@ class TopologySimulator:
                     else:
                         # VM doesn't exist in libvirt
                         status[node.name] = False
-                        
+
             except subprocess.CalledProcessError as e:
                 logger.warning(f"Failed to query libvirt: {e}")
-        
+
         return status
 
     def _get_gateway_cidr(self, subnet_ip: str, prefix: str) -> str:
