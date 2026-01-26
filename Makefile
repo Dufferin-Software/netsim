@@ -10,11 +10,11 @@ help:
 	@echo "  make clean       - Remove build artifacts"
 
 lint:
-	ruff check netsim/ test/
+	ruff check netsim/ tests/
 
 format:
-	ruff format netsim/ test/
-	ruff check --unsafe-fixes --fix netsim/ test/
+	ruff format netsim/ tests/
+	ruff check --unsafe-fixes --fix netsim/ tests/
 
 type-check:
 	mypy netsim/
@@ -22,7 +22,7 @@ type-check:
 lint-all: lint type-check
 
 test:
-	python3 -m pytest test/ -v
+	python3 -m pytest tests/ -v
 
 clean:
 	find . -type d -name __pycache__ -exec rm -rf {} +

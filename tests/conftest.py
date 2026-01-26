@@ -36,7 +36,7 @@ def pytest_addoption(parser):
         "--pause-on-failure",
         action="store_true",
         default=False,
-        help="Keep topology running and pause for debugging when tests fail"
+        help="Keep topology running and pause for debugging when tests fail",
     )
 
 
@@ -50,16 +50,16 @@ def pytest_runtest_makereport(item, call):
 def pytest_collection_modifyitems(session, config, items):
     """After collection, set topology path based on collected test."""
     global _topology_path
-    
+
     if items and not _topology_path:
         # Get directory of first test
         test_file = Path(items[0].fspath)
         test_dir = test_file.parent
-        
+
         # Look for topology file
         topo_name = test_dir.name
         topo_path = test_dir / f"{topo_name}.yaml"
-        
+
         if topo_path.exists():
             _topology_path = topo_path
             logger.info(f"Discovered topology: {_topology_path}")
@@ -69,7 +69,7 @@ def pytest_collection_modifyitems(session, config, items):
 def topology_path() -> Path:
     """
     Get discovered topology path.
-    
+
     Automatically discovered from test subdirectory name.
     Example: tests/two-node-topology/ -> tests/two-node-topology/two-node-topology.yaml
     """
@@ -88,30 +88,32 @@ def topology(topology_path: Path):
 def running_topology(topology, request):
     """
     Auto-start topology for entire test session, clean up after.
-    
+
     This fixture ensures VMs are running before any tests execute.
     Supports --pause-on-failure to keep VMs running for debugging.
     """
     import time
+
     global _test_failed
-    
-    logger.info(f"=" * 60)
+
+    logger.info("=" * 60)
     logger.info(f"Starting topology: {topology.name}")
-    logger.info(f"=" * 60)
-    
+    logger.info("=" * 60)
+
     # Check if pause on failure is enabled (CLI option or env var)
-    pause_on_failure = request.config.getoption("--pause-on-failure", False) or \
-                      os.environ.get("NETSIM_PAUSE_ON_FAILURE", "").lower() in ("1", "true", "yes")
-    
+    pause_on_failure = request.config.getoption(
+        "--pause-on-failure", False
+    ) or os.environ.get("NETSIM_PAUSE_ON_FAILURE", "").lower() in ("1", "true", "yes")
+
     with tempfile.TemporaryDirectory(prefix="netsim-test-") as runtime_dir:
         simulator = TopologySimulator(topology, runtime_dir=runtime_dir)
-        
+
         try:
-            logger.info(f"Setting up networks and VMs...")
+            logger.info("Setting up networks and VMs...")
             simulator.setup()
-            logger.info(f"Setup complete. Starting VMs...")
+            logger.info("Setup complete. Starting VMs...")
             simulator.start()
-            
+
             # Wait for VMs to be running
             timeout = 30
             start_time = time.time()
@@ -125,7 +127,7 @@ def running_topology(topology, request):
                 if time.time() - start_time > timeout:
                     raise RuntimeError(f"VMs failed to start within {timeout}s")
                 time.sleep(1)
-            
+
             # Wait for SSH to be available on all nodes
             logger.info("Waiting for SSH to be available on all nodes...")
             for idx, node in enumerate(topology.nodes):
@@ -135,52 +137,63 @@ def running_topology(topology, request):
                 while True:
                     try:
                         result = subprocess.run(
-                            ["ssh", "-o", "StrictHostKeyChecking=no", 
-                             "-o", "UserKnownHostsFile=/dev/null",
-                             "-o", "ConnectTimeout=2",
-                             "-p", str(ssh_port), "netsim@localhost", "echo ready"],
+                            [
+                                "ssh",
+                                "-o",
+                                "StrictHostKeyChecking=no",
+                                "-o",
+                                "UserKnownHostsFile=/dev/null",
+                                "-o",
+                                "ConnectTimeout=2",
+                                "-p",
+                                str(ssh_port),
+                                "netsim@localhost",
+                                "echo ready",
+                            ],
                             capture_output=True,
                             timeout=5,
-                            check=True
+                            check=True,
                         )
                         if "ready" in result.stdout.decode():
                             logger.info(f"{node.name}: SSH ready")
                             break
                     except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
                         if time.time() - ssh_start > ssh_timeout:
-                            raise RuntimeError(f"{node.name}: SSH not available after {ssh_timeout}s")
+                            raise RuntimeError(
+                                f"{node.name}: SSH not available after {ssh_timeout}s"
+                            )
                         time.sleep(2)
-            
-            logger.info(f"=" * 60)
-            logger.info(f"✓ Topology ready - all tests can now run")
-            logger.info(f"=" * 60)
-            
+
+            logger.info("=" * 60)
+            logger.info("✓ Topology ready - all tests can now run")
+            logger.info("=" * 60)
+
             yield simulator
-            
+
         finally:
             # Check if we should pause before teardown
             if pause_on_failure and _test_failed:
-                logger.info(f"=" * 60)
-                logger.info(f"⚠ TEST FAILURE DETECTED - PAUSING FOR DEBUGGING")
-                logger.info(f"=" * 60)
-                logger.info(f"Topology is still running. SSH access:")
+                logger.info("=" * 60)
+                logger.info("⚠ TEST FAILURE DETECTED - PAUSING FOR DEBUGGING")
+                logger.info("=" * 60)
+                logger.info("Topology is still running. SSH access:")
                 for idx, node in enumerate(topology.nodes):
                     ssh_port = 2200 + idx
                     logger.info(f"  {node.name}: ssh -p {ssh_port} netsim@localhost")
-                logger.info(f"")
-                logger.info(f"Press ENTER to tear down topology and continue...")
-                logger.info(f"=" * 60)
+                logger.info("")
+                logger.info("Press ENTER to tear down topology and continue...")
+                logger.info("=" * 60)
                 try:
                     input()
                 except (EOFError, KeyboardInterrupt):
-                    logger.info(f"Proceeding with teardown...")
-            
-            logger.info(f"=" * 60)
-            logger.info(f"Tearing down topology")
-            logger.info(f"=" * 60)
+                    logger.info("Proceeding with teardown...")
+
+            logger.info("=" * 60)
+            logger.info("Tearing down topology")
+            logger.info("=" * 60)
             try:
                 simulator.destroy()
-                logger.info(f"✓ Topology cleaned up")
+                logger.info("✓ Topology cleaned up")
             except Exception as e:
                 logger.warning(f"Cleanup error: {e}")
 
@@ -196,41 +209,43 @@ def node_allocations(topology) -> Dict[str, List[Tuple[str, str]]]:
     # Simulate the allocation process without running setup()
     allocations = {}
     net_allocators = {}
-    
+
     for node in topology.nodes:
         node_ifaces = []
-        
+
         for net_name in node.networks:
             # Initialize allocator if not present
             if net_name not in net_allocators:
                 network = topology.get_network(net_name)
                 if not network:
                     raise ValueError(f"Unknown network: {net_name}")
-                
+
                 import ipaddress
+
                 net = ipaddress.IPv4Network(network.subnet, strict=False)
                 # Start at index 9 to get .10 (since hosts[0] is .1, hosts[9] is .10)
                 net_allocators[net_name] = {"net": net, "current": 9}
             else:
                 net_allocators[net_name]["current"] += 1
-            
+
             # Allocate IP
             import ipaddress
+
             net_obj = net_allocators[net_name]["net"]
             alloc_idx = net_allocators[net_name]["current"]
-            
+
             hosts = list(net_obj.hosts())
             if alloc_idx >= len(hosts):
                 raise ValueError(
                     f"IP pool exhausted for network {net_name}. Subnet too small."
                 )
-            
+
             ip_addr = hosts[alloc_idx]
             ip_cidr = f"{ip_addr}/{net_obj.prefixlen}"
             node_ifaces.append((net_name, ip_cidr))
-        
+
         allocations[node.name] = node_ifaces
-    
+
     return allocations
 
 
@@ -241,6 +256,7 @@ def ssh_command() -> callable:
 
     Returns callable: ssh_command(port, cmd) -> output
     """
+
     def _ssh_run(port: int, cmd: str, timeout: int = 10) -> str:
         """
         SSH into a node and run a command.
@@ -258,14 +274,18 @@ def ssh_command() -> callable:
         """
         full_cmd = [
             "ssh",
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
-            "-o", "ConnectTimeout=5",
-            "-p", str(port),
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            "-o",
+            "ConnectTimeout=5",
+            "-p",
+            str(port),
             "netsim@localhost",
             cmd,
         ]
-        
+
         result = subprocess.run(
             full_cmd,
             capture_output=True,
@@ -274,7 +294,7 @@ def ssh_command() -> callable:
             check=True,
         )
         return result.stdout.strip()
-    
+
     return _ssh_run
 
 
@@ -282,19 +302,19 @@ def ssh_command() -> callable:
 def install_packages(ssh_command, node_ssh_port):
     """
     Fixture for installing packages on nodes.
-    
+
     Returns a callable: install_packages(node_name, packages)
-    
+
     Example:
         def test_example(install_packages):
             install_packages("node1", ["iperf3", "tcpdump"])
     """
     installed_cache = {}  # Track what's been installed to avoid duplicates
-    
+
     def _install(node_name: str, packages: list[str]) -> None:
         """
         Install packages on a node using apt (Debian/Ubuntu).
-        
+
         Args:
             node_name: Name of the node
             packages: List of package names to install
@@ -303,31 +323,31 @@ def install_packages(ssh_command, node_ssh_port):
         if cache_key in installed_cache:
             logger.debug(f"{node_name}: packages {packages} already installed")
             return
-        
+
         ssh_port = node_ssh_port(node_name)
         package_list = " ".join(packages)
-        
+
         logger.info(f"{node_name}: installing packages: {package_list}")
-        
+
         try:
             # Update package list
             ssh_command(ssh_port, "sudo apt-get update -qq", timeout=60)
-            
+
             # Install packages (non-interactive)
             ssh_command(
                 ssh_port,
                 f"sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq {package_list}",
-                timeout=120
+                timeout=120,
             )
-            
+
             installed_cache[cache_key] = True
             logger.info(f"✓ {node_name}: packages installed: {package_list}")
-            
+
         except subprocess.CalledProcessError as e:
             logger.error(f"✗ {node_name}: failed to install {package_list}")
             logger.error(f"  Stderr: {e.stderr if e.stderr else 'none'}")
             raise RuntimeError(f"Package installation failed on {node_name}: {e}")
-    
+
     return _install
 
 
@@ -337,7 +357,7 @@ def configure_node_interfaces(node_interfaces, node_allocations, ssh_command):
     Fixture that configures all node interfaces with netplan.
 
     Depends on node_interfaces (which depends on running_topology).
-    
+
     Usage in tests:
         def test_example(configure_node_interfaces):
             # Interfaces are now configured
@@ -346,33 +366,33 @@ def configure_node_interfaces(node_interfaces, node_allocations, ssh_command):
     logger.info("=" * 60)
     logger.info("Configuring node interfaces with netplan")
     logger.info("=" * 60)
-    
+
     for node_name, ifaces in node_interfaces.items():
         iface_configs = node_allocations[node_name]
-        
+
         # Skip if no data interfaces
         if len(iface_configs) == 0:
             logger.info(f"{node_name}: no data interfaces to configure")
             continue
-        
+
         logger.info(f"Configuring {len(iface_configs)} interface(s) for {node_name}")
-        
+
         # Build netplan config for all interfaces
         interfaces = {}
-        
+
         for net_name, node_iface in ifaces.items():
             # Find the IP for this network
             ip_cidr = next((ip for n, ip in iface_configs if n == net_name), None)
             if not ip_cidr:
                 continue
-            
+
             interfaces[node_iface.if_name] = {
                 "dhcp4": False,
                 "addresses": [ip_cidr],
             }
-            
+
             logger.info(f"  {node_iface.if_name} ({net_name}): {ip_cidr}")
-        
+
         # Create netplan config
         netplan_config = {
             "network": {
@@ -380,51 +400,60 @@ def configure_node_interfaces(node_interfaces, node_allocations, ssh_command):
                 "ethernets": interfaces,
             }
         }
-        
+
         netplan_yaml = yaml.dump(netplan_config, default_flow_style=False)
-        
+
         # Write to node via sudo tee
         try:
             # Create temporary file with config locally first
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".yaml", delete=False
+            ) as f:
                 f.write(netplan_yaml)
                 temp_path = f.name
-            
+
             # Get SSH port for this node
             ssh_port = list(ifaces.values())[0].ssh_port
-            
+
             # Copy to node
             scp_cmd = [
                 "scp",
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
-                "-P", str(ssh_port),
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+                "-P",
+                str(ssh_port),
                 temp_path,
-                f"netsim@localhost:/tmp/netsim.yaml",
+                "netsim@localhost:/tmp/netsim.yaml",
             ]
             subprocess.run(scp_cmd, check=True, capture_output=True, timeout=10)
-            
+
             # Ensure netplan directory exists and apply with sudo
             ssh_command(ssh_port, "sudo mkdir -p /etc/netplan")
-            ssh_command(ssh_port, "sudo cp /tmp/netsim.yaml /etc/netplan/99-netsim.yaml")
+            ssh_command(
+                ssh_port, "sudo cp /tmp/netsim.yaml /etc/netplan/99-netsim.yaml"
+            )
             ssh_command(ssh_port, "sudo chmod 600 /etc/netplan/99-netsim.yaml")
-            
+
             # Show what we're applying
             logger.debug(f"{node_name} netplan config:\n{netplan_yaml}")
-            
+
             # Apply netplan
             result = ssh_command(ssh_port, "sudo netplan apply 2>&1")
             if result:
                 logger.debug(f"{node_name} netplan output: {result}")
-            
+
             logger.info(f"✓ {node_name}: netplan configuration applied")
-            
+
             # Clean up temp file
             Path(temp_path).unlink()
-            
+
         except subprocess.CalledProcessError as e:
             logger.error(f"✗ Failed to configure {node_name}")
-            logger.error(f"  Command: {' '.join(e.cmd) if isinstance(e.cmd, list) else e.cmd}")
+            logger.error(
+                f"  Command: {' '.join(e.cmd) if isinstance(e.cmd, list) else e.cmd}"
+            )
             logger.error(f"  Exit code: {e.returncode}")
             if e.stderr:
                 logger.error(f"  Stderr: {e.stderr}")
@@ -434,7 +463,7 @@ def configure_node_interfaces(node_interfaces, node_allocations, ssh_command):
         except Exception as e:
             logger.error(f"✗ Failed to configure {node_name}: {e}")
             raise
-    
+
     logger.info("=" * 60)
     logger.info("✓ All interfaces configured")
     logger.info("=" * 60)
@@ -447,38 +476,49 @@ def node_ssh_port(topology) -> callable:
 
     Returns callable: node_ssh_port(node_name) -> port
     """
+
     def _get_port(node_name: str) -> int:
         for idx, node in enumerate(topology.nodes):
             if node.name == node_name:
                 return 2200 + idx
         raise ValueError(f"Node {node_name} not found")
-    
+
     return _get_port
 
 
 class NodeInterface:
     """Helper class for interface management."""
-    
-    def __init__(self, node_name: str, if_name: str, network: str, ssh_port: int, ssh_cmd: callable):
+
+    def __init__(
+        self,
+        node_name: str,
+        if_name: str,
+        network: str,
+        ssh_port: int,
+        ssh_cmd: callable,
+    ):
         self.node_name = node_name
         self.if_name = if_name
         self.network = network
         self.ssh_port = ssh_port
         self._ssh = ssh_cmd
-    
+
     def up(self):
         """Bring interface up."""
         self._ssh(self.ssh_port, f"sudo ip link set {self.if_name} up")
-    
+
     def down(self):
         """Bring interface down."""
         self._ssh(self.ssh_port, f"sudo ip link set {self.if_name} down")
-    
+
     def get_ip(self) -> str:
         """Get IP address."""
-        output = self._ssh(self.ssh_port, f"ip -4 addr show {self.if_name} | grep 'inet ' | awk '{{print $2}}'")
+        output = self._ssh(
+            self.ssh_port,
+            f"ip -4 addr show {self.if_name} | grep 'inet ' | awk '{{print $2}}'",
+        )
         return output.strip()
-    
+
     def is_up(self) -> bool:
         """Check if interface is up."""
         output = self._ssh(self.ssh_port, f"ip link show {self.if_name}")
@@ -486,36 +526,42 @@ class NodeInterface:
 
 
 @pytest.fixture(scope="session")
-def node_interfaces(running_topology, topology, node_allocations, ssh_command, node_ssh_port):
+def node_interfaces(
+    running_topology, topology, node_allocations, ssh_command, node_ssh_port
+):
     """
     Discover interfaces on each node and map to networks.
-    
+
     Note: VMs have management interface (user-mode NAT) as first interface,
     followed by data interfaces (tap devices). We skip the management interface.
-    
+
     Returns:
         Dict[str, Dict[str, NodeInterface]] - node_name -> {network_name: NodeInterface}
     """
     interfaces = {}
-    
+
     for idx, node in enumerate(topology.nodes):
         node_name = node.name
         ssh_port = node_ssh_port(node_name)
         node_ifaces = {}
-        
+
         # Discover interface names (exclude loopback)
-        output = ssh_command(ssh_port, "ip -o link show | grep -v ' lo:' | awk -F': ' '{print $2}'")
-        all_if_names = [name.strip() for name in output.split('\n') if name.strip()]
-        
+        output = ssh_command(
+            ssh_port, "ip -o link show | grep -v ' lo:' | awk -F': ' '{print $2}'"
+        )
+        all_if_names = [name.strip() for name in output.split("\n") if name.strip()]
+
         # Filter out @NONE suffixes
-        if_names = [name.split('@')[0] for name in all_if_names if not name.startswith('lo')]
-        
+        if_names = [
+            name.split("@")[0] for name in all_if_names if not name.startswith("lo")
+        ]
+
         logger.info(f"{node_name}: discovered interfaces: {if_names}")
-        
+
         # Get allocation info for this node (list of (network_name, ip_cidr) tuples)
         # This only includes data networks, not the management interface
         iface_configs = node_allocations[node_name]
-        
+
         # Map data networks to interfaces
         # if_names[0] = management interface (skip it)
         # if_names[1] = first data network
@@ -529,16 +575,16 @@ def node_interfaces(running_topology, topology, node_allocations, ssh_command, n
                     node_name, if_name, net_name, ssh_port, ssh_command
                 )
                 logger.info(f"{node_name}: {if_name} -> {net_name} ({ip_cidr})")
-        
+
         interfaces[node_name] = node_ifaces
-    
+
     return interfaces
 
 
 class BaseTopologyTests:
     """
     Base test class with common topology validation tests.
-    
+
     All topology-specific test suites should inherit from this class
     to get standard validation tests that work with any topology.
     """
@@ -552,67 +598,82 @@ class BaseTopologyTests:
         """Verify nodes and interfaces are properly allocated."""
         # Check all topology nodes are present
         assert len(topology.nodes) > 0, "Topology should have at least one node"
-        
+
         # Verify each node has allocations for its networks
         for node in topology.nodes:
-            assert node.name in node_allocations, f"Node {node.name} missing from allocations"
-            
+            assert node.name in node_allocations, (
+                f"Node {node.name} missing from allocations"
+            )
+
             node_ifaces = node_allocations[node.name]
-            assert len(node_ifaces) == len(node.networks), \
+            assert len(node_ifaces) == len(node.networks), (
                 f"Node {node.name} should have {len(node.networks)} interfaces, got {len(node_ifaces)}"
-            
+            )
+
             # Check each network has an IP allocation
             for idx, net_name in enumerate(node.networks):
                 alloc_net_name, ip_cidr = node_ifaces[idx]
-                assert alloc_net_name == net_name, \
+                assert alloc_net_name == net_name, (
                     f"Network mismatch: expected {net_name}, got {alloc_net_name}"
-                
+                )
+
                 # Verify IP is in the correct subnet
                 network = topology.get_network(net_name)
                 assert network, f"Network {net_name} not found in topology"
-                assert ip_cidr.startswith(network.subnet.split('/')[0].rsplit('.', 1)[0]), \
-                    f"IP {ip_cidr} not in subnet {network.subnet}"
+                assert ip_cidr.startswith(
+                    network.subnet.split("/")[0].rsplit(".", 1)[0]
+                ), f"IP {ip_cidr} not in subnet {network.subnet}"
 
     def test_interface_discovery(self, node_interfaces, topology):
         """Test that interfaces are discovered correctly on all nodes."""
         # Check all nodes have interface discovery
         for node in topology.nodes:
-            assert node.name in node_interfaces, \
+            assert node.name in node_interfaces, (
                 f"Node {node.name} missing from interface discovery"
-            
+            )
+
             node_ifaces = node_interfaces[node.name]
-            
+
             # Check all networks are discovered
             for net_name in node.networks:
-                assert net_name in node_ifaces, \
+                assert net_name in node_ifaces, (
                     f"Network {net_name} not discovered on {node.name}"
-                
-                iface = node_ifaces[net_name]
-                assert iface.if_name is not None, \
-                    f"Interface name not set for {node.name}:{net_name}"
-                assert iface.ssh_port > 0, \
-                    f"SSH port not set for {node.name}:{net_name}"
+                )
 
-    def test_interface_configuration(self, configure_node_interfaces, node_interfaces, node_allocations):
+                iface = node_ifaces[net_name]
+                assert iface.if_name is not None, (
+                    f"Interface name not set for {node.name}:{net_name}"
+                )
+                assert iface.ssh_port > 0, (
+                    f"SSH port not set for {node.name}:{net_name}"
+                )
+
+    def test_interface_configuration(
+        self, configure_node_interfaces, node_interfaces, node_allocations
+    ):
         """Test that interfaces are configured with correct IPs on all nodes."""
         for node_name, ifaces in node_interfaces.items():
             allocations = node_allocations[node_name]
-            
+
             for net_name, node_iface in ifaces.items():
                 # Interface should be up
-                assert node_iface.is_up(), \
+                assert node_iface.is_up(), (
                     f"{node_name}:{net_name} interface should be up"
-                
+                )
+
                 # Get expected IP from allocations
                 expected_ip = next((ip for n, ip in allocations if n == net_name), None)
                 assert expected_ip, f"No allocation found for {node_name}:{net_name}"
-                
+
                 # Check actual IP matches
                 actual_ip = node_iface.get_ip()
-                assert actual_ip == expected_ip, \
+                assert actual_ip == expected_ip, (
                     f"{node_name}:{net_name} should have IP {expected_ip}, got {actual_ip}"
+                )
 
-    def test_ping_between_nodes(self, configure_node_interfaces, node_interfaces, topology, ssh_command):
+    def test_ping_between_nodes(
+        self, configure_node_interfaces, node_interfaces, topology, ssh_command
+    ):
         """Test ICMP connectivity between nodes that share networks."""
         # Build a map of network -> [nodes]
         network_nodes = {}
@@ -621,58 +682,71 @@ class BaseTopologyTests:
                 if net_name not in network_nodes:
                     network_nodes[net_name] = []
                 network_nodes[net_name].append(node.name)
-        
+
         # Test ping between nodes on each shared network
         tested_pairs = set()
         for net_name, node_names in network_nodes.items():
             if len(node_names) < 2:
                 logger.info(f"Network {net_name} has only one node, skipping ping test")
                 continue
-            
+
             # Test ping from first node to all others on this network
             source_node = node_names[0]
             source_iface = node_interfaces[source_node][net_name]
-            
+
             for target_node in node_names[1:]:
                 pair = (source_node, target_node)
                 if pair in tested_pairs:
                     continue
                 tested_pairs.add(pair)
-                
+
                 target_iface = node_interfaces[target_node][net_name]
-                target_ip = target_iface.get_ip().split('/')[0]
-                
+                target_ip = target_iface.get_ip().split("/")[0]
+
                 # Ping from source to target
                 try:
-                    ssh_command(source_iface.ssh_port, f"ping -c 1 -W 2 {target_ip}", timeout=10)
-                    logger.info(f"✓ Ping {source_node} -> {target_node} ({target_ip}) on {net_name}")
+                    ssh_command(
+                        source_iface.ssh_port, f"ping -c 1 -W 2 {target_ip}", timeout=10
+                    )
+                    logger.info(
+                        f"✓ Ping {source_node} -> {target_node} ({target_ip}) on {net_name}"
+                    )
                 except subprocess.CalledProcessError as e:
                     pytest.fail(
                         f"Ping failed: {source_node} -> {target_node} ({target_ip}) on {net_name}\n"
                         f"Error: {e.stderr if e.stderr else e}"
                     )
 
-    def test_interface_control(self, configure_node_interfaces, node_interfaces, topology):
+    def test_interface_control(
+        self, configure_node_interfaces, node_interfaces, topology
+    ):
         """Test bringing interfaces up and down on first node."""
         # Just test the first node to verify interface control works
         if not topology.nodes:
             pytest.skip("No nodes in topology")
-        
+
         first_node = topology.nodes[0]
-        if first_node.name not in node_interfaces or not node_interfaces[first_node.name]:
+        if (
+            first_node.name not in node_interfaces
+            or not node_interfaces[first_node.name]
+        ):
             pytest.skip(f"No interfaces to test on {first_node.name}")
-        
+
         # Get first interface
         net_name = list(node_interfaces[first_node.name].keys())[0]
         iface = node_interfaces[first_node.name][net_name]
-        
+
         # Interface should start up
         assert iface.is_up(), f"{first_node.name}:{net_name} should be up initially"
-        
+
         # Bring it down
         iface.down()
-        assert not iface.is_up(), f"{first_node.name}:{net_name} should be down after calling down()"
-        
+        assert not iface.is_up(), (
+            f"{first_node.name}:{net_name} should be down after calling down()"
+        )
+
         # Bring it back up
         iface.up()
-        assert iface.is_up(), f"{first_node.name}:{net_name} should be up after calling up()"
+        assert iface.is_up(), (
+            f"{first_node.name}:{net_name} should be up after calling up()"
+        )

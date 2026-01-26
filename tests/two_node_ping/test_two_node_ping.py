@@ -5,14 +5,12 @@ This test suite validates basic ICMP connectivity between two nodes.
 Inherits standard validation tests from BaseTopologyTests.
 """
 
-import subprocess
-import pytest
 from tests.conftest import BaseTopologyTests
 
 
 class TestTwoNodePing(BaseTopologyTests):
     """Test connectivity between two nodes.
-    
+
     Inherits standard tests from BaseTopologyTests.
     Add topology-specific tests here.
     """
@@ -26,12 +24,11 @@ class TestTwoNodePing(BaseTopologyTests):
     def test_single_shared_network(self, topology):
         """Verify both nodes share exactly one network."""
         assert len(topology.networks) == 1, "Should have exactly one network"
-        
+
         net1 = topology.get_network("net1")
         assert net1 is not None, "Network 'net1' should exist"
         assert net1.subnet == "10.0.1.0/24"
-        
+
         # Both nodes should be on net1
         for node in topology.nodes:
             assert "net1" in node.networks, f"{node.name} should be on net1"
-
