@@ -8,8 +8,11 @@ Tests both IPv4 and IPv6, with TCP and UDP throughput measurements.
 import subprocess
 import json
 import time
+import logging
 import pytest
 from tests.conftest import BaseTopologyTests
+
+logger = logging.getLogger(__name__)
 
 
 class TestTwoNodeIperf(BaseTopologyTests):
@@ -82,7 +85,7 @@ class TestTwoNodeIperf(BaseTopologyTests):
             throughput_mbps = throughput_bps / 1_000_000
 
             # Log results
-            print(f"\n✓ IPv4 TCP Throughput: {throughput_mbps:.2f} Mbps")
+            logger.info(f"✓ IPv4 TCP Throughput: {throughput_mbps:.2f} Mbps")
 
             # Basic sanity check - should get at least 100 Mbps
             assert throughput_mbps > 100, (
@@ -135,8 +138,8 @@ class TestTwoNodeIperf(BaseTopologyTests):
             loss_percent = data["end"]["sum"]["lost_percent"]
 
             # Log results
-            print(f"\n✓ IPv4 UDP Throughput: {throughput_mbps:.2f} Mbps")
-            print(
+            logger.info(f"✓ IPv4 UDP Throughput: {throughput_mbps:.2f} Mbps")
+            logger.info(
                 f"  Packets: {packets_sent} sent, {packets_lost} lost ({loss_percent:.2f}%)"
             )
 
@@ -195,9 +198,9 @@ class TestTwoNodeIperf(BaseTopologyTests):
             recv_mbps = recv_bps / 1_000_000
 
             # Log results
-            print("\n✓ IPv4 Bidirectional Throughput:")
-            print(f"  Send: {send_mbps:.2f} Mbps")
-            print(f"  Recv: {recv_mbps:.2f} Mbps")
+            logger.info("✓ IPv4 Bidirectional Throughput:")
+            logger.info(f"  Send: {send_mbps:.2f} Mbps")
+            logger.info(f"  Recv: {recv_mbps:.2f} Mbps")
 
             # Both directions should have reasonable throughput
             assert send_mbps > 50, (
@@ -252,7 +255,7 @@ class TestTwoNodeIperf(BaseTopologyTests):
             throughput_mbps = throughput_bps / 1_000_000
 
             # Log results
-            print(f"\n✓ IPv6 TCP Throughput: {throughput_mbps:.2f} Mbps")
+            logger.info(f"✓ IPv6 TCP Throughput: {throughput_mbps:.2f} Mbps")
 
             # Basic sanity check - should get at least 100 Mbps
             assert throughput_mbps > 100, (
@@ -308,8 +311,8 @@ class TestTwoNodeIperf(BaseTopologyTests):
             loss_percent = data["end"]["sum"]["lost_percent"]
 
             # Log results
-            print(f"\n✓ IPv6 UDP Throughput: {throughput_mbps:.2f} Mbps")
-            print(
+            logger.info(f"✓ IPv6 UDP Throughput: {throughput_mbps:.2f} Mbps")
+            logger.info(
                 f"  Packets: {packets_sent} sent, {packets_lost} lost ({loss_percent:.2f}%)"
             )
 
@@ -371,9 +374,9 @@ class TestTwoNodeIperf(BaseTopologyTests):
             recv_mbps = recv_bps / 1_000_000
 
             # Log results
-            print("\n✓ IPv6 Bidirectional Throughput:")
-            print(f"  Send: {send_mbps:.2f} Mbps")
-            print(f"  Recv: {recv_mbps:.2f} Mbps")
+            logger.info("✓ IPv6 Bidirectional Throughput:")
+            logger.info(f"  Send: {send_mbps:.2f} Mbps")
+            logger.info(f"  Recv: {recv_mbps:.2f} Mbps")
 
             # Both directions should have reasonable throughput
             assert send_mbps > 50, (
