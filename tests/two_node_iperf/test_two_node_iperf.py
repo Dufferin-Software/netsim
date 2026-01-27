@@ -39,7 +39,7 @@ class TestTwoNodeIperf(BaseTopologyTests):
             ).strip()
             count = int(result) if result else 0
             if count > 0:
-                ssh_command(ssh_port, f"killall -9 iperf3 || true", timeout=timeout)
+                ssh_command(ssh_port, "killall -9 iperf3 || true", timeout=timeout)
         except Exception:
             pass  # Ignore errors in cleanup
 

@@ -8,6 +8,7 @@ Provides:
 - Pause on failure for debugging
 """
 
+from functools import lru_cache
 import subprocess
 import tempfile
 import logging
@@ -25,9 +26,6 @@ logger = logging.getLogger(__name__)
 
 # Log SSH commands to file (override with NETSIM_SSH_LOG)
 SSH_LOG_PATH = Path(os.getenv("NETSIM_SSH_LOG", "ssh_commands.log")).resolve()
-
-# Session-level variable to store discovered topology path
-_topology_path: Path = None
 
 # Track if any test failed
 _test_failed: bool = False
@@ -50,57 +48,56 @@ def pytest_runtest_makereport(item, call):
         _test_failed = True
 
 
-def pytest_collection_modifyitems(session, config, items):
-    """After collection, set topology path based on collected test."""
-    global _topology_path
-
-    if items and not _topology_path:
-        # Get directory of first test
-        test_file = Path(items[0].fspath)
-        test_dir = test_file.parent
-
-        # Look for topology file
-        topo_name = test_dir.name
-        topo_path = test_dir / f"{topo_name}.yaml"
-
-        if topo_path.exists():
-            _topology_path = topo_path
-            logger.info(f"Discovered topology: {_topology_path}")
-
-
-@pytest.fixture(scope="session")
-def topology_path() -> Path:
+@pytest.fixture(scope="module")
+@lru_cache
+def topology_path(request) -> Path:
     """
-    Get discovered topology path.
+    Get discovered topology path for the current test module.
 
     Automatically discovered from test subdirectory name.
     Example: tests/two-node-topology/ -> tests/two-node-topology/two-node-topology.yaml
     """
-    if not _topology_path:
-        raise ValueError("No topology file discovered")
-    return _topology_path
+    # Get the test file's directory
+    test_file = Path(request.fspath)
+    test_dir = test_file.parent
+
+    # Look for topology file in the test directory
+    topo_name = test_dir.name
+    topo_path = test_dir / f"{topo_name}.yaml"
+
+    if topo_path.exists():
+        logger.info(f"Discovered topology for {test_file.name}: {topo_path}")
+        return topo_path
+
+    raise ValueError(f"No topology file found at {topo_path}")
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
+@lru_cache
 def topology(topology_path: Path):
     """Load topology from YAML."""
     return TopologyParser.load(str(topology_path))
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module", autouse=True)
 def running_topology(topology, request):
     """
-    Auto-start topology for entire test session, clean up after.
+    Auto-start topology for test module, clean up after.
 
-    This fixture ensures VMs are running before any tests execute.
-    Supports --pause-on-failure to keep VMs running for debugging.
+    Module-scoped with autouse=True to ensure topology runs for all tests in a module.
+    Each test module (e.g., test_two_node_ping.py vs test_two_node_iperf.py) gets
+    its own topology instance, preventing OOM from multiple topologies accumulating.
+
+    The topology is started once per module and destroyed after that module's tests complete.
+    Tests within the same module share the same running topology instance.
     """
     import time
 
     global _test_failed
 
     logger.info("=" * 60)
-    logger.info(f"Starting topology: {topology.name}")
+    logger.info(f"Starting topology for test module: {topology.name}")
+    logger.info(f"Topology fixture ID: {id(topology)}")
     logger.info("=" * 60)
 
     # Check if pause on failure is enabled (CLI option or env var)
@@ -112,6 +109,28 @@ def running_topology(topology, request):
         simulator = TopologySimulator(topology, runtime_dir=runtime_dir)
 
         try:
+            # CRITICAL: Cleanup any leftover VMs from previous failed runs
+            logger.info("Checking for leftover VMs from previous runs...")
+            try:
+                import libvirt
+
+                conn = libvirt.open("qemu:///session")
+                if conn:
+                    for node in topology.nodes:
+                        try:
+                            dom = conn.lookupByName(node.name)
+                            logger.warning(
+                                f"Found leftover VM: {node.name}, destroying it"
+                            )
+                            if dom.isActive():
+                                dom.destroy()
+                            dom.undefine()
+                        except libvirt.libvirtError:
+                            pass  # VM doesn't exist, good
+                    conn.close()
+            except Exception as e:
+                logger.debug(f"Pre-cleanup check: {e}")
+
             logger.info("Setting up networks and VMs...")
             simulator.setup()
             logger.info("Setup complete. Starting VMs...")
@@ -169,7 +188,26 @@ def running_topology(topology, request):
 
             logger.info("=" * 60)
             logger.info("✓ Topology ready - all tests can now run")
+            logger.info(f"Simulator instance ID: {id(simulator)}")
             logger.info("=" * 60)
+
+            # Log VM count for debugging
+            try:
+                import libvirt
+
+                conn = libvirt.open("qemu:///session")
+                if conn:
+                    all_domains = conn.listAllDomains()
+                    logger.info(f"Total VMs in libvirt session: {len(all_domains)}")
+                    if len(all_domains) > len(topology.nodes):
+                        logger.warning(
+                            f"⚠ Expected {len(topology.nodes)} VMs, found {len(all_domains)}!"
+                        )
+                        for dom in all_domains:
+                            logger.warning(f"  - {dom.name()}")
+                    conn.close()
+            except Exception:
+                pass
 
             yield simulator
 
@@ -199,9 +237,21 @@ def running_topology(topology, request):
                 logger.info("✓ Topology cleaned up")
             except Exception as e:
                 logger.warning(f"Cleanup error: {e}")
+            finally:
+                # Explicitly clear all references
+                simulator.vms.clear()
+                simulator.bridges.clear()
+                simulator.tap_devices.clear()
+                simulator.node_interfaces.clear()
+                del simulator
+
+                # Force garbage collection to free VM memory
+                import gc
+
+                gc.collect()
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def node_allocations(topology) -> Dict[str, Dict[str, Dict[str, str]]]:
     """
     Get auto-allocated IPv4 and IPv6 addresses for each node.
@@ -214,6 +264,25 @@ def node_allocations(topology) -> Dict[str, Dict[str, Dict[str, str]]]:
     net_allocators = {}
 
     import ipaddress
+
+    def _alloc_ip(net: ipaddress._BaseNetwork, idx: int) -> str:
+        """Deterministically allocate the idx-th usable host in the network.
+
+        Avoids materializing the full host list (which is impossible for /64 IPv6).
+        idx=0 corresponds to the first usable host (network+1).
+        """
+        first_host = int(net.network_address) + 1  # skip network address
+        # IPv4: exclude broadcast; IPv6: no broadcast, so allow all after network
+        if isinstance(net, ipaddress.IPv4Network):
+            last_host = int(net.broadcast_address) - 1
+        else:
+            last_host = int(net.network_address) + net.num_addresses - 1
+
+        candidate = first_host + idx
+        if candidate > last_host:
+            raise ValueError(f"IP pool exhausted for network {net} (idx={idx})")
+
+        return f"{ipaddress.ip_address(candidate)}/{net.prefixlen}"
 
     for node in topology.nodes:
         node_ifaces = {}
@@ -242,33 +311,17 @@ def node_allocations(topology) -> Dict[str, Dict[str, Dict[str, str]]]:
                 if net_allocators[net_name]["ipv6"]:
                     net_allocators[net_name]["ipv6"]["current"] += 1
 
-            # Allocate IPv4
+            # Allocate IPv4 (without materializing host list)
             ipv4_obj = net_allocators[net_name]["ipv4"]["net"]
             ipv4_idx = net_allocators[net_name]["ipv4"]["current"]
-
-            ipv4_hosts = list(ipv4_obj.hosts())
-            if ipv4_idx >= len(ipv4_hosts):
-                raise ValueError(
-                    f"IPv4 pool exhausted for network {net_name}. Subnet too small."
-                )
-
-            ipv4_addr = ipv4_hosts[ipv4_idx]
-            ipv4_cidr = f"{ipv4_addr}/{ipv4_obj.prefixlen}"
+            ipv4_cidr = _alloc_ip(ipv4_obj, ipv4_idx)
 
             # Allocate IPv6 if available
             ipv6_cidr = None
             if net_allocators[net_name]["ipv6"]:
                 ipv6_obj = net_allocators[net_name]["ipv6"]["net"]
                 ipv6_idx = net_allocators[net_name]["ipv6"]["current"]
-
-                ipv6_hosts = list(ipv6_obj.hosts())
-                if ipv6_idx >= len(ipv6_hosts):
-                    raise ValueError(
-                        f"IPv6 pool exhausted for network {net_name}. Subnet too small."
-                    )
-
-                ipv6_addr = ipv6_hosts[ipv6_idx]
-                ipv6_cidr = f"{ipv6_addr}/{ipv6_obj.prefixlen}"
+                ipv6_cidr = _alloc_ip(ipv6_obj, ipv6_idx)
 
             node_ifaces[net_name] = {
                 "ipv4": ipv4_cidr,
@@ -280,7 +333,7 @@ def node_allocations(topology) -> Dict[str, Dict[str, Dict[str, str]]]:
     return allocations
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def ssh_command(topology) -> callable:
     """
     Fixture providing SSH command helper with per-node logging.
@@ -360,7 +413,7 @@ def ssh_command(topology) -> callable:
     return _ssh_run
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def install_packages(ssh_command, node_ssh_port):
     """
     Fixture for installing packages on nodes.
@@ -413,7 +466,7 @@ def install_packages(ssh_command, node_ssh_port):
     return _install
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def configure_node_interfaces(node_interfaces, node_allocations, ssh_command):
     """
     Fixture that configures all node interfaces with netplan.
@@ -546,7 +599,7 @@ def configure_node_interfaces(node_interfaces, node_allocations, ssh_command):
     logger.info("=" * 60)
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def node_ssh_port(topology) -> callable:
     """
     Get SSH port for a node by name.
@@ -614,7 +667,7 @@ class NodeInterface:
         return "UP" in output
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def node_interfaces(
     running_topology, topology, node_allocations, ssh_command, node_ssh_port
 ):
@@ -713,15 +766,20 @@ class BaseTopologyTests:
             )
 
             # Check each network has an IP allocation
-            for idx, net_name in enumerate(node.networks):
-                alloc_net_name, ip_cidr = node_ifaces[idx]
-                assert alloc_net_name == net_name, (
-                    f"Network mismatch: expected {net_name}, got {alloc_net_name}"
+            for net_name in node.networks:
+                assert net_name in node_ifaces, (
+                    f"Network {net_name} not found in allocations for {node.name}"
+                )
+
+                addrs = node_ifaces[net_name]
+                assert "ipv4" in addrs and addrs["ipv4"], (
+                    f"No IPv4 allocation for {node.name}:{net_name}"
                 )
 
                 # Verify IP is in the correct subnet
                 network = topology.get_network(net_name)
                 assert network, f"Network {net_name} not found in topology"
+                ip_cidr = addrs["ipv4"]
                 assert ip_cidr.startswith(
                     network.subnet.split("/")[0].rsplit(".", 1)[0]
                 ), f"IP {ip_cidr} not in subnet {network.subnet}"
@@ -764,8 +822,11 @@ class BaseTopologyTests:
                 )
 
                 # Get expected IP from allocations
-                expected_ip = next((ip for n, ip in allocations if n == net_name), None)
-                assert expected_ip, f"No allocation found for {node_name}:{net_name}"
+                assert net_name in allocations, (
+                    f"No allocation found for {node_name}:{net_name}"
+                )
+                expected_ip = allocations[net_name]["ipv4"]
+                assert expected_ip, f"No IPv4 allocation for {node_name}:{net_name}"
 
                 # Check actual IP matches
                 actual_ip = node_iface.get_ip()

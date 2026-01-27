@@ -21,6 +21,15 @@ paramiko = "^3.0"
 [tool.poetry.scripts]
 netsim = "netsim.cli:main"
 
+[tool.pytest.ini_options]
+# Reduce memory usage by limiting result caching
+addopts = [
+    "-v",
+    "--tb=short",
+]
+# Disable pytest cache to reduce memory
+cache_dir = "/tmp/pytest_cache"
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
