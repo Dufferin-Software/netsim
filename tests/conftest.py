@@ -31,6 +31,135 @@ SSH_LOG_PATH = Path(os.getenv("NETSIM_SSH_LOG", "ssh_commands.log")).resolve()
 _test_failed: bool = False
 
 
+# Helper functions for running_topology
+def _cleanup_leftover_vms(topology):
+    """Clean up any leftover VMs from previous failed runs."""
+    logger.info("Checking for leftover VMs from previous runs...")
+    try:
+        import libvirt
+
+        conn = libvirt.open("qemu:///session")
+        if conn:
+            for node in topology.nodes:
+                try:
+                    dom = conn.lookupByName(node.name)
+                    logger.warning(f"Found leftover VM: {node.name}, destroying it")
+                    if dom.isActive():
+                        dom.destroy()
+                    dom.undefine()
+                except libvirt.libvirtError:
+                    pass  # VM doesn't exist, good
+            conn.close()
+    except Exception as e:
+        logger.debug(f"Pre-cleanup check: {e}")
+
+
+def _wait_for_vms_running(simulator, timeout=30):
+    """Wait for all VMs to be running."""
+    import time
+
+    start_time = time.time()
+    while True:
+        status = simulator.status()
+        all_running = all(status.values())
+        if all_running:
+            running_nodes = ", ".join(status.keys())
+            logger.info(f"✓ All domains started: {running_nodes}")
+            break
+        if time.time() - start_time > timeout:
+            raise RuntimeError(f"VMs failed to start within {timeout}s")
+        time.sleep(1)
+
+
+def _wait_for_ssh_availability(topology, timeout_per_node=60):
+    """Wait for SSH to be available on all nodes."""
+    import time
+
+    logger.info("Waiting for SSH to be available on all nodes...")
+    for idx, node in enumerate(topology.nodes):
+        ssh_port = 2200 + idx
+        ssh_start = time.time()
+        while True:
+            try:
+                result = subprocess.run(
+                    [
+                        "ssh",
+                        "-o",
+                        "StrictHostKeyChecking=no",
+                        "-o",
+                        "UserKnownHostsFile=/dev/null",
+                        "-o",
+                        "ConnectTimeout=2",
+                        "-p",
+                        str(ssh_port),
+                        "netsim@localhost",
+                        "echo ready",
+                    ],
+                    capture_output=True,
+                    timeout=5,
+                    check=True,
+                )
+                if "ready" in result.stdout.decode():
+                    logger.info(f"{node.name}: SSH ready")
+                    break
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                if time.time() - ssh_start > timeout_per_node:
+                    raise RuntimeError(
+                        f"{node.name}: SSH not available after {timeout_per_node}s"
+                    )
+                time.sleep(2)
+
+
+def _pause_for_debugging(topology, request):
+    """Pause for debugging if test failed and --pause-on-failure is set."""
+    global _test_failed
+
+    if not _test_failed:
+        return
+
+    pause_on_failure = request.config.getoption(
+        "--pause-on-failure", False
+    ) or os.environ.get("NETSIM_PAUSE_ON_FAILURE", "").lower() in ("1", "true", "yes")
+
+    if not pause_on_failure:
+        return
+
+    logger.info("=" * 60)
+    logger.info("⚠ TEST FAILURE DETECTED - PAUSING FOR DEBUGGING")
+    logger.info("=" * 60)
+    logger.info("Topology is still running. SSH access:")
+    for idx, node in enumerate(topology.nodes):
+        ssh_port = 2200 + idx
+        logger.info(f"  {node.name}: ssh -p {ssh_port} netsim@localhost")
+    logger.info("")
+    logger.info("Press ENTER to tear down topology and continue...")
+    logger.info("=" * 60)
+    try:
+        input()
+    except (EOFError, KeyboardInterrupt):
+        logger.info("Proceeding with teardown...")
+
+
+def _log_vm_count(topology):
+    """Log VM count for debugging."""
+    try:
+        import libvirt
+
+        conn = libvirt.open("qemu:///session")
+        if conn:
+            all_domains = conn.listAllDomains()
+            logger.info(f"Total VMs in libvirt session: {len(all_domains)}")
+            if len(all_domains) > len(topology.nodes):
+                logger.warning(
+                    f"⚠ Expected {len(topology.nodes)} VMs, found {len(all_domains)}!"
+                )
+                for dom in all_domains:
+                    logger.warning(f"  - {dom.name()}")
+            conn.close()
+    except Exception:
+        pass
+
+
 def pytest_addoption(parser):
     """Add custom command-line options."""
     parser.addoption(
@@ -91,143 +220,40 @@ def running_topology(topology, request):
     The topology is started once per module and destroyed after that module's tests complete.
     Tests within the same module share the same running topology instance.
     """
-    import time
-
-    global _test_failed
-
     logger.info("=" * 60)
     logger.info(f"Starting topology for test module: {topology.name}")
     logger.info(f"Topology fixture ID: {id(topology)}")
     logger.info("=" * 60)
 
-    # Check if pause on failure is enabled (CLI option or env var)
-    pause_on_failure = request.config.getoption(
-        "--pause-on-failure", False
-    ) or os.environ.get("NETSIM_PAUSE_ON_FAILURE", "").lower() in ("1", "true", "yes")
-
     with tempfile.TemporaryDirectory(prefix="netsim-test-") as runtime_dir:
         simulator = TopologySimulator(topology, runtime_dir=runtime_dir)
 
         try:
-            # CRITICAL: Cleanup any leftover VMs from previous failed runs
-            logger.info("Checking for leftover VMs from previous runs...")
-            try:
-                import libvirt
+            # Pre-flight cleanup
+            _cleanup_leftover_vms(topology)
 
-                conn = libvirt.open("qemu:///session")
-                if conn:
-                    for node in topology.nodes:
-                        try:
-                            dom = conn.lookupByName(node.name)
-                            logger.warning(
-                                f"Found leftover VM: {node.name}, destroying it"
-                            )
-                            if dom.isActive():
-                                dom.destroy()
-                            dom.undefine()
-                        except libvirt.libvirtError:
-                            pass  # VM doesn't exist, good
-                    conn.close()
-            except Exception as e:
-                logger.debug(f"Pre-cleanup check: {e}")
-
+            # Setup and start
             logger.info("Setting up networks and VMs...")
             simulator.setup()
             logger.info("Setup complete. Starting VMs...")
             simulator.start()
 
-            # Wait for VMs to be running
-            timeout = 30
-            start_time = time.time()
-            while True:
-                status = simulator.status()
-                all_running = all(status.values())
-                if all_running:
-                    running_nodes = ", ".join(status.keys())
-                    logger.info(f"✓ All domains started: {running_nodes}")
-                    break
-                if time.time() - start_time > timeout:
-                    raise RuntimeError(f"VMs failed to start within {timeout}s")
-                time.sleep(1)
-
-            # Wait for SSH to be available on all nodes
-            logger.info("Waiting for SSH to be available on all nodes...")
-            for idx, node in enumerate(topology.nodes):
-                ssh_port = 2200 + idx
-                ssh_timeout = 60
-                ssh_start = time.time()
-                while True:
-                    try:
-                        result = subprocess.run(
-                            [
-                                "ssh",
-                                "-o",
-                                "StrictHostKeyChecking=no",
-                                "-o",
-                                "UserKnownHostsFile=/dev/null",
-                                "-o",
-                                "ConnectTimeout=2",
-                                "-p",
-                                str(ssh_port),
-                                "netsim@localhost",
-                                "echo ready",
-                            ],
-                            capture_output=True,
-                            timeout=5,
-                            check=True,
-                        )
-                        if "ready" in result.stdout.decode():
-                            logger.info(f"{node.name}: SSH ready")
-                            break
-                    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-                        if time.time() - ssh_start > ssh_timeout:
-                            raise RuntimeError(
-                                f"{node.name}: SSH not available after {ssh_timeout}s"
-                            )
-                        time.sleep(2)
+            # Wait for readiness
+            _wait_for_vms_running(simulator)
+            _wait_for_ssh_availability(topology)
 
             logger.info("=" * 60)
             logger.info("✓ Topology ready - all tests can now run")
             logger.info(f"Simulator instance ID: {id(simulator)}")
             logger.info("=" * 60)
 
-            # Log VM count for debugging
-            try:
-                import libvirt
-
-                conn = libvirt.open("qemu:///session")
-                if conn:
-                    all_domains = conn.listAllDomains()
-                    logger.info(f"Total VMs in libvirt session: {len(all_domains)}")
-                    if len(all_domains) > len(topology.nodes):
-                        logger.warning(
-                            f"⚠ Expected {len(topology.nodes)} VMs, found {len(all_domains)}!"
-                        )
-                        for dom in all_domains:
-                            logger.warning(f"  - {dom.name()}")
-                    conn.close()
-            except Exception:
-                pass
+            _log_vm_count(topology)
 
             yield simulator
 
         finally:
             # Check if we should pause before teardown
-            if pause_on_failure and _test_failed:
-                logger.info("=" * 60)
-                logger.info("⚠ TEST FAILURE DETECTED - PAUSING FOR DEBUGGING")
-                logger.info("=" * 60)
-                logger.info("Topology is still running. SSH access:")
-                for idx, node in enumerate(topology.nodes):
-                    ssh_port = 2200 + idx
-                    logger.info(f"  {node.name}: ssh -p {ssh_port} netsim@localhost")
-                logger.info("")
-                logger.info("Press ENTER to tear down topology and continue...")
-                logger.info("=" * 60)
-                try:
-                    input()
-                except (EOFError, KeyboardInterrupt):
-                    logger.info("Proceeding with teardown...")
+            _pause_for_debugging(topology, request)
 
             logger.info("=" * 60)
             logger.info("Tearing down topology")
@@ -466,6 +492,105 @@ def install_packages(ssh_command, node_ssh_port):
     return _install
 
 
+def _build_netplan_config(node_name, ifaces, node_allocations):
+    """Build netplan YAML config for a node's interfaces."""
+    iface_configs = node_allocations[node_name]
+    interfaces = {}
+
+    for net_name, node_iface in ifaces.items():
+        addrs = iface_configs.get(net_name)
+        if not addrs:
+            continue
+
+        ipv4_cidr = addrs.get("ipv4")
+        ipv6_cidr = addrs.get("ipv6")
+
+        # Build addresses list
+        addresses = []
+        if ipv4_cidr:
+            addresses.append(ipv4_cidr)
+        if ipv6_cidr:
+            addresses.append(ipv6_cidr)
+
+        if not addresses:
+            continue
+
+        interfaces[node_iface.if_name] = {
+            "dhcp4": False,
+            "dhcp6": False,
+            "addresses": addresses,
+        }
+
+        addr_info = ", ".join(addresses)
+        logger.info(f"  {node_iface.if_name} ({net_name}): {addr_info}")
+
+    return {
+        "network": {
+            "version": 2,
+            "ethernets": interfaces,
+        }
+    }
+
+
+def _apply_netplan_to_node(node_name, ifaces, netplan_yaml, ssh_command):
+    """Apply netplan configuration to a single node."""
+    try:
+        # Create temporary file with config locally
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(netplan_yaml)
+            temp_path = f.name
+
+        # Get SSH port for this node
+        ssh_port = list(ifaces.values())[0].ssh_port
+
+        # Copy to node
+        scp_cmd = [
+            "scp",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            "-P",
+            str(ssh_port),
+            temp_path,
+            "netsim@localhost:/tmp/netsim.yaml",
+        ]
+        subprocess.run(scp_cmd, check=True, capture_output=True, timeout=10)
+
+        # Ensure netplan directory exists and apply with sudo
+        ssh_command(ssh_port, "sudo mkdir -p /etc/netplan")
+        ssh_command(ssh_port, "sudo cp /tmp/netsim.yaml /etc/netplan/99-netsim.yaml")
+        ssh_command(ssh_port, "sudo chmod 600 /etc/netplan/99-netsim.yaml")
+
+        # Show what we're applying
+        logger.debug(f"{node_name} netplan config:\n{netplan_yaml}")
+
+        # Apply netplan
+        result = ssh_command(ssh_port, "sudo netplan apply 2>&1")
+        if result:
+            logger.debug(f"{node_name} netplan output: {result}")
+
+        logger.info(f"✓ {node_name}: netplan configuration applied")
+
+        # Clean up temp file
+        Path(temp_path).unlink()
+
+    except subprocess.CalledProcessError as e:
+        logger.error(f"✗ Failed to configure {node_name}")
+        logger.error(
+            f"  Command: {' '.join(e.cmd) if isinstance(e.cmd, list) else e.cmd}"
+        )
+        logger.error(f"  Exit code: {e.returncode}")
+        if e.stderr:
+            logger.error(f"  Stderr: {e.stderr}")
+        if e.stdout:
+            logger.error(f"  Stdout: {e.stdout}")
+        raise
+    except Exception as e:
+        logger.error(f"✗ Failed to configure {node_name}: {e}")
+        raise
+
+
 @pytest.fixture(scope="module")
 def configure_node_interfaces(node_interfaces, node_allocations, ssh_command):
     """
@@ -492,107 +617,10 @@ def configure_node_interfaces(node_interfaces, node_allocations, ssh_command):
 
         logger.info(f"Configuring {len(iface_configs)} interface(s) for {node_name}")
 
-        # Build netplan config for all interfaces
-        interfaces = {}
-
-        for net_name, node_iface in ifaces.items():
-            # Find the IPs for this network
-            addrs = iface_configs.get(net_name)
-            if not addrs:
-                continue
-
-            ipv4_cidr = addrs.get("ipv4")
-            ipv6_cidr = addrs.get("ipv6")
-
-            # Build addresses list
-            addresses = []
-            if ipv4_cidr:
-                addresses.append(ipv4_cidr)
-            if ipv6_cidr:
-                addresses.append(ipv6_cidr)
-
-            if not addresses:
-                continue
-
-            interfaces[node_iface.if_name] = {
-                "dhcp4": False,
-                "dhcp6": False,
-                "addresses": addresses,
-            }
-
-            addr_info = ", ".join(addresses)
-            logger.info(f"  {node_iface.if_name} ({net_name}): {addr_info}")
-
-        # Create netplan config
-        netplan_config = {
-            "network": {
-                "version": 2,
-                "ethernets": interfaces,
-            }
-        }
-
+        # Build and apply netplan config
+        netplan_config = _build_netplan_config(node_name, ifaces, node_allocations)
         netplan_yaml = yaml.dump(netplan_config, default_flow_style=False)
-
-        # Write to node via sudo tee
-        try:
-            # Create temporary file with config locally first
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".yaml", delete=False
-            ) as f:
-                f.write(netplan_yaml)
-                temp_path = f.name
-
-            # Get SSH port for this node
-            ssh_port = list(ifaces.values())[0].ssh_port
-
-            # Copy to node
-            scp_cmd = [
-                "scp",
-                "-o",
-                "StrictHostKeyChecking=no",
-                "-o",
-                "UserKnownHostsFile=/dev/null",
-                "-P",
-                str(ssh_port),
-                temp_path,
-                "netsim@localhost:/tmp/netsim.yaml",
-            ]
-            subprocess.run(scp_cmd, check=True, capture_output=True, timeout=10)
-
-            # Ensure netplan directory exists and apply with sudo
-            ssh_command(ssh_port, "sudo mkdir -p /etc/netplan")
-            ssh_command(
-                ssh_port, "sudo cp /tmp/netsim.yaml /etc/netplan/99-netsim.yaml"
-            )
-            ssh_command(ssh_port, "sudo chmod 600 /etc/netplan/99-netsim.yaml")
-
-            # Show what we're applying
-            logger.debug(f"{node_name} netplan config:\n{netplan_yaml}")
-
-            # Apply netplan
-            result = ssh_command(ssh_port, "sudo netplan apply 2>&1")
-            if result:
-                logger.debug(f"{node_name} netplan output: {result}")
-
-            logger.info(f"✓ {node_name}: netplan configuration applied")
-
-            # Clean up temp file
-            Path(temp_path).unlink()
-
-        except subprocess.CalledProcessError as e:
-            logger.error(f"✗ Failed to configure {node_name}")
-            logger.error(
-                f"  Command: {' '.join(e.cmd) if isinstance(e.cmd, list) else e.cmd}"
-            )
-            logger.error(f"  Exit code: {e.returncode}")
-            if e.stderr:
-                logger.error(f"  Stderr: {e.stderr}")
-            if e.stdout:
-                logger.error(f"  Stdout: {e.stdout}")
-            raise
-        except Exception as e:
-            logger.error(f"✗ Failed to configure {node_name}: {e}")
-            raise
+        _apply_netplan_to_node(node_name, ifaces, netplan_yaml, ssh_command)
 
     logger.info("=" * 60)
     logger.info("✓ All interfaces configured")
@@ -667,6 +695,60 @@ class NodeInterface:
         return "UP" in output
 
 
+def _discover_interface_names(node_name, ssh_port, ssh_command):
+    """Discover interface names on a node via SSH."""
+    output = ssh_command(
+        ssh_port, "ip -o link show | grep -v ' lo:' | awk -F': ' '{print $2}'"
+    )
+    all_if_names = [name.strip() for name in output.split("\n") if name.strip()]
+
+    # Filter out @NONE suffixes
+    if_names = [
+        name.split("@")[0] for name in all_if_names if not name.startswith("lo")
+    ]
+
+    logger.info(f"{node_name}: discovered interfaces: {if_names}")
+    return if_names
+
+
+def _map_networks_to_interfaces(
+    node_name, if_names, node_allocations, ssh_command, node_ssh_port
+):
+    """Map networks to discovered interfaces."""
+    iface_configs = node_allocations[node_name]
+    node_ifaces = {}
+
+    # Map data networks to interfaces
+    # if_names[0] = management interface (skip it)
+    # if_names[1] = first data network
+    # if_names[2] = second data network, etc.
+    config_idx = 0
+    for net_name, addrs in iface_configs.items():
+        # Skip management interface (if_names[0]) by adding 1 to index
+        if_idx = config_idx + 1
+        if if_idx < len(if_names):
+            if_name = if_names[if_idx]
+            ipv4_addr = addrs.get("ipv4")
+            ipv6_addr = addrs.get("ipv6")
+            ssh_port = node_ssh_port(node_name)
+            node_ifaces[net_name] = NodeInterface(
+                node_name,
+                if_name,
+                net_name,
+                ssh_port,
+                ssh_command,
+                ipv4_addr=ipv4_addr,
+                ipv6_addr=ipv6_addr,
+            )
+            addr_info = ipv4_addr if ipv4_addr else ""
+            if ipv6_addr:
+                addr_info = f"{ipv4_addr}, {ipv6_addr}" if ipv4_addr else ipv6_addr
+            logger.info(f"{node_name}: {if_name} -> {net_name} ({addr_info})")
+        config_idx += 1
+
+    return node_ifaces
+
+
 @pytest.fixture(scope="module")
 def node_interfaces(
     running_topology, topology, node_allocations, ssh_command, node_ssh_port
@@ -685,51 +767,14 @@ def node_interfaces(
     for idx, node in enumerate(topology.nodes):
         node_name = node.name
         ssh_port = node_ssh_port(node_name)
-        node_ifaces = {}
 
-        # Discover interface names (exclude loopback)
-        output = ssh_command(
-            ssh_port, "ip -o link show | grep -v ' lo:' | awk -F': ' '{print $2}'"
+        # Discover interface names
+        if_names = _discover_interface_names(node_name, ssh_port, ssh_command)
+
+        # Map networks to interfaces
+        node_ifaces = _map_networks_to_interfaces(
+            node_name, if_names, node_allocations, ssh_command, node_ssh_port
         )
-        all_if_names = [name.strip() for name in output.split("\n") if name.strip()]
-
-        # Filter out @NONE suffixes
-        if_names = [
-            name.split("@")[0] for name in all_if_names if not name.startswith("lo")
-        ]
-
-        logger.info(f"{node_name}: discovered interfaces: {if_names}")
-
-        # Get allocation info for this node (dict of network_name -> {ipv4, ipv6})
-        # This only includes data networks, not the management interface
-        iface_configs = node_allocations[node_name]
-
-        # Map data networks to interfaces
-        # if_names[0] = management interface (skip it)
-        # if_names[1] = first data network
-        # if_names[2] = second data network, etc.
-        config_idx = 0
-        for net_name, addrs in iface_configs.items():
-            # Skip management interface (if_names[0]) by adding 1 to index
-            if_idx = config_idx + 1
-            if if_idx < len(if_names):
-                if_name = if_names[if_idx]
-                ipv4_addr = addrs.get("ipv4")
-                ipv6_addr = addrs.get("ipv6")
-                node_ifaces[net_name] = NodeInterface(
-                    node_name,
-                    if_name,
-                    net_name,
-                    ssh_port,
-                    ssh_command,
-                    ipv4_addr=ipv4_addr,
-                    ipv6_addr=ipv6_addr,
-                )
-                addr_info = ipv4_addr if ipv4_addr else ""
-                if ipv6_addr:
-                    addr_info = f"{ipv4_addr}, {ipv6_addr}" if ipv4_addr else ipv6_addr
-                logger.info(f"{node_name}: {if_name} -> {net_name} ({addr_info})")
-            config_idx += 1
 
         interfaces[node_name] = node_ifaces
 
