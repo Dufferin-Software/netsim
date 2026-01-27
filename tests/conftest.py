@@ -13,7 +13,7 @@ import tempfile
 import logging
 import os
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict
 import pytest
 import yaml
 
@@ -202,19 +202,21 @@ def running_topology(topology, request):
 
 
 @pytest.fixture(scope="session")
-def node_allocations(topology) -> Dict[str, List[Tuple[str, str]]]:
+def node_allocations(topology) -> Dict[str, Dict[str, Dict[str, str]]]:
     """
-    Get auto-allocated IP addresses for each node.
+    Get auto-allocated IPv4 and IPv6 addresses for each node.
 
     Returns:
-        Dict mapping node_name -> [(network_name, ip_cidr), ...]
+        Dict mapping node_name -> {network_name: {"ipv4": "10.0.1.10/24", "ipv6": "2001:db8:1::10/64"}, ...}
     """
     # Simulate the allocation process without running setup()
     allocations = {}
     net_allocators = {}
 
+    import ipaddress
+
     for node in topology.nodes:
-        node_ifaces = []
+        node_ifaces = {}
 
         for net_name in node.networks:
             # Initialize allocator if not present
@@ -223,29 +225,55 @@ def node_allocations(topology) -> Dict[str, List[Tuple[str, str]]]:
                 if not network:
                     raise ValueError(f"Unknown network: {net_name}")
 
-                import ipaddress
+                ipv4_net = ipaddress.IPv4Network(network.subnet, strict=False)
 
-                net = ipaddress.IPv4Network(network.subnet, strict=False)
-                # Start at index 9 to get .10 (since hosts[0] is .1, hosts[9] is .10)
-                net_allocators[net_name] = {"net": net, "current": 9}
+                # Initialize IPv6 if present
+                ipv6_net = None
+                if hasattr(network, "ipv6_subnet") and network.ipv6_subnet:
+                    ipv6_net = ipaddress.IPv6Network(network.ipv6_subnet, strict=False)
+
+                # Start at index 9 to get .10 / ::10 (since hosts[0] is .1, hosts[9] is .10)
+                net_allocators[net_name] = {
+                    "ipv4": {"net": ipv4_net, "current": 9},
+                    "ipv6": {"net": ipv6_net, "current": 9} if ipv6_net else None,
+                }
             else:
-                net_allocators[net_name]["current"] += 1
+                net_allocators[net_name]["ipv4"]["current"] += 1
+                if net_allocators[net_name]["ipv6"]:
+                    net_allocators[net_name]["ipv6"]["current"] += 1
 
-            # Allocate IP
-            import ipaddress
+            # Allocate IPv4
+            ipv4_obj = net_allocators[net_name]["ipv4"]["net"]
+            ipv4_idx = net_allocators[net_name]["ipv4"]["current"]
 
-            net_obj = net_allocators[net_name]["net"]
-            alloc_idx = net_allocators[net_name]["current"]
-
-            hosts = list(net_obj.hosts())
-            if alloc_idx >= len(hosts):
+            ipv4_hosts = list(ipv4_obj.hosts())
+            if ipv4_idx >= len(ipv4_hosts):
                 raise ValueError(
-                    f"IP pool exhausted for network {net_name}. Subnet too small."
+                    f"IPv4 pool exhausted for network {net_name}. Subnet too small."
                 )
 
-            ip_addr = hosts[alloc_idx]
-            ip_cidr = f"{ip_addr}/{net_obj.prefixlen}"
-            node_ifaces.append((net_name, ip_cidr))
+            ipv4_addr = ipv4_hosts[ipv4_idx]
+            ipv4_cidr = f"{ipv4_addr}/{ipv4_obj.prefixlen}"
+
+            # Allocate IPv6 if available
+            ipv6_cidr = None
+            if net_allocators[net_name]["ipv6"]:
+                ipv6_obj = net_allocators[net_name]["ipv6"]["net"]
+                ipv6_idx = net_allocators[net_name]["ipv6"]["current"]
+
+                ipv6_hosts = list(ipv6_obj.hosts())
+                if ipv6_idx >= len(ipv6_hosts):
+                    raise ValueError(
+                        f"IPv6 pool exhausted for network {net_name}. Subnet too small."
+                    )
+
+                ipv6_addr = ipv6_hosts[ipv6_idx]
+                ipv6_cidr = f"{ipv6_addr}/{ipv6_obj.prefixlen}"
+
+            node_ifaces[net_name] = {
+                "ipv4": ipv4_cidr,
+                "ipv6": ipv6_cidr,
+            }
 
         allocations[node.name] = node_ifaces
 
@@ -415,17 +443,32 @@ def configure_node_interfaces(node_interfaces, node_allocations, ssh_command):
         interfaces = {}
 
         for net_name, node_iface in ifaces.items():
-            # Find the IP for this network
-            ip_cidr = next((ip for n, ip in iface_configs if n == net_name), None)
-            if not ip_cidr:
+            # Find the IPs for this network
+            addrs = iface_configs.get(net_name)
+            if not addrs:
+                continue
+
+            ipv4_cidr = addrs.get("ipv4")
+            ipv6_cidr = addrs.get("ipv6")
+
+            # Build addresses list
+            addresses = []
+            if ipv4_cidr:
+                addresses.append(ipv4_cidr)
+            if ipv6_cidr:
+                addresses.append(ipv6_cidr)
+
+            if not addresses:
                 continue
 
             interfaces[node_iface.if_name] = {
                 "dhcp4": False,
-                "addresses": [ip_cidr],
+                "dhcp6": False,
+                "addresses": addresses,
             }
 
-            logger.info(f"  {node_iface.if_name} ({net_name}): {ip_cidr}")
+            addr_info = ", ".join(addresses)
+            logger.info(f"  {node_iface.if_name} ({net_name}): {addr_info}")
 
         # Create netplan config
         netplan_config = {
@@ -530,12 +573,16 @@ class NodeInterface:
         network: str,
         ssh_port: int,
         ssh_cmd: callable,
+        ipv4_addr: str = None,
+        ipv6_addr: str = None,
     ):
         self.node_name = node_name
         self.if_name = if_name
         self.network = network
         self.ssh_port = ssh_port
         self._ssh = ssh_cmd
+        self.ipv4_addr = ipv4_addr
+        self.ipv6_addr = ipv6_addr
 
     def up(self):
         """Bring interface up."""
@@ -546,10 +593,18 @@ class NodeInterface:
         self._ssh(self.ssh_port, f"sudo ip link set {self.if_name} down")
 
     def get_ip(self) -> str:
-        """Get IP address."""
+        """Get IPv4 address."""
         output = self._ssh(
             self.ssh_port,
             f"ip -4 addr show {self.if_name} | grep 'inet ' | awk '{{print $2}}'",
+        )
+        return output.strip()
+
+    def get_ipv6(self) -> str:
+        """Get IPv6 address."""
+        output = self._ssh(
+            self.ssh_port,
+            f"ip -6 addr show {self.if_name} | grep 'inet6' | awk '{{print $2}}' | grep -v '^fe80'",
         )
         return output.strip()
 
@@ -592,7 +647,7 @@ def node_interfaces(
 
         logger.info(f"{node_name}: discovered interfaces: {if_names}")
 
-        # Get allocation info for this node (list of (network_name, ip_cidr) tuples)
+        # Get allocation info for this node (dict of network_name -> {ipv4, ipv6})
         # This only includes data networks, not the management interface
         iface_configs = node_allocations[node_name]
 
@@ -600,15 +655,28 @@ def node_interfaces(
         # if_names[0] = management interface (skip it)
         # if_names[1] = first data network
         # if_names[2] = second data network, etc.
-        for config_idx, (net_name, ip_cidr) in enumerate(iface_configs):
+        config_idx = 0
+        for net_name, addrs in iface_configs.items():
             # Skip management interface (if_names[0]) by adding 1 to index
             if_idx = config_idx + 1
             if if_idx < len(if_names):
                 if_name = if_names[if_idx]
+                ipv4_addr = addrs.get("ipv4")
+                ipv6_addr = addrs.get("ipv6")
                 node_ifaces[net_name] = NodeInterface(
-                    node_name, if_name, net_name, ssh_port, ssh_command
+                    node_name,
+                    if_name,
+                    net_name,
+                    ssh_port,
+                    ssh_command,
+                    ipv4_addr=ipv4_addr,
+                    ipv6_addr=ipv6_addr,
                 )
-                logger.info(f"{node_name}: {if_name} -> {net_name} ({ip_cidr})")
+                addr_info = ipv4_addr if ipv4_addr else ""
+                if ipv6_addr:
+                    addr_info = f"{ipv4_addr}, {ipv6_addr}" if ipv4_addr else ipv6_addr
+                logger.info(f"{node_name}: {if_name} -> {net_name} ({addr_info})")
+            config_idx += 1
 
         interfaces[node_name] = node_ifaces
 

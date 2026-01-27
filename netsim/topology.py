@@ -14,6 +14,7 @@ class Network:
     name: str
     subnet: str  # e.g., "10.0.1.0/24"
     mtu: int = 1500
+    ipv6_subnet: Optional[str] = None  # e.g., "2001:db8:1::/64"
 
 
 @dataclass
@@ -74,6 +75,7 @@ class TopologyParser:
                     name=net_data["name"],
                     subnet=net_data["subnet"],
                     mtu=net_data.get("mtu", 1500),
+                    ipv6_subnet=net_data.get("ipv6_subnet"),
                 )
             )
 
