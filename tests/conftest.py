@@ -23,6 +23,9 @@ from netsim.simulator import TopologySimulator
 
 logger = logging.getLogger(__name__)
 
+# Log SSH commands to file (override with NETSIM_SSH_LOG)
+SSH_LOG_PATH = Path(os.getenv("NETSIM_SSH_LOG", "ssh_commands.log")).resolve()
+
 # Session-level variable to store discovered topology path
 _topology_path: Path = None
 
@@ -250,12 +253,27 @@ def node_allocations(topology) -> Dict[str, List[Tuple[str, str]]]:
 
 
 @pytest.fixture(scope="session")
-def ssh_command() -> callable:
+def ssh_command(topology) -> callable:
     """
-    Fixture providing SSH command helper.
+    Fixture providing SSH command helper with per-node logging.
 
     Returns callable: ssh_command(port, cmd) -> output
     """
+
+    # Configure file logger once per session
+    if not any(
+        isinstance(h, logging.FileHandler) and getattr(h, "_netsim_ssh_log", False)
+        for h in logger.handlers
+    ):
+        SSH_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.FileHandler(SSH_LOG_PATH, mode="w")
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(
+            logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+        )
+        file_handler._netsim_ssh_log = True  # marker to avoid duplicate handlers
+        logger.addHandler(file_handler)
+        logger.setLevel(logging.DEBUG)
 
     def _ssh_run(port: int, cmd: str, timeout: int = 10) -> str:
         """
@@ -272,6 +290,15 @@ def ssh_command() -> callable:
         Raises:
             subprocess.CalledProcessError: If command fails
         """
+        # Determine node name from port for logging
+        node_name = f"port-{port}"
+        for idx, node in enumerate(topology.nodes):
+            if 2200 + idx == port:
+                node_name = node.name
+                break
+
+        logger.debug(f"[{node_name}] $ {cmd}")
+
         full_cmd = [
             "ssh",
             "-o",
@@ -293,7 +320,14 @@ def ssh_command() -> callable:
             timeout=timeout,
             check=True,
         )
-        return result.stdout.strip()
+
+        output = result.stdout.strip()
+        if output and len(output) < 200:  # Only log short outputs
+            logger.debug(f"[{node_name}] → {output}")
+        elif output:
+            logger.debug(f"[{node_name}] → <{len(output)} bytes of output>")
+
+        return output
 
     return _ssh_run
 
