@@ -1,3 +1,5 @@
+# Copyright (c) Dufferin Software
+
 """
 Two-node ping connectivity tests.
 

@@ -1,3 +1,5 @@
+# Copyright (c) Dufferin Software
+
 """
 Command-line interface for the topology simulator.
 """

@@ -1,3 +1,5 @@
+# Copyright (c) Dufferin Software
+
 """
 Network bridge and interface management.
 """

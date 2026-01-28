@@ -1,3 +1,5 @@
+# Copyright (c) Dufferin Software
+
 """
 NetSim - Network Topology Simulator for eBPF XDP Development
 """

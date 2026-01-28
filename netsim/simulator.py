@@ -1,3 +1,5 @@
+# Copyright (c) Dufferin Software
+
 """
 Main topology simulator orchestrating VMs and networks.
 """

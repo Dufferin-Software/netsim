@@ -3,12 +3,12 @@ version: "1.0"
 
 networks:
   - name: "net1"
-    subnet: "10.0.1.0/24"
+    subnet: "10.1.1.0/24"
     ipv6_subnet: "2001:db8:1::/64"
     mtu: 1500
 
   - name: "net2"
-    subnet: "10.0.3.0/24"
+    subnet: "10.1.2.0/24"
     ipv6_subnet: "2001:db8:2::/64"
     mtu: 1500
 

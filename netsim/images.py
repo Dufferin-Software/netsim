@@ -1,3 +1,5 @@
+# Copyright (c) Dufferin Software
+
 """
 Image management and caching.
 """

@@ -1,3 +1,5 @@
+# Copyright (c) Dufferin Software
+
 """
 Shared pytest fixtures for NetSim tests.
 
@@ -21,6 +23,7 @@ import netaddr
 
 from netsim.topology import TopologyParser
 from netsim.simulator import TopologySimulator
+from netsim import libvirt_utils
 from tests.parallel_utils import run_parallel_simple
 
 
@@ -36,24 +39,7 @@ _test_failed: bool = False
 # Helper functions for running_topology
 def _cleanup_leftover_vms(topology):
     """Clean up any leftover VMs from previous failed runs."""
-    logger.info("Checking for leftover VMs from previous runs...")
-    try:
-        import libvirt
-
-        conn = libvirt.open("qemu:///session")
-        if conn:
-            for node in topology.nodes:
-                try:
-                    dom = conn.lookupByName(node.name)
-                    logger.warning(f"Found leftover VM: {node.name}, destroying it")
-                    if dom.isActive():
-                        dom.destroy()
-                    dom.undefine()
-                except libvirt.libvirtError:
-                    pass  # VM doesn't exist, good
-            conn.close()
-    except Exception as e:
-        logger.debug(f"Pre-cleanup check: {e}")
+    libvirt_utils.cleanup_leftover_vms(topology)
 
 
 def _wait_for_vms_running(simulator, timeout=30):
@@ -151,22 +137,7 @@ def _pause_for_debugging(topology, request):
 
 def _log_vm_count(topology):
     """Log VM count for debugging."""
-    try:
-        import libvirt
-
-        conn = libvirt.open("qemu:///session")
-        if conn:
-            all_domains = conn.listAllDomains()
-            logger.info(f"Total VMs in libvirt session: {len(all_domains)}")
-            if len(all_domains) > len(topology.nodes):
-                logger.warning(
-                    f"⚠ Expected {len(topology.nodes)} VMs, found {len(all_domains)}!"
-                )
-                for dom in all_domains:
-                    logger.warning(f"  - {dom.name()}")
-            conn.close()
-    except Exception:
-        pass
+    libvirt_utils.log_vm_count(topology)
 
 
 def pytest_addoption(parser):
@@ -588,6 +559,30 @@ def _apply_netplan_to_node(
             logger.debug(f"{node_name} netplan output: {result}")
 
         logger.info(f"✓ {node_name}: netplan configuration applied")
+
+        # Wait for network interfaces to settle, especially IPv6
+        import time
+        time.sleep(1)
+        
+        # Wait for IPv6 to be ready on all configured interfaces
+        for net_name, iface in ifaces.items():
+            max_retries = 10
+            for attempt in range(max_retries):
+                try:
+                    ipv6_output = ssh_command(
+                        ssh_port,
+                        f"ip -6 addr show {iface.if_name} | grep 'inet6'",
+                        timeout=5
+                    )
+                    if ipv6_output and "inet6" in ipv6_output:
+                        logger.debug(f"{node_name} {iface.if_name}: IPv6 ready")
+                        break
+                except Exception:
+                    pass
+                if attempt < max_retries - 1:
+                    time.sleep(0.5)
+                else:
+                    logger.debug(f"{node_name} {iface.if_name}: IPv6 not ready after {max_retries} attempts")
 
         # Clean up temp file
         Path(temp_path).unlink()
@@ -1045,6 +1040,7 @@ class BaseTopologyTests:
                         str(target_ipv6),
                         count=1,
                         ipv6=True,
+                        timeout=15,  # IPv6 may need more time on first call
                     )
                     if success:
                         rtt_str = f" ({avg_rtt:.2f}ms)" if avg_rtt else ""

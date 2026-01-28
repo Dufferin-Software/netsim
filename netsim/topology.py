@@ -1,3 +1,5 @@
+# Copyright (c) Dufferin Software
+
 """
 Topology definition and parsing from YAML.
 """

@@ -1,3 +1,5 @@
+# Copyright (c) Dufferin Software
+
 """
 Two-node iperf3 performance tests.
 

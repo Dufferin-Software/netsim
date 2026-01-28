@@ -1,3 +1,5 @@
+# Copyright (c) Dufferin Software
+
 """
 Libvirt (KVM/QEMU) VM management.
 """

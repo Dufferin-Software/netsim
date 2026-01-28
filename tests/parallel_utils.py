@@ -1,3 +1,5 @@
+# Copyright (c) Dufferin Software
+
 """
 Utility functions for running tasks in parallel using ThreadPoolExecutor.
 
