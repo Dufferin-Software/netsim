@@ -30,21 +30,19 @@ class TestTwoNodeIperf(BaseTopologyTests):
             install_packages(node.name, ["iperf3"])
 
     @staticmethod
-    def _kill_iperf(ssh_command, ssh_port, timeout=5):
+    def _kill_iperf(node, timeout=5):
         """Aggressively kill all iperf3 processes on a node."""
         try:
             # First try pkill with signal 15
-            ssh_command(ssh_port, "pkill -15 iperf3 || true", timeout=timeout)
+            node.ssh_command("pkill -15 iperf3 || true", timeout=timeout)
             time.sleep(0.5)
             # Then force kill any remaining
-            ssh_command(ssh_port, "pkill -9 iperf3 || true", timeout=timeout)
+            node.ssh_command("pkill -9 iperf3 || true", timeout=timeout)
             # Verify they're gone
-            result = ssh_command(
-                ssh_port, "pgrep iperf3 | wc -l", timeout=timeout
-            ).strip()
+            result = node.ssh_command("pgrep iperf3 | wc -l", timeout=timeout).strip()
             count = int(result) if result else 0
             if count > 0:
-                ssh_command(ssh_port, "killall -9 iperf3 || true", timeout=timeout)
+                node.ssh_command("killall -9 iperf3 || true", timeout=timeout)
         except Exception:
             pass  # Ignore errors in cleanup
 
@@ -55,7 +53,7 @@ class TestTwoNodeIperf(BaseTopologyTests):
         assert topology.nodes[1].name == "client"
 
     def test_tcp_throughput(
-        self, install_iperf, configure_node_interfaces, node_interfaces, ssh_command
+        self, install_iperf, configure_node_interfaces, node_interfaces, nodes
     ):
         """Test IPv4 TCP throughput between client and server."""
         server_iface = node_interfaces["server"]["net1"]
@@ -63,21 +61,21 @@ class TestTwoNodeIperf(BaseTopologyTests):
 
         server_ip = server_iface.get_ip_address()
         client_ip = client_iface.get_ip_address()
-        server_port = server_iface.ssh_port
-        client_port = client_iface.ssh_port
+        server_node = nodes["server"]
+        client_node = nodes["client"]
 
         # Pre-cleanup: kill any lingering iperf processes
-        self._kill_iperf(ssh_command, server_port)
+        self._kill_iperf(server_node)
         time.sleep(1)
 
         # Start iperf3 server in background
         try:
-            ssh_command(server_port, "iperf3 -s -D", timeout=5)
+            server_node.ssh_command("iperf3 -s -D", timeout=5)
             time.sleep(1)  # Give server time to start
 
             # Run iperf3 client (10 second test)
-            result = ssh_command(
-                client_port, f"iperf3 -c {str(server_ip)} -t 10 -J", timeout=20
+            result = client_node.ssh_command(
+                f"iperf3 -c {str(server_ip)} -t 10 -J", timeout=20
             )
 
             # Parse JSON output to get throughput
@@ -103,11 +101,11 @@ class TestTwoNodeIperf(BaseTopologyTests):
             )
         finally:
             # Aggressive cleanup
-            self._kill_iperf(ssh_command, server_port)
+            self._kill_iperf(server_node)
             time.sleep(0.5)
 
     def test_udp_throughput(
-        self, install_iperf, configure_node_interfaces, node_interfaces, ssh_command
+        self, install_iperf, configure_node_interfaces, node_interfaces, nodes
     ):
         """Test IPv4 UDP throughput and packet loss between client and server."""
         server_iface = node_interfaces["server"]["net1"]
@@ -115,21 +113,20 @@ class TestTwoNodeIperf(BaseTopologyTests):
 
         server_ip = server_iface.get_ip_address()
         client_ip = client_iface.get_ip_address()
-        server_port = server_iface.ssh_port
-        client_port = client_iface.ssh_port
+        server_node = nodes["server"]
+        client_node = nodes["client"]
 
         # Pre-cleanup: kill any lingering iperf processes
-        self._kill_iperf(ssh_command, server_port)
+        self._kill_iperf(server_node)
         time.sleep(1)
 
         # Start iperf3 server in background
         try:
-            ssh_command(server_port, "iperf3 -s -D", timeout=5)
+            server_node.ssh_command("iperf3 -s -D", timeout=5)
             time.sleep(1)  # Give server time to start
 
             # Run iperf3 client with UDP at 100 Mbps (10 second test)
-            result = ssh_command(
-                client_port,
+            result = client_node.ssh_command(
                 f"iperf3 -c {str(server_ip)} -u -b 100M -t 10 -J",
                 timeout=20,
             )
@@ -169,11 +166,11 @@ class TestTwoNodeIperf(BaseTopologyTests):
             )
         finally:
             # Aggressive cleanup
-            self._kill_iperf(ssh_command, server_port)
+            self._kill_iperf(server_node)
             time.sleep(0.5)
 
     def test_bidirectional_throughput(
-        self, install_iperf, configure_node_interfaces, node_interfaces, ssh_command
+        self, install_iperf, configure_node_interfaces, node_interfaces, nodes
     ):
         """Test IPv4 bidirectional (simultaneous send/receive) TCP throughput."""
         server_iface = node_interfaces["server"]["net1"]
@@ -181,21 +178,21 @@ class TestTwoNodeIperf(BaseTopologyTests):
 
         server_ip = server_iface.get_ip_address()
         client_ip = client_iface.get_ip_address()
-        server_port = server_iface.ssh_port
-        client_port = client_iface.ssh_port
+        server_node = nodes["server"]
+        client_node = nodes["client"]
 
         # Pre-cleanup: kill any lingering iperf processes
-        self._kill_iperf(ssh_command, server_port)
+        self._kill_iperf(server_node)
         time.sleep(1)
 
         # Start iperf3 server in background
         try:
-            ssh_command(server_port, "iperf3 -s -D", timeout=5)
+            server_node.ssh_command("iperf3 -s -D", timeout=5)
             time.sleep(1)  # Give server time to start
 
             # Run bidirectional test
-            result = ssh_command(
-                client_port, f"iperf3 -c {str(server_ip)} -t 10 --bidir -J", timeout=25
+            result = client_node.ssh_command(
+                f"iperf3 -c {str(server_ip)} -t 10 --bidir -J", timeout=25
             )
 
             # Parse JSON output
@@ -229,11 +226,11 @@ class TestTwoNodeIperf(BaseTopologyTests):
             )
         finally:
             # Aggressive cleanup
-            self._kill_iperf(ssh_command, server_port)
+            self._kill_iperf(server_node)
             time.sleep(0.5)
 
     def test_ipv6_tcp_throughput(
-        self, install_iperf, configure_node_interfaces, node_interfaces, ssh_command
+        self, install_iperf, configure_node_interfaces, node_interfaces, nodes
     ):
         """Test IPv6 TCP throughput between client and server."""
         server_iface = node_interfaces["server"]["net1"]
@@ -241,24 +238,24 @@ class TestTwoNodeIperf(BaseTopologyTests):
 
         server_ipv6 = server_iface.get_ipv6_address()
         client_ipv6 = client_iface.get_ipv6_address()
-        server_port = server_iface.ssh_port
-        client_port = client_iface.ssh_port
+        server_node = nodes["server"]
+        client_node = nodes["client"]
 
         if not server_ipv6:
             pytest.skip("IPv6 not configured on server")
 
         # Pre-cleanup: kill any lingering iperf processes
-        self._kill_iperf(ssh_command, server_port)
+        self._kill_iperf(server_node)
         time.sleep(1)
 
         # Start iperf3 server in background
         try:
-            ssh_command(server_port, "iperf3 -s -D", timeout=5)
+            server_node.ssh_command("iperf3 -s -D", timeout=5)
             time.sleep(1)  # Give server time to start
 
             # Run iperf3 client (10 second test) with IPv6
-            result = ssh_command(
-                client_port, f"iperf3 -c {str(server_ipv6)} -t 10 -J", timeout=20
+            result = client_node.ssh_command(
+                f"iperf3 -c {str(server_ipv6)} -t 10 -J", timeout=20
             )
 
             # Parse JSON output to get throughput
@@ -284,11 +281,11 @@ class TestTwoNodeIperf(BaseTopologyTests):
             )
         finally:
             # Aggressive cleanup
-            self._kill_iperf(ssh_command, server_port)
+            self._kill_iperf(server_node)
             time.sleep(0.5)
 
     def test_ipv6_udp_throughput(
-        self, install_iperf, configure_node_interfaces, node_interfaces, ssh_command
+        self, install_iperf, configure_node_interfaces, node_interfaces, nodes
     ):
         """Test IPv6 UDP throughput and packet loss between client and server."""
         server_iface = node_interfaces["server"]["net1"]
@@ -296,24 +293,23 @@ class TestTwoNodeIperf(BaseTopologyTests):
 
         server_ipv6 = server_iface.get_ipv6_address()
         client_ipv6 = client_iface.get_ipv6_address()
-        server_port = server_iface.ssh_port
-        client_port = client_iface.ssh_port
+        server_node = nodes["server"]
+        client_node = nodes["client"]
 
         if not server_ipv6:
             pytest.skip("IPv6 not configured on server")
 
         # Pre-cleanup: kill any lingering iperf processes
-        self._kill_iperf(ssh_command, server_port)
+        self._kill_iperf(server_node)
         time.sleep(1)
 
         # Start iperf3 server in background
         try:
-            ssh_command(server_port, "iperf3 -s -D", timeout=5)
+            server_node.ssh_command("iperf3 -s -D", timeout=5)
             time.sleep(1)  # Give server time to start
 
             # Run iperf3 client with UDP at 100 Mbps (10 second test)
-            result = ssh_command(
-                client_port,
+            result = client_node.ssh_command(
                 f"iperf3 -c {str(server_ipv6)} -u -b 100M -t 10 -J",
                 timeout=20,
             )
@@ -353,11 +349,11 @@ class TestTwoNodeIperf(BaseTopologyTests):
             )
         finally:
             # Aggressive cleanup
-            self._kill_iperf(ssh_command, server_port)
+            self._kill_iperf(server_node)
             time.sleep(0.5)
 
     def test_ipv6_bidirectional_throughput(
-        self, install_iperf, configure_node_interfaces, node_interfaces, ssh_command
+        self, install_iperf, configure_node_interfaces, node_interfaces, nodes
     ):
         """Test IPv6 bidirectional (simultaneous send/receive) TCP throughput."""
         server_iface = node_interfaces["server"]["net1"]
@@ -365,24 +361,23 @@ class TestTwoNodeIperf(BaseTopologyTests):
 
         server_ipv6 = server_iface.get_ipv6_address()
         client_ipv6 = client_iface.get_ipv6_address()
-        server_port = server_iface.ssh_port
-        client_port = client_iface.ssh_port
+        server_node = nodes["server"]
+        client_node = nodes["client"]
 
         if not server_ipv6:
             pytest.skip("IPv6 not configured on server")
 
         # Pre-cleanup: kill any lingering iperf processes
-        self._kill_iperf(ssh_command, server_port)
+        self._kill_iperf(server_node)
         time.sleep(1)
 
         # Start iperf3 server in background
         try:
-            ssh_command(server_port, "iperf3 -s -D", timeout=5)
+            server_node.ssh_command("iperf3 -s -D", timeout=5)
             time.sleep(1)  # Give server time to start
 
             # Run bidirectional test
-            result = ssh_command(
-                client_port,
+            result = client_node.ssh_command(
                 f"iperf3 -c {str(server_ipv6)} -t 10 --bidir -J",
                 timeout=25,
             )
@@ -418,5 +413,5 @@ class TestTwoNodeIperf(BaseTopologyTests):
             )
         finally:
             # Aggressive cleanup
-            self._kill_iperf(ssh_command, server_port)
+            self._kill_iperf(server_node)
             time.sleep(0.5)

@@ -19,12 +19,12 @@ from pathlib import Path
 from typing import Dict
 import pytest
 import yaml
-import netaddr
 
 from netsim.topology import TopologyParser
 from netsim.simulator import TopologySimulator
 from netsim import libvirt_utils
 from tests.parallel_utils import run_parallel_simple
+from tests.node import Node, NodeInterface
 
 
 logger = logging.getLogger(__name__)
@@ -340,87 +340,7 @@ def node_allocations(topology) -> Dict[str, Dict[str, Dict[str, str]]]:
 
 
 @pytest.fixture(scope="module")
-def ssh_command(topology) -> callable:
-    """
-    Fixture providing SSH command helper with per-node logging.
-
-    Returns callable: ssh_command(port, cmd) -> output
-    """
-
-    # Configure file logger once per session
-    if not any(
-        isinstance(h, logging.FileHandler) and getattr(h, "_netsim_ssh_log", False)
-        for h in logger.handlers
-    ):
-        SSH_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        file_handler = logging.FileHandler(SSH_LOG_PATH, mode="w")
-        file_handler.setLevel(logging.DEBUG)
-        file_handler.setFormatter(
-            logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
-        )
-        file_handler._netsim_ssh_log = True  # marker to avoid duplicate handlers
-        logger.addHandler(file_handler)
-        logger.setLevel(logging.DEBUG)
-
-    def _ssh_run(port: int, cmd: str, timeout: int = 10) -> str:
-        """
-        SSH into a node and run a command.
-
-        Args:
-            port: SSH port (e.g., 2200)
-            cmd: Shell command to run
-            timeout: Command timeout in seconds
-
-        Returns:
-            Command output (stdout)
-
-        Raises:
-            subprocess.CalledProcessError: If command fails
-        """
-        # Determine node name from port for logging
-        node_name = f"port-{port}"
-        for idx, node in enumerate(topology.nodes):
-            if 2200 + idx == port:
-                node_name = node.name
-                break
-
-        logger.debug(f"[{node_name}] $ {cmd}")
-
-        full_cmd = [
-            "ssh",
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "UserKnownHostsFile=/dev/null",
-            "-o",
-            "ConnectTimeout=5",
-            "-p",
-            str(port),
-            "netsim@localhost",
-            cmd,
-        ]
-
-        result = subprocess.run(
-            full_cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=True,
-        )
-
-        output = result.stdout.strip()
-        if output and len(output) < 200:  # Only log short outputs
-            logger.debug(f"[{node_name}] → {output}")
-        elif output:
-            logger.debug(f"[{node_name}] → <{len(output)} bytes of output>")
-
-        return output
-
-    return _ssh_run
-
-
-@pytest.fixture(scope="module")
-def install_packages(ssh_command, node_ssh_port):
+def install_packages(nodes):
     """
     Fixture for installing packages on nodes.
 
@@ -445,18 +365,17 @@ def install_packages(ssh_command, node_ssh_port):
             logger.debug(f"{node_name}: packages {packages} already installed")
             return
 
-        ssh_port = node_ssh_port(node_name)
+        node = nodes[node_name]
         package_list = " ".join(packages)
 
         logger.info(f"{node_name}: installing packages: {package_list}")
 
         try:
             # Update package list (increased timeout for parallel execution)
-            ssh_command(ssh_port, "sudo apt-get update -qq", timeout=180)
+            node.ssh_command("sudo apt-get update -qq", timeout=180)
 
             # Install packages (non-interactive, with dpkg lock avoidance)
-            ssh_command(
-                ssh_port,
+            node.ssh_command(
                 f"sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq {package_list}",
                 timeout=180,
             )
@@ -518,18 +437,13 @@ def _build_netplan_config(node_name, ifaces, node_allocations, mgmt_interface):
     }
 
 
-def _apply_netplan_to_node(
-    node_name, ifaces, netplan_yaml, ssh_command, mgmt_interface
-):
+def _apply_netplan_to_node(node_name, ifaces, netplan_yaml, node, mgmt_interface):
     """Apply netplan configuration to a single node."""
     try:
         # Create temporary file with config locally
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write(netplan_yaml)
             temp_path = f.name
-
-        # Get SSH port for this node
-        ssh_port = list(ifaces.values())[0].ssh_port
 
         # Copy to node
         scp_cmd = [
@@ -539,22 +453,22 @@ def _apply_netplan_to_node(
             "-o",
             "UserKnownHostsFile=/dev/null",
             "-P",
-            str(ssh_port),
+            str(node.ssh_port),
             temp_path,
             "netsim@localhost:/tmp/netsim.yaml",
         ]
         subprocess.run(scp_cmd, check=True, capture_output=True, timeout=10)
 
         # Ensure netplan directory exists and apply with sudo
-        ssh_command(ssh_port, "sudo mkdir -p /etc/netplan")
-        ssh_command(ssh_port, "sudo cp /tmp/netsim.yaml /etc/netplan/99-netsim.yaml")
-        ssh_command(ssh_port, "sudo chmod 600 /etc/netplan/99-netsim.yaml")
+        node.ssh_command("sudo mkdir -p /etc/netplan")
+        node.ssh_command("sudo cp /tmp/netsim.yaml /etc/netplan/99-netsim.yaml")
+        node.ssh_command("sudo chmod 600 /etc/netplan/99-netsim.yaml")
 
         # Show what we're applying
         logger.debug(f"{node_name} netplan config:\n{netplan_yaml}")
 
         # Apply netplan
-        result = ssh_command(ssh_port, "sudo netplan apply 2>&1")
+        result = node.ssh_command("sudo netplan apply 2>&1")
         if result:
             logger.debug(f"{node_name} netplan output: {result}")
 
@@ -562,17 +476,17 @@ def _apply_netplan_to_node(
 
         # Wait for network interfaces to settle, especially IPv6
         import time
+
         time.sleep(1)
-        
+
         # Wait for IPv6 to be ready on all configured interfaces
         for net_name, iface in ifaces.items():
             max_retries = 10
             for attempt in range(max_retries):
                 try:
-                    ipv6_output = ssh_command(
-                        ssh_port,
+                    ipv6_output = node.ssh_command(
                         f"ip -6 addr show {iface.if_name} | grep 'inet6'",
-                        timeout=5
+                        timeout=5,
                     )
                     if ipv6_output and "inet6" in ipv6_output:
                         logger.debug(f"{node_name} {iface.if_name}: IPv6 ready")
@@ -582,7 +496,9 @@ def _apply_netplan_to_node(
                 if attempt < max_retries - 1:
                     time.sleep(0.5)
                 else:
-                    logger.debug(f"{node_name} {iface.if_name}: IPv6 not ready after {max_retries} attempts")
+                    logger.debug(
+                        f"{node_name} {iface.if_name}: IPv6 not ready after {max_retries} attempts"
+                    )
 
         # Clean up temp file
         Path(temp_path).unlink()
@@ -604,7 +520,7 @@ def _apply_netplan_to_node(
 
 
 @pytest.fixture(scope="module")
-def configure_node_interfaces(node_interfaces, node_allocations, ssh_command):
+def configure_node_interfaces(node_interfaces, node_allocations, nodes):
     """
     Fixture that configures all node interfaces with netplan in parallel.
 
@@ -622,6 +538,7 @@ def configure_node_interfaces(node_interfaces, node_allocations, ssh_command):
     def _configure_node(node_name, ifaces):
         """Configure a single node's interfaces."""
         iface_configs = node_allocations[node_name]
+        node = nodes[node_name]
 
         # Skip if no data interfaces
         if len(iface_configs) == 0:
@@ -631,9 +548,7 @@ def configure_node_interfaces(node_interfaces, node_allocations, ssh_command):
         logger.info(f"Configuring {len(iface_configs)} interface(s) for {node_name}")
 
         # Discover management interface (first interface)
-        ssh_port = list(ifaces.values())[0].ssh_port
-        output = ssh_command(
-            ssh_port,
+        output = node.ssh_command(
             "ip -o link show | grep -v ' lo:' | awk -F': ' '{print $2}' | head -1",
         )
         mgmt_interface = output.strip().split("@")[0]  # Remove @NONE suffix if present
@@ -657,9 +572,7 @@ def configure_node_interfaces(node_interfaces, node_allocations, ssh_command):
                 )
 
         netplan_yaml = yaml.dump(netplan_config, default_flow_style=False)
-        _apply_netplan_to_node(
-            node_name, ifaces, netplan_yaml, ssh_command, mgmt_interface
-        )
+        _apply_netplan_to_node(node_name, ifaces, netplan_yaml, node, mgmt_interface)
 
     # Configure all nodes in parallel
     run_parallel_simple(
@@ -689,75 +602,29 @@ def node_ssh_port(topology) -> callable:
     return _get_port
 
 
-class NodeInterface:
-    """Helper class for interface management."""
+@pytest.fixture(scope="module")
+def nodes(topology) -> Dict[str, Node]:
+    """
+    Get Node objects for all nodes in the topology.
 
-    def __init__(
-        self,
-        node_name: str,
-        if_name: str,
-        network: str,
-        ssh_port: int,
-        ssh_cmd: callable,
-        ipv4_addr: str = None,
-        ipv6_addr: str = None,
-    ):
-        self.node_name = node_name
-        self.if_name = if_name
-        self.network = network
-        self.ssh_port = ssh_port
-        self._ssh = ssh_cmd
-        self.ipv4_addr = ipv4_addr
-        self.ipv6_addr = ipv6_addr
-
-    def up(self):
-        """Bring interface up."""
-        self._ssh(self.ssh_port, f"sudo ip link set {self.if_name} up")
-
-    def down(self):
-        """Bring interface down."""
-        self._ssh(self.ssh_port, f"sudo ip link set {self.if_name} down")
-
-    def get_ip(self) -> str:
-        """Get IPv4 address as CIDR string."""
-        output = self._ssh(
-            self.ssh_port,
-            f"ip -4 addr show {self.if_name} | grep 'inet ' | awk '{{print $2}}'",
+    Returns:
+        Dict mapping node_name -> Node object with SSH access
+    """
+    node_objects = {}
+    for idx, topo_node in enumerate(topology.nodes):
+        node = Node(
+            name=topo_node.name,
+            ssh_port=2200 + idx,
+            topology=topology,
         )
-        return output.strip()
-
-    def get_ip_address(self) -> netaddr.IPAddress:
-        """Get IPv4 address as netaddr.IPAddress object."""
-        cidr_str = self.get_ip()
-        if not cidr_str:
-            return None
-        return netaddr.IPAddress(cidr_str.split("/")[0])
-
-    def get_ipv6(self) -> str:
-        """Get IPv6 address as CIDR string."""
-        output = self._ssh(
-            self.ssh_port,
-            f"ip -6 addr show {self.if_name} | grep 'inet6' | awk '{{print $2}}' | grep -v '^fe80'",
-        )
-        return output.strip()
-
-    def get_ipv6_address(self) -> netaddr.IPAddress:
-        """Get IPv6 address as netaddr.IPAddress object."""
-        cidr_str = self.get_ipv6()
-        if not cidr_str:
-            return None
-        return netaddr.IPAddress(cidr_str.split("/")[0])
-
-    def is_up(self) -> bool:
-        """Check if interface is up."""
-        output = self._ssh(self.ssh_port, f"ip link show {self.if_name}")
-        return "UP" in output
+        node_objects[topo_node.name] = node
+    return node_objects
 
 
-def _discover_interface_names(node_name, ssh_port, ssh_command):
+def _discover_interface_names(node_name, node):
     """Discover interface names on a node via SSH."""
-    output = ssh_command(
-        ssh_port, "ip -o link show | grep -v ' lo:' | awk -F': ' '{print $2}'"
+    output = node.ssh_command(
+        "ip -o link show | grep -v ' lo:' | awk -F': ' '{print $2}'"
     )
     all_if_names = [name.strip() for name in output.split("\n") if name.strip()]
 
@@ -770,9 +637,7 @@ def _discover_interface_names(node_name, ssh_port, ssh_command):
     return if_names
 
 
-def _map_networks_to_interfaces(
-    node_name, if_names, node_allocations, ssh_command, node_ssh_port
-):
+def _map_networks_to_interfaces(node_name, if_names, node_allocations, node):
     """Map networks to discovered interfaces."""
     iface_configs = node_allocations[node_name]
     node_ifaces = {}
@@ -789,13 +654,12 @@ def _map_networks_to_interfaces(
             if_name = if_names[if_idx]
             ipv4_addr = addrs.get("ipv4")
             ipv6_addr = addrs.get("ipv6")
-            ssh_port = node_ssh_port(node_name)
             node_ifaces[net_name] = NodeInterface(
                 node_name,
                 if_name,
                 net_name,
-                ssh_port,
-                ssh_command,
+                node.ssh_port,
+                node,
                 ipv4_addr=ipv4_addr,
                 ipv6_addr=ipv6_addr,
             )
@@ -809,9 +673,7 @@ def _map_networks_to_interfaces(
 
 
 @pytest.fixture(scope="module")
-def node_interfaces(
-    running_topology, topology, node_allocations, ssh_command, node_ssh_port
-):
+def node_interfaces(running_topology, topology, node_allocations, nodes):
     """
     Discover interfaces on each node and map to networks.
 
@@ -823,16 +685,16 @@ def node_interfaces(
     """
     interfaces = {}
 
-    for idx, node in enumerate(topology.nodes):
-        node_name = node.name
-        ssh_port = node_ssh_port(node_name)
+    for idx, topo_node in enumerate(topology.nodes):
+        node_name = topo_node.name
+        node = nodes[node_name]
 
         # Discover interface names
-        if_names = _discover_interface_names(node_name, ssh_port, ssh_command)
+        if_names = _discover_interface_names(node_name, node)
 
         # Map networks to interfaces
         node_ifaces = _map_networks_to_interfaces(
-            node_name, if_names, node_allocations, ssh_command, node_ssh_port
+            node_name, if_names, node_allocations, node
         )
 
         interfaces[node_name] = node_ifaces
@@ -939,14 +801,11 @@ class BaseTopologyTests:
                 )
 
     @staticmethod
-    def _ping_and_extract_rtt(
-        ssh_command, ssh_port, target_ip, count=3, ipv6=False, timeout=10
-    ):
+    def _ping_and_extract_rtt(node, target_ip, count=3, ipv6=False, timeout=10):
         """Execute ping and extract average RTT.
 
         Args:
-            ssh_command: SSH command function
-            ssh_port: SSH port to connect to
+            node: Node object to ping from
             target_ip: Target IP address to ping
             count: Number of pings to send
             ipv6: Whether to use ping6 instead of ping
@@ -961,7 +820,7 @@ class BaseTopologyTests:
         cmd += f" {target_ip}"
 
         try:
-            result = ssh_command(ssh_port, cmd, timeout=timeout)
+            result = node.ssh_command(cmd, timeout=timeout)
 
             # Extract average RTT from output
             # Format: rtt min/avg/max/mdev = 0.123/0.456/0.789/0.012 ms
@@ -978,16 +837,16 @@ class BaseTopologyTests:
             return False, None, e.stderr if e.stderr else str(e)
 
     def test_ping_between_nodes(
-        self, configure_node_interfaces, node_interfaces, topology, ssh_command
+        self, configure_node_interfaces, node_interfaces, topology, nodes
     ):
         """Test ICMP connectivity between nodes that share networks (IPv4 and IPv6)."""
         # Build a map of network -> [nodes]
         network_nodes = {}
-        for node in topology.nodes:
-            for net_name in node.networks:
+        for topo_node in topology.nodes:
+            for net_name in topo_node.networks:
                 if net_name not in network_nodes:
                     network_nodes[net_name] = []
-                network_nodes[net_name].append(node.name)
+                network_nodes[net_name].append(topo_node.name)
 
         # Test ping between nodes on each shared network
         tested_pairs = set()
@@ -997,23 +856,23 @@ class BaseTopologyTests:
                 continue
 
             # Test ping from first node to all others on this network
-            source_node = node_names[0]
-            source_iface = node_interfaces[source_node][net_name]
+            source_node_name = node_names[0]
+            source_node = nodes[source_node_name]
+            source_iface = node_interfaces[source_node_name][net_name]
 
-            for target_node in node_names[1:]:
-                pair = (source_node, target_node)
+            for target_node_name in node_names[1:]:
+                pair = (source_node_name, target_node_name)
                 if pair in tested_pairs:
                     continue
                 tested_pairs.add(pair)
 
-                target_iface = node_interfaces[target_node][net_name]
+                target_iface = node_interfaces[target_node_name][net_name]
                 target_ip = target_iface.get_ip_address()
                 source_ip = source_iface.get_ip_address()
 
                 # IPv4 Ping from source to target
                 success, avg_rtt, output = self._ping_and_extract_rtt(
-                    ssh_command,
-                    source_iface.ssh_port,
+                    source_node,
                     str(target_ip),
                     count=1,
                     ipv6=False,
@@ -1021,11 +880,11 @@ class BaseTopologyTests:
                 if success:
                     rtt_str = f" ({avg_rtt:.2f}ms)" if avg_rtt else ""
                     logger.info(
-                        f"✓ IPv4 Ping {source_node} ({source_ip}) -> {target_node} ({target_ip}) on {net_name}{rtt_str}"
+                        f"✓ IPv4 Ping {source_node_name} ({source_ip}) -> {target_node_name} ({target_ip}) on {net_name}{rtt_str}"
                     )
                 else:
                     pytest.fail(
-                        f"IPv4 Ping failed: {source_node} ({source_ip}) -> {target_node} ({target_ip}) on {net_name}\n"
+                        f"IPv4 Ping failed: {source_node_name} ({source_ip}) -> {target_node_name} ({target_ip}) on {net_name}\n"
                         f"Error: {output}"
                     )
 
@@ -1035,8 +894,7 @@ class BaseTopologyTests:
 
                 if target_ipv6 and source_ipv6:
                     success, avg_rtt, output = self._ping_and_extract_rtt(
-                        ssh_command,
-                        source_iface.ssh_port,
+                        source_node,
                         str(target_ipv6),
                         count=1,
                         ipv6=True,
@@ -1045,10 +903,10 @@ class BaseTopologyTests:
                     if success:
                         rtt_str = f" ({avg_rtt:.2f}ms)" if avg_rtt else ""
                         logger.info(
-                            f"✓ IPv6 Ping {source_node} ({source_ipv6}) -> {target_node} ({target_ipv6}) on {net_name}{rtt_str}"
+                            f"✓ IPv6 Ping {source_node_name} ({source_ipv6}) -> {target_node_name} ({target_ipv6}) on {net_name}{rtt_str}"
                         )
                     else:
                         pytest.fail(
-                            f"IPv6 Ping failed: {source_node} ({source_ipv6}) -> {target_node} ({target_ipv6}) on {net_name}\n"
+                            f"IPv6 Ping failed: {source_node_name} ({source_ipv6}) -> {target_node_name} ({target_ipv6}) on {net_name}\n"
                             f"Error: {output}"
                         )

@@ -1,0 +1,165 @@
+# Copyright (c) Dufferin Software
+
+"""Node abstraction for test infrastructure with SSH support."""
+
+import subprocess
+import logging
+from typing import Dict, Optional
+
+logger = logging.getLogger(__name__)
+
+
+class Node:
+    """Represents a node in the test topology with SSH access and interface info."""
+
+    def __init__(
+        self,
+        name: str,
+        ssh_port: int,
+        topology,  # Reference to TopologyParser for node name resolution
+    ):
+        """
+        Initialize a Node.
+
+        Args:
+            name: Node name
+            ssh_port: SSH port for this node
+            topology: TopologyParser reference for logging/resolution
+        """
+        self.name = name
+        self.ssh_port = ssh_port
+        self.topology = topology
+        self.interfaces: Dict[str, "NodeInterface"] = {}
+
+    def ssh_command(self, cmd: str, timeout: int = 10) -> str:
+        """
+        Execute an SSH command on this node.
+
+        Args:
+            cmd: Shell command to run
+            timeout: Command timeout in seconds
+
+        Returns:
+            Command output (stdout)
+
+        Raises:
+            subprocess.CalledProcessError: If command fails
+        """
+        logger.debug(f"[{self.name}] $ {cmd}")
+
+        full_cmd = [
+            "ssh",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            "-o",
+            "ConnectTimeout=5",
+            "-p",
+            str(self.ssh_port),
+            "netsim@localhost",
+            cmd,
+        ]
+
+        result = subprocess.run(
+            full_cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=True,
+        )
+
+        output = result.stdout.strip()
+        if output and len(output) < 200:  # Only log short outputs
+            logger.debug(f"[{self.name}] → {output}")
+        elif output:
+            logger.debug(f"[{self.name}] → <{len(output)} bytes of output>")
+
+        return output
+
+    def add_interface(self, interface: "NodeInterface") -> None:
+        """Add an interface to this node."""
+        self.interfaces[interface.if_name] = interface
+
+    def get_interface(self, if_name: str) -> Optional["NodeInterface"]:
+        """Get an interface by name."""
+        return self.interfaces.get(if_name)
+
+
+class NodeInterface:
+    """Represents a network interface on a node."""
+
+    def __init__(
+        self,
+        node_name: str,
+        if_name: str,
+        net_name: str,
+        ssh_port: int,
+        node: Node,
+        ipv4_addr: Optional[str] = None,
+        ipv6_addr: Optional[str] = None,
+    ):
+        """
+        Initialize a NodeInterface.
+
+        Args:
+            node_name: Node name
+            if_name: Interface name (e.g., 'enp0s6')
+            net_name: Network name (e.g., 'net1')
+            ssh_port: SSH port for the node
+            node: Reference to the Node object
+            ipv4_addr: IPv4 address in CIDR format
+            ipv6_addr: IPv6 address in CIDR format
+        """
+        self.node_name = node_name
+        self.if_name = if_name
+        self.net_name = net_name
+        self.ssh_port = ssh_port
+        self.node = node
+        self.ipv4_addr = ipv4_addr
+        self.ipv6_addr = ipv6_addr
+
+    def _ssh(self, cmd: str, timeout: int = 10) -> str:
+        """Execute SSH command via the associated node."""
+        return self.node.ssh_command(cmd, timeout=timeout)
+
+    def get_ip(self) -> str:
+        """Get IPv4 address as CIDR string."""
+        if self.ipv4_addr:
+            return self.ipv4_addr
+        output = self._ssh(
+            f"ip -4 addr show {self.if_name} | grep 'inet ' | awk '{{print $2}}'",
+        )
+        return output.strip()
+
+    def get_ip_address(self):
+        """Get IPv4 address as netaddr.IPAddress object."""
+        import netaddr
+
+        cidr_str = self.get_ip()
+        if not cidr_str:
+            return None
+        return netaddr.IPAddress(cidr_str.split("/")[0])
+
+    def get_ipv6(self) -> str:
+        """Get IPv6 address as CIDR string."""
+        if self.ipv6_addr:
+            return self.ipv6_addr
+        output = self._ssh(
+            f"ip -6 addr show {self.if_name} | grep 'inet6' | awk '{{print $2}}' | grep -v '^fe80'",
+        )
+        return output.strip()
+
+    def get_ipv6_address(self):
+        """Get IPv6 address as netaddr.IPAddress object."""
+        import netaddr
+
+        cidr_str = self.get_ipv6()
+        if not cidr_str:
+            return None
+        return netaddr.IPAddress(cidr_str.split("/")[0])
+
+    def is_up(self) -> bool:
+        """Check if interface is up."""
+        output = self._ssh(f"ip link show {self.if_name}")
+        return "UP" in output
