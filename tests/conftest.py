@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Dict
 import pytest
 import yaml
+import netaddr
 
 from netsim.topology import TopologyParser
 from netsim.simulator import TopologySimulator
@@ -723,20 +724,34 @@ class NodeInterface:
         self._ssh(self.ssh_port, f"sudo ip link set {self.if_name} down")
 
     def get_ip(self) -> str:
-        """Get IPv4 address."""
+        """Get IPv4 address as CIDR string."""
         output = self._ssh(
             self.ssh_port,
             f"ip -4 addr show {self.if_name} | grep 'inet ' | awk '{{print $2}}'",
         )
         return output.strip()
 
+    def get_ip_address(self) -> netaddr.IPAddress:
+        """Get IPv4 address as netaddr.IPAddress object."""
+        cidr_str = self.get_ip()
+        if not cidr_str:
+            return None
+        return netaddr.IPAddress(cidr_str.split("/")[0])
+
     def get_ipv6(self) -> str:
-        """Get IPv6 address."""
+        """Get IPv6 address as CIDR string."""
         output = self._ssh(
             self.ssh_port,
             f"ip -6 addr show {self.if_name} | grep 'inet6' | awk '{{print $2}}' | grep -v '^fe80'",
         )
         return output.strip()
+
+    def get_ipv6_address(self) -> netaddr.IPAddress:
+        """Get IPv6 address as netaddr.IPAddress object."""
+        cidr_str = self.get_ipv6()
+        if not cidr_str:
+            return None
+        return netaddr.IPAddress(cidr_str.split("/")[0])
 
     def is_up(self) -> bool:
         """Check if interface is up."""
@@ -997,12 +1012,16 @@ class BaseTopologyTests:
                 tested_pairs.add(pair)
 
                 target_iface = node_interfaces[target_node][net_name]
-                target_ip = target_iface.get_ip().split("/")[0]
-                source_ip = source_iface.get_ip().split("/")[0]
+                target_ip = target_iface.get_ip_address()
+                source_ip = source_iface.get_ip_address()
 
                 # IPv4 Ping from source to target
                 success, avg_rtt, output = self._ping_and_extract_rtt(
-                    ssh_command, source_iface.ssh_port, target_ip, count=1, ipv6=False
+                    ssh_command,
+                    source_iface.ssh_port,
+                    str(target_ip),
+                    count=1,
+                    ipv6=False,
                 )
                 if success:
                     rtt_str = f" ({avg_rtt:.2f}ms)" if avg_rtt else ""
@@ -1016,22 +1035,14 @@ class BaseTopologyTests:
                     )
 
                 # IPv6 Ping from source to target (if available)
-                target_ipv6 = (
-                    target_iface.get_ipv6().split("/")[0]
-                    if target_iface.get_ipv6()
-                    else None
-                )
-                source_ipv6 = (
-                    source_iface.get_ipv6().split("/")[0]
-                    if source_iface.get_ipv6()
-                    else None
-                )
+                target_ipv6 = target_iface.get_ipv6_address()
+                source_ipv6 = source_iface.get_ipv6_address()
 
                 if target_ipv6 and source_ipv6:
                     success, avg_rtt, output = self._ping_and_extract_rtt(
                         ssh_command,
                         source_iface.ssh_port,
-                        target_ipv6,
+                        str(target_ipv6),
                         count=1,
                         ipv6=True,
                     )

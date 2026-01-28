@@ -50,13 +50,13 @@ class TestTwoNodePing(BaseTopologyTests):
         node1_iface = node_interfaces["node1"]["net1"]
         node2_iface = node_interfaces["node2"]["net1"]
 
-        node1_ipv4 = node1_iface.get_ip().split("/")[0]
-        node2_ipv4 = node2_iface.get_ip().split("/")[0]
+        node1_ipv4 = node1_iface.get_ip_address()
+        node2_ipv4 = node2_iface.get_ip_address()
         node2_ssh_port = node2_iface.ssh_port
 
         # Test ping from node2 to node1
         success, avg_rtt, output = self._ping_and_extract_rtt(
-            ssh_command, node2_ssh_port, node1_ipv4, count=3, ipv6=False
+            ssh_command, node2_ssh_port, str(node1_ipv4), count=3, ipv6=False
         )
         assert success, f"IPv4 ping from node2 to node1 failed: {output}"
 
@@ -72,8 +72,8 @@ class TestTwoNodePing(BaseTopologyTests):
         node1_iface = node_interfaces["node1"]["net1"]
         node2_iface = node_interfaces["node2"]["net1"]
 
-        node1_ipv6 = node1_iface.get_ipv6().split("/")[0]
-        node2_ipv6 = node2_iface.get_ipv6().split("/")[0]
+        node1_ipv6 = node1_iface.get_ipv6_address()
+        node2_ipv6 = node2_iface.get_ipv6_address()
         node2_ssh_port = node2_iface.ssh_port
 
         if not node1_ipv6:
@@ -81,7 +81,7 @@ class TestTwoNodePing(BaseTopologyTests):
 
         # Test ping6 from node2 to node1
         success, avg_rtt, output = self._ping_and_extract_rtt(
-            ssh_command, node2_ssh_port, node1_ipv6, count=3, ipv6=True
+            ssh_command, node2_ssh_port, str(node1_ipv6), count=3, ipv6=True
         )
         assert success, f"IPv6 ping from node2 to node1 failed: {output}"
 

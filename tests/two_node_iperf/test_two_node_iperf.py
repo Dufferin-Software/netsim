@@ -59,8 +59,8 @@ class TestTwoNodeIperf(BaseTopologyTests):
         server_iface = node_interfaces["server"]["net1"]
         client_iface = node_interfaces["client"]["net1"]
 
-        server_ip = server_iface.get_ip().split("/")[0]
-        client_ip = client_iface.get_ip().split("/")[0]
+        server_ip = server_iface.get_ip_address()
+        client_ip = client_iface.get_ip_address()
         server_port = server_iface.ssh_port
         client_port = client_iface.ssh_port
 
@@ -75,7 +75,7 @@ class TestTwoNodeIperf(BaseTopologyTests):
 
             # Run iperf3 client (10 second test)
             result = ssh_command(
-                client_port, f"iperf3 -c {server_ip} -t 10 -J", timeout=20
+                client_port, f"iperf3 -c {str(server_ip)} -t 10 -J", timeout=20
             )
 
             # Parse JSON output to get throughput
@@ -111,8 +111,8 @@ class TestTwoNodeIperf(BaseTopologyTests):
         server_iface = node_interfaces["server"]["net1"]
         client_iface = node_interfaces["client"]["net1"]
 
-        server_ip = server_iface.get_ip().split("/")[0]
-        client_ip = client_iface.get_ip().split("/")[0]
+        server_ip = server_iface.get_ip_address()
+        client_ip = client_iface.get_ip_address()
         server_port = server_iface.ssh_port
         client_port = client_iface.ssh_port
 
@@ -127,7 +127,9 @@ class TestTwoNodeIperf(BaseTopologyTests):
 
             # Run iperf3 client with UDP at 100 Mbps (10 second test)
             result = ssh_command(
-                client_port, f"iperf3 -c {server_ip} -u -b 100M -t 10 -J", timeout=20
+                client_port,
+                f"iperf3 -c {str(server_ip)} -u -b 100M -t 10 -J",
+                timeout=20,
             )
 
             # Parse JSON output
@@ -175,8 +177,8 @@ class TestTwoNodeIperf(BaseTopologyTests):
         server_iface = node_interfaces["server"]["net1"]
         client_iface = node_interfaces["client"]["net1"]
 
-        server_ip = server_iface.get_ip().split("/")[0]
-        client_ip = client_iface.get_ip().split("/")[0]
+        server_ip = server_iface.get_ip_address()
+        client_ip = client_iface.get_ip_address()
         server_port = server_iface.ssh_port
         client_port = client_iface.ssh_port
 
@@ -191,7 +193,7 @@ class TestTwoNodeIperf(BaseTopologyTests):
 
             # Run bidirectional test
             result = ssh_command(
-                client_port, f"iperf3 -c {server_ip} -t 10 --bidir -J", timeout=25
+                client_port, f"iperf3 -c {str(server_ip)} -t 10 --bidir -J", timeout=25
             )
 
             # Parse JSON output
@@ -235,8 +237,8 @@ class TestTwoNodeIperf(BaseTopologyTests):
         server_iface = node_interfaces["server"]["net1"]
         client_iface = node_interfaces["client"]["net1"]
 
-        server_ipv6 = server_iface.get_ipv6().split("/")[0]
-        client_ipv6 = client_iface.get_ipv6().split("/")[0]
+        server_ipv6 = server_iface.get_ipv6_address()
+        client_ipv6 = client_iface.get_ipv6_address()
         server_port = server_iface.ssh_port
         client_port = client_iface.ssh_port
 
@@ -254,7 +256,7 @@ class TestTwoNodeIperf(BaseTopologyTests):
 
             # Run iperf3 client (10 second test) with IPv6
             result = ssh_command(
-                client_port, f"iperf3 -c {server_ipv6} -t 10 -J", timeout=20
+                client_port, f"iperf3 -c {str(server_ipv6)} -t 10 -J", timeout=20
             )
 
             # Parse JSON output to get throughput
@@ -290,8 +292,8 @@ class TestTwoNodeIperf(BaseTopologyTests):
         server_iface = node_interfaces["server"]["net1"]
         client_iface = node_interfaces["client"]["net1"]
 
-        server_ipv6 = server_iface.get_ipv6().split("/")[0]
-        client_ipv6 = client_iface.get_ipv6().split("/")[0]
+        server_ipv6 = server_iface.get_ipv6_address()
+        client_ipv6 = client_iface.get_ipv6_address()
         server_port = server_iface.ssh_port
         client_port = client_iface.ssh_port
 
@@ -309,7 +311,9 @@ class TestTwoNodeIperf(BaseTopologyTests):
 
             # Run iperf3 client with UDP at 100 Mbps (10 second test)
             result = ssh_command(
-                client_port, f"iperf3 -c {server_ipv6} -u -b 100M -t 10 -J", timeout=20
+                client_port,
+                f"iperf3 -c {str(server_ipv6)} -u -b 100M -t 10 -J",
+                timeout=20,
             )
 
             # Parse JSON output
@@ -357,8 +361,8 @@ class TestTwoNodeIperf(BaseTopologyTests):
         server_iface = node_interfaces["server"]["net1"]
         client_iface = node_interfaces["client"]["net1"]
 
-        server_ipv6 = server_iface.get_ipv6().split("/")[0]
-        client_ipv6 = client_iface.get_ipv6().split("/")[0]
+        server_ipv6 = server_iface.get_ipv6_address()
+        client_ipv6 = client_iface.get_ipv6_address()
         server_port = server_iface.ssh_port
         client_port = client_iface.ssh_port
 
@@ -376,7 +380,9 @@ class TestTwoNodeIperf(BaseTopologyTests):
 
             # Run bidirectional test
             result = ssh_command(
-                client_port, f"iperf3 -c {server_ipv6} -t 10 --bidir -J", timeout=25
+                client_port,
+                f"iperf3 -c {str(server_ipv6)} -t 10 --bidir -J",
+                timeout=25,
             )
 
             # Parse JSON output
