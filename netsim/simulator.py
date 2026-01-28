@@ -99,9 +99,6 @@ class TopologySimulator:
         """Create and configure VM instances."""
         logger.info("Setting up VMs...")
 
-        # Get or generate cloud-init ISO for all VMs
-        cloudinit_iso = self._get_or_generate_cloudinit_iso()
-
         for idx, node in enumerate(self.topology.nodes):
             logger.debug(f"Creating VM: {node.name}")
 
@@ -110,9 +107,9 @@ class TopologySimulator:
             node_ifaces = []  # List of (network_name, ip_cidr)
 
             for net_idx, net_name in enumerate(node.networks):
-                # Generate tap name
+                # Generate tap name (use index-based naming to keep it under 15 chars)
                 if_name = f"eth{net_idx}"
-                tap_name = f"tap-{node.name}-{if_name}"
+                tap_name = f"tap{idx}{net_idx}"
                 logger.debug(f"Creating tap interface: {tap_name} for {net_name}")
 
                 NetworkManager.create_tap(tap_name)
@@ -136,6 +133,9 @@ class TopologySimulator:
             image_path = self.image_manager.resolve_image(node.image)
             logger.info(f"Image resolved for {node.name}: {image_path}")
 
+            # Generate per-node cloud-init ISO with hostname
+            cloudinit_iso = self._get_or_generate_cloudinit_iso(node.name)
+
             # Create VM configuration
             vm_config = VMConfig(
                 name=node.name,
@@ -151,21 +151,24 @@ class TopologySimulator:
             vm = LibvirtVM(vm_config, runtime_dir=self.runtime_dir)
             self.vms[node.name] = vm
 
-    def _get_or_generate_cloudinit_iso(self) -> str:
-        """Generate or retrieve cached cloud-init ISO with netsim user and SSH key.
+    def _get_or_generate_cloudinit_iso(self, hostname: str) -> str:
+        """Generate or retrieve cached cloud-init ISO with netsim user, SSH key, and hostname.
+
+        Args:
+            hostname: Hostname to configure for the node
 
         Returns:
             Path to the cloud-init ISO file.
         """
         iso_cache_dir = Path.home() / ".netsim" / "cloud-init"
         iso_cache_dir.mkdir(parents=True, exist_ok=True)
-        iso_path = iso_cache_dir / "cloud-init-netsim.iso"
+        iso_path = iso_cache_dir / f"cloud-init-{hostname}.iso"
 
         if iso_path.exists():
-            logger.debug(f"Using cached cloud-init ISO: {iso_path}")
+            logger.debug(f"Using cached cloud-init ISO for {hostname}: {iso_path}")
             return str(iso_path)
 
-        logger.info(f"Generating cloud-init ISO: {iso_path}")
+        logger.info(f"Generating cloud-init ISO for {hostname}: {iso_path}")
 
         try:
             import subprocess
@@ -179,8 +182,11 @@ class TopologySimulator:
             ssh_key = ssh_key_path.read_text().strip()
             logger.debug(f"Using SSH key from {ssh_key_path}")
 
-            # Create cloud-config YAML
+            # Create cloud-config YAML with hostname
             cloud_config = {
+                "hostname": hostname,
+                "fqdn": f"{hostname}.local",
+                "manage_etc_hosts": True,
                 "users": [
                     {
                         "name": "netsim",
@@ -189,7 +195,7 @@ class TopologySimulator:
                         "sudo": ["ALL=(ALL) NOPASSWD:ALL"],
                         "ssh_authorized_keys": [ssh_key],
                     }
-                ]
+                ],
             }
 
             cloud_config_yaml = yaml.dump(cloud_config, default_flow_style=False)
@@ -247,7 +253,7 @@ class TopologySimulator:
                     timeout=5,
                 )
 
-            logger.info(f"Cloud-init ISO created and cached: {iso_path}")
+            logger.info(f"Cloud-init ISO created and cached for {hostname}: {iso_path}")
             return str(iso_path)
         except Exception as e:
             logger.error(f"Failed to generate cloud-init ISO: {e}")
@@ -314,9 +320,9 @@ class TopologySimulator:
                 self.bridges[network.name] = f"br-{network.name}"
 
         if not self.tap_devices:
-            for node in self.topology.nodes:
+            for idx, node in enumerate(self.topology.nodes):
                 for iface_idx in range(len(node.networks)):
-                    tap_name = f"tap-{node.name}-eth{iface_idx}"
+                    tap_name = f"tap{idx}{iface_idx}"
                     self.tap_devices[(node.name, iface_idx)] = tap_name
 
         if not self.vms:

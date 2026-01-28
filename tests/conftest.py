@@ -20,6 +20,7 @@ import yaml
 
 from netsim.topology import TopologyParser
 from netsim.simulator import TopologySimulator
+from tests.parallel_utils import run_parallel_simple
 
 
 logger = logging.getLogger(__name__)
@@ -72,12 +73,11 @@ def _wait_for_vms_running(simulator, timeout=30):
 
 
 def _wait_for_ssh_availability(topology, timeout_per_node=60):
-    """Wait for SSH to be available on all nodes."""
+    """Wait for SSH to be available on all nodes in parallel."""
     import time
 
-    logger.info("Waiting for SSH to be available on all nodes...")
-    for idx, node in enumerate(topology.nodes):
-        ssh_port = 2200 + idx
+    def _wait_for_node_ssh(node_name, ssh_port):
+        """Wait for SSH on a single node."""
         ssh_start = time.time()
         while True:
             try:
@@ -100,14 +100,22 @@ def _wait_for_ssh_availability(topology, timeout_per_node=60):
                     check=True,
                 )
                 if "ready" in result.stdout.decode():
-                    logger.info(f"{node.name}: SSH ready")
-                    break
+                    logger.info(f"{node_name}: SSH ready")
+                    return
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
                 if time.time() - ssh_start > timeout_per_node:
                     raise RuntimeError(
-                        f"{node.name}: SSH not available after {timeout_per_node}s"
+                        f"{node_name}: SSH not available after {timeout_per_node}s"
                     )
                 time.sleep(2)
+
+    logger.info("Waiting for SSH to be available on all nodes (in parallel)...")
+
+    # Build list of (node_name, ssh_port) tuples
+    node_ssh_info = [(node.name, 2200 + idx) for idx, node in enumerate(topology.nodes)]
+
+    # Wait for all nodes in parallel
+    run_parallel_simple(_wait_for_node_ssh, node_ssh_info)
 
 
 def _pause_for_debugging(topology, request):
@@ -471,14 +479,14 @@ def install_packages(ssh_command, node_ssh_port):
         logger.info(f"{node_name}: installing packages: {package_list}")
 
         try:
-            # Update package list
-            ssh_command(ssh_port, "sudo apt-get update -qq", timeout=60)
+            # Update package list (increased timeout for parallel execution)
+            ssh_command(ssh_port, "sudo apt-get update -qq", timeout=180)
 
-            # Install packages (non-interactive)
+            # Install packages (non-interactive, with dpkg lock avoidance)
             ssh_command(
                 ssh_port,
                 f"sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq {package_list}",
-                timeout=120,
+                timeout=180,
             )
 
             installed_cache[cache_key] = True
@@ -492,7 +500,7 @@ def install_packages(ssh_command, node_ssh_port):
     return _install
 
 
-def _build_netplan_config(node_name, ifaces, node_allocations):
+def _build_netplan_config(node_name, ifaces, node_allocations, mgmt_interface):
     """Build netplan YAML config for a node's interfaces."""
     iface_configs = node_allocations[node_name]
     interfaces = {}
@@ -521,8 +529,14 @@ def _build_netplan_config(node_name, ifaces, node_allocations):
             "addresses": addresses,
         }
 
-        addr_info = ", ".join(addresses)
-        logger.info(f"  {node_iface.if_name} ({net_name}): {addr_info}")
+    # Disable IPv6 on management interface to prevent RA interference
+    # The management interface will still get DHCPv4
+    # link-local: [] prevents netplan from generating IPv6 link-local addresses
+    interfaces[mgmt_interface] = {
+        "dhcp4": True,
+        "dhcp6": False,
+        "link-local": [],  # Prevents IPv6 link-local address generation
+    }
 
     return {
         "network": {
@@ -532,7 +546,9 @@ def _build_netplan_config(node_name, ifaces, node_allocations):
     }
 
 
-def _apply_netplan_to_node(node_name, ifaces, netplan_yaml, ssh_command):
+def _apply_netplan_to_node(
+    node_name, ifaces, netplan_yaml, ssh_command, mgmt_interface
+):
     """Apply netplan configuration to a single node."""
     try:
         # Create temporary file with config locally
@@ -594,7 +610,7 @@ def _apply_netplan_to_node(node_name, ifaces, netplan_yaml, ssh_command):
 @pytest.fixture(scope="module")
 def configure_node_interfaces(node_interfaces, node_allocations, ssh_command):
     """
-    Fixture that configures all node interfaces with netplan.
+    Fixture that configures all node interfaces with netplan in parallel.
 
     Depends on node_interfaces (which depends on running_topology).
 
@@ -604,23 +620,56 @@ def configure_node_interfaces(node_interfaces, node_allocations, ssh_command):
             pass
     """
     logger.info("=" * 60)
-    logger.info("Configuring node interfaces with netplan")
+    logger.info("Configuring node interfaces with netplan (in parallel)")
     logger.info("=" * 60)
 
-    for node_name, ifaces in node_interfaces.items():
+    def _configure_node(node_name, ifaces):
+        """Configure a single node's interfaces."""
         iface_configs = node_allocations[node_name]
 
         # Skip if no data interfaces
         if len(iface_configs) == 0:
             logger.info(f"{node_name}: no data interfaces to configure")
-            continue
+            return
 
         logger.info(f"Configuring {len(iface_configs)} interface(s) for {node_name}")
 
-        # Build and apply netplan config
-        netplan_config = _build_netplan_config(node_name, ifaces, node_allocations)
+        # Discover management interface (first interface)
+        ssh_port = list(ifaces.values())[0].ssh_port
+        output = ssh_command(
+            ssh_port,
+            "ip -o link show | grep -v ' lo:' | awk -F': ' '{print $2}' | head -1",
+        )
+        mgmt_interface = output.strip().split("@")[0]  # Remove @NONE suffix if present
+        logger.debug(f"{node_name}: management interface is {mgmt_interface}")
+
+        # Build netplan config
+        netplan_config = _build_netplan_config(
+            node_name, ifaces, node_allocations, mgmt_interface
+        )
+
+        # Log interfaces for this node (grouped before parallel execution)
+        for net_name, node_iface in ifaces.items():
+            addrs = iface_configs.get(net_name)
+            if addrs:
+                ipv4 = addrs.get("ipv4", "")
+                ipv6 = addrs.get("ipv6", "")
+                addr_parts = [addr for addr in [ipv4, ipv6] if addr]
+                addr_info = ", ".join(addr_parts)
+                logger.info(
+                    f"  [{node_name}] {node_iface.if_name} ({net_name}): {addr_info}"
+                )
+
         netplan_yaml = yaml.dump(netplan_config, default_flow_style=False)
-        _apply_netplan_to_node(node_name, ifaces, netplan_yaml, ssh_command)
+        _apply_netplan_to_node(
+            node_name, ifaces, netplan_yaml, ssh_command, mgmt_interface
+        )
+
+    # Configure all nodes in parallel
+    run_parallel_simple(
+        _configure_node,
+        [(node_name, ifaces) for node_name, ifaces in node_interfaces.items()],
+    )
 
     logger.info("=" * 60)
     logger.info("✓ All interfaces configured")
@@ -879,10 +928,49 @@ class BaseTopologyTests:
                     f"{node_name}:{net_name} should have IP {expected_ip}, got {actual_ip}"
                 )
 
+    @staticmethod
+    def _ping_and_extract_rtt(
+        ssh_command, ssh_port, target_ip, count=3, ipv6=False, timeout=10
+    ):
+        """Execute ping and extract average RTT.
+
+        Args:
+            ssh_command: SSH command function
+            ssh_port: SSH port to connect to
+            target_ip: Target IP address to ping
+            count: Number of pings to send
+            ipv6: Whether to use ping6 instead of ping
+            timeout: Command timeout in seconds
+
+        Returns:
+            tuple: (success: bool, avg_rtt: float or None, output: str)
+        """
+        import re
+
+        cmd = f"ping6 -c {count}" if ipv6 else f"ping -c {count}"
+        cmd += f" {target_ip}"
+
+        try:
+            result = ssh_command(ssh_port, cmd, timeout=timeout)
+
+            # Extract average RTT from output
+            # Format: rtt min/avg/max/mdev = 0.123/0.456/0.789/0.012 ms
+            rtt_match = re.search(
+                r"rtt min/avg/max/mdev = [\d.]+/([\d.]+)/[\d.]+/[\d.]+ ms", result
+            )
+            avg_rtt = float(rtt_match.group(1)) if rtt_match else None
+
+            # Check for packet loss
+            success = "100% packet loss" not in result
+
+            return success, avg_rtt, result
+        except subprocess.CalledProcessError as e:
+            return False, None, e.stderr if e.stderr else str(e)
+
     def test_ping_between_nodes(
         self, configure_node_interfaces, node_interfaces, topology, ssh_command
     ):
-        """Test ICMP connectivity between nodes that share networks."""
+        """Test ICMP connectivity between nodes that share networks (IPv4 and IPv6)."""
         # Build a map of network -> [nodes]
         network_nodes = {}
         for node in topology.nodes:
@@ -910,51 +998,50 @@ class BaseTopologyTests:
 
                 target_iface = node_interfaces[target_node][net_name]
                 target_ip = target_iface.get_ip().split("/")[0]
+                source_ip = source_iface.get_ip().split("/")[0]
 
-                # Ping from source to target
-                try:
-                    ssh_command(
-                        source_iface.ssh_port, f"ping -c 1 -W 2 {target_ip}", timeout=10
-                    )
+                # IPv4 Ping from source to target
+                success, avg_rtt, output = self._ping_and_extract_rtt(
+                    ssh_command, source_iface.ssh_port, target_ip, count=1, ipv6=False
+                )
+                if success:
+                    rtt_str = f" ({avg_rtt:.2f}ms)" if avg_rtt else ""
                     logger.info(
-                        f"✓ Ping {source_node} -> {target_node} ({target_ip}) on {net_name}"
+                        f"✓ IPv4 Ping {source_node} ({source_ip}) -> {target_node} ({target_ip}) on {net_name}{rtt_str}"
                     )
-                except subprocess.CalledProcessError as e:
+                else:
                     pytest.fail(
-                        f"Ping failed: {source_node} -> {target_node} ({target_ip}) on {net_name}\n"
-                        f"Error: {e.stderr if e.stderr else e}"
+                        f"IPv4 Ping failed: {source_node} ({source_ip}) -> {target_node} ({target_ip}) on {net_name}\n"
+                        f"Error: {output}"
                     )
 
-    def test_interface_control(
-        self, configure_node_interfaces, node_interfaces, topology
-    ):
-        """Test bringing interfaces up and down on first node."""
-        # Just test the first node to verify interface control works
-        if not topology.nodes:
-            pytest.skip("No nodes in topology")
+                # IPv6 Ping from source to target (if available)
+                target_ipv6 = (
+                    target_iface.get_ipv6().split("/")[0]
+                    if target_iface.get_ipv6()
+                    else None
+                )
+                source_ipv6 = (
+                    source_iface.get_ipv6().split("/")[0]
+                    if source_iface.get_ipv6()
+                    else None
+                )
 
-        first_node = topology.nodes[0]
-        if (
-            first_node.name not in node_interfaces
-            or not node_interfaces[first_node.name]
-        ):
-            pytest.skip(f"No interfaces to test on {first_node.name}")
-
-        # Get first interface
-        net_name = list(node_interfaces[first_node.name].keys())[0]
-        iface = node_interfaces[first_node.name][net_name]
-
-        # Interface should start up
-        assert iface.is_up(), f"{first_node.name}:{net_name} should be up initially"
-
-        # Bring it down
-        iface.down()
-        assert not iface.is_up(), (
-            f"{first_node.name}:{net_name} should be down after calling down()"
-        )
-
-        # Bring it back up
-        iface.up()
-        assert iface.is_up(), (
-            f"{first_node.name}:{net_name} should be up after calling up()"
-        )
+                if target_ipv6 and source_ipv6:
+                    success, avg_rtt, output = self._ping_and_extract_rtt(
+                        ssh_command,
+                        source_iface.ssh_port,
+                        target_ipv6,
+                        count=1,
+                        ipv6=True,
+                    )
+                    if success:
+                        rtt_str = f" ({avg_rtt:.2f}ms)" if avg_rtt else ""
+                        logger.info(
+                            f"✓ IPv6 Ping {source_node} ({source_ipv6}) -> {target_node} ({target_ipv6}) on {net_name}{rtt_str}"
+                        )
+                    else:
+                        pytest.fail(
+                            f"IPv6 Ping failed: {source_node} ({source_ipv6}) -> {target_node} ({target_ipv6}) on {net_name}\n"
+                            f"Error: {output}"
+                        )

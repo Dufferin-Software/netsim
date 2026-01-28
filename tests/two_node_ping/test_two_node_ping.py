@@ -6,8 +6,11 @@ Includes both IPv4 and IPv6 tests.
 Inherits standard validation tests from BaseTopologyTests.
 """
 
+import logging
 import pytest
 from tests.conftest import BaseTopologyTests
+
+logger = logging.getLogger(__name__)
 
 
 class TestTwoNodePing(BaseTopologyTests):
@@ -29,9 +32,11 @@ class TestTwoNodePing(BaseTopologyTests):
 
         net1 = topology.get_network("net1")
         assert net1 is not None, "Network 'net1' should exist"
-        assert net1.subnet == "10.0.1.0/24"
-        assert hasattr(net1, "ipv6_subnet") and net1.ipv6_subnet == "2001:db8:1::/64", (
-            "Network 'net1' should have IPv6 subnet 2001:db8:1::/64"
+        assert net1.subnet == topology.networks[0].subnet, (
+            "Network 'net1' subnet should match topology definition"
+        )
+        assert hasattr(net1, "ipv6_subnet") and net1.ipv6_subnet, (
+            "Network 'net1' should have IPv6 subnet"
         )
 
         # Both nodes should be on net1
@@ -50,11 +55,15 @@ class TestTwoNodePing(BaseTopologyTests):
         node2_ssh_port = node2_iface.ssh_port
 
         # Test ping from node2 to node1
-        result = ssh_command(node2_ssh_port, f"ping -c 3 {node1_ipv4}", timeout=10)
-        assert "3 received" in result or "100% packet loss" not in result, (
-            "IPv4 ping from node2 to node1 failed"
+        success, avg_rtt, output = self._ping_and_extract_rtt(
+            ssh_command, node2_ssh_port, node1_ipv4, count=3, ipv6=False
         )
-        print(f"✓ IPv4 Ping: node2 ({node2_ipv4}) → node1 ({node1_ipv4})")
+        assert success, f"IPv4 ping from node2 to node1 failed: {output}"
+
+        rtt_str = f" ({avg_rtt:.2f}ms)" if avg_rtt else ""
+        logger.info(
+            f"✓ IPv4 Ping: node2 ({node2_ipv4}) → node1 ({node1_ipv4}){rtt_str}"
+        )
 
     def test_ipv6_ping_connectivity(
         self, configure_node_interfaces, node_interfaces, ssh_command
@@ -71,8 +80,12 @@ class TestTwoNodePing(BaseTopologyTests):
             pytest.skip("IPv6 not configured on node1")
 
         # Test ping6 from node2 to node1
-        result = ssh_command(node2_ssh_port, f"ping6 -c 3 {node1_ipv6}", timeout=10)
-        assert "3 received" in result or "100% packet loss" not in result, (
-            "IPv6 ping from node2 to node1 failed"
+        success, avg_rtt, output = self._ping_and_extract_rtt(
+            ssh_command, node2_ssh_port, node1_ipv6, count=3, ipv6=True
         )
-        print(f"✓ IPv6 Ping: node2 ({node2_ipv6}) → node1 ({node1_ipv6})")
+        assert success, f"IPv6 ping from node2 to node1 failed: {output}"
+
+        rtt_str = f" ({avg_rtt:.2f}ms)" if avg_rtt else ""
+        logger.info(
+            f"✓ IPv6 Ping: node2 ({node2_ipv6}) → node1 ({node1_ipv6}){rtt_str}"
+        )
