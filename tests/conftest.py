@@ -194,8 +194,8 @@ def running_topology(topology, request):
     Auto-start topology for test module, clean up after.
 
     Module-scoped with autouse=True to ensure topology runs for all tests in a module.
-    Each test module (e.g., test_two_node_ping.py vs test_two_node_iperf.py) gets
-    its own topology instance, preventing OOM from multiple topologies accumulating.
+    Each test module gets its own topology instance, preventing OOM from multiple
+    topologies accumulating.
 
     The topology is started once per module and destroyed after that module's tests complete.
     Tests within the same module share the same running topology instance.

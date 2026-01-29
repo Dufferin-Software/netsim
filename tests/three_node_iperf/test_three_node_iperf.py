@@ -1,3 +1,5 @@
+# Copyright (c) Dufferin Software
+
 """
 Three-node iperf3 performance tests with transit router.
 
@@ -33,7 +35,7 @@ class TestThreeNodeIperf(BaseTopologyTests):
     ):
         """Configure static routing on all nodes."""
         # Enable IP forwarding on transit node
-        node_interfaces["transit"]["net1"]
+        transit_iface = node_interfaces["transit"]["net1"]
         logger.info("Enabling IP forwarding on transit node...")
         nodes["transit"].ssh_command("sudo sysctl -w net.ipv4.ip_forward=1")
         nodes["transit"].ssh_command("sudo sysctl -w net.ipv6.conf.all.forwarding=1")
@@ -146,7 +148,9 @@ class TestThreeNodeIperf(BaseTopologyTests):
             node.ssh_command("pkill -15 iperf3 || true", timeout=timeout)
             time.sleep(0.5)
             node.ssh_command("pkill -9 iperf3 || true", timeout=timeout)
-            result = node.ssh_command("pgrep iperf3 | wc -l", timeout=timeout).strip()
+            result = node.ssh_command(
+                "pgrep iperf3 | wc -l", timeout=timeout
+            ).strip()
             count = int(result) if result else 0
             if count > 0:
                 node.ssh_command("killall -9 iperf3 || true", timeout=timeout)
@@ -160,11 +164,11 @@ class TestThreeNodeIperf(BaseTopologyTests):
         server_iface = node_interfaces["server"]["net2"]
         client_iface = node_interfaces["client"]["net1"]
 
-        server_ip = server_iface.get_ip().split("/")[0]
-        client_ip = client_iface.get_ip().split("/")[0]
+        server_ip = server_iface.get_ip_address()
+        client_ip = client_iface.get_ip_address()
 
         success, avg_rtt, output = self._ping_and_extract_rtt(
-            nodes["client"], server_ip, count=3, ipv6=False
+            nodes["client"], str(server_ip), count=3, ipv6=False
         )
         if not success:
             pytest.fail(f"IPv4 ping from client to server failed: {output}")
@@ -181,14 +185,14 @@ class TestThreeNodeIperf(BaseTopologyTests):
         server_iface = node_interfaces["server"]["net2"]
         client_iface = node_interfaces["client"]["net1"]
 
-        server_ipv6 = server_iface.get_ipv6().split("/")[0]
-        client_ipv6 = client_iface.get_ipv6().split("/")[0]
+        server_ipv6 = server_iface.get_ipv6_address()
+        client_ipv6 = client_iface.get_ipv6_address()
 
         if not server_ipv6:
             pytest.skip("IPv6 not configured on server")
 
         success, avg_rtt, output = self._ping_and_extract_rtt(
-            nodes["client"], server_ipv6, count=3, ipv6=True
+            nodes["client"], str(server_ipv6), count=3, ipv6=True
         )
         if not success:
             pytest.fail(f"IPv6 ping from client to server failed: {output}")
@@ -205,8 +209,8 @@ class TestThreeNodeIperf(BaseTopologyTests):
         server_iface = node_interfaces["server"]["net2"]
         client_iface = node_interfaces["client"]["net1"]
 
-        server_ip = server_iface.get_ip().split("/")[0]
-        client_ip = client_iface.get_ip().split("/")[0]
+        server_ip = server_iface.get_ip_address()
+        client_ip = client_iface.get_ip_address()
 
         # Pre-cleanup
         self._kill_iperf(nodes["server"])
@@ -217,7 +221,7 @@ class TestThreeNodeIperf(BaseTopologyTests):
             time.sleep(1)
 
             result = nodes["client"].ssh_command(
-                f"iperf3 -c {server_ip} -t 10 -J", timeout=20
+                f"iperf3 -c {str(server_ip)} -t 10 -J", timeout=20
             )
 
             data = json.loads(result)
@@ -247,8 +251,8 @@ class TestThreeNodeIperf(BaseTopologyTests):
         server_iface = node_interfaces["server"]["net2"]
         client_iface = node_interfaces["client"]["net1"]
 
-        server_ip = server_iface.get_ip().split("/")[0]
-        client_ip = client_iface.get_ip().split("/")[0]
+        server_ip = server_iface.get_ip_address()
+        client_ip = client_iface.get_ip_address()
 
         # Pre-cleanup
         self._kill_iperf(nodes["server"])
@@ -259,7 +263,7 @@ class TestThreeNodeIperf(BaseTopologyTests):
             time.sleep(1)
 
             result = nodes["client"].ssh_command(
-                f"iperf3 -c {server_ip} -u -b 100M -t 10 -J", timeout=20
+                f"iperf3 -c {str(server_ip)} -u -b 100M -t 10 -J", timeout=20
             )
 
             data = json.loads(result)
@@ -300,8 +304,8 @@ class TestThreeNodeIperf(BaseTopologyTests):
         server_iface = node_interfaces["server"]["net2"]
         client_iface = node_interfaces["client"]["net1"]
 
-        server_ip = server_iface.get_ip().split("/")[0]
-        client_ip = client_iface.get_ip().split("/")[0]
+        server_ip = server_iface.get_ip_address()
+        client_ip = client_iface.get_ip_address()
 
         # Pre-cleanup
         self._kill_iperf(nodes["server"])
@@ -312,7 +316,7 @@ class TestThreeNodeIperf(BaseTopologyTests):
             time.sleep(1)
 
             result = nodes["client"].ssh_command(
-                f"iperf3 -c {server_ip} -t 10 --bidir -J", timeout=25
+                f"iperf3 -c {str(server_ip)} -t 10 --bidir -J", timeout=25
             )
 
             data = json.loads(result)
@@ -350,8 +354,8 @@ class TestThreeNodeIperf(BaseTopologyTests):
         server_iface = node_interfaces["server"]["net2"]
         client_iface = node_interfaces["client"]["net1"]
 
-        server_ipv6 = server_iface.get_ipv6().split("/")[0]
-        client_ipv6 = client_iface.get_ipv6().split("/")[0]
+        server_ipv6 = server_iface.get_ipv6_address()
+        client_ipv6 = client_iface.get_ipv6_address()
 
         if not server_ipv6:
             pytest.skip("IPv6 not configured on server")
@@ -365,7 +369,7 @@ class TestThreeNodeIperf(BaseTopologyTests):
             time.sleep(1)
 
             result = nodes["client"].ssh_command(
-                f"iperf3 -c {server_ipv6} -t 10 -J", timeout=20
+                f"iperf3 -c {str(server_ipv6)} -t 10 -J", timeout=20
             )
 
             data = json.loads(result)
@@ -395,8 +399,8 @@ class TestThreeNodeIperf(BaseTopologyTests):
         server_iface = node_interfaces["server"]["net2"]
         client_iface = node_interfaces["client"]["net1"]
 
-        server_ipv6 = server_iface.get_ipv6().split("/")[0]
-        client_ipv6 = client_iface.get_ipv6().split("/")[0]
+        server_ipv6 = server_iface.get_ipv6_address()
+        client_ipv6 = client_iface.get_ipv6_address()
 
         if not server_ipv6:
             pytest.skip("IPv6 not configured on server")
@@ -410,7 +414,7 @@ class TestThreeNodeIperf(BaseTopologyTests):
             time.sleep(1)
 
             result = nodes["client"].ssh_command(
-                f"iperf3 -c {server_ipv6} -u -b 100M -t 10 -J", timeout=20
+                f"iperf3 -c {str(server_ipv6)} -u -b 100M -t 10 -J", timeout=20
             )
 
             data = json.loads(result)
@@ -451,8 +455,8 @@ class TestThreeNodeIperf(BaseTopologyTests):
         server_iface = node_interfaces["server"]["net2"]
         client_iface = node_interfaces["client"]["net1"]
 
-        server_ipv6 = server_iface.get_ipv6().split("/")[0]
-        client_ipv6 = client_iface.get_ipv6().split("/")[0]
+        server_ipv6 = server_iface.get_ipv6_address()
+        client_ipv6 = client_iface.get_ipv6_address()
 
         if not server_ipv6:
             pytest.skip("IPv6 not configured on server")
@@ -466,7 +470,7 @@ class TestThreeNodeIperf(BaseTopologyTests):
             time.sleep(1)
 
             result = nodes["client"].ssh_command(
-                f"iperf3 -c {server_ipv6} -t 10 --bidir -J", timeout=25
+                f"iperf3 -c {str(server_ipv6)} -t 10 --bidir -J", timeout=25
             )
 
             data = json.loads(result)
