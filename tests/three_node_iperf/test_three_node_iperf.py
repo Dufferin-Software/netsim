@@ -13,8 +13,11 @@ import json
 import time
 import logging
 import pytest
+import netaddr
 from tests.conftest import BaseTopologyTests
 from tests.parallel_utils import run_parallel_simple
+from tests.network_helpers import enable_ip_forwarding, add_route
+from tests.process_helpers import kill_process
 
 logger = logging.getLogger(__name__)
 
@@ -35,10 +38,8 @@ class TestThreeNodeIperf(BaseTopologyTests):
     ):
         """Configure static routing on all nodes."""
         # Enable IP forwarding on transit node
-        transit_iface = node_interfaces["transit"]["net1"]
         logger.info("Enabling IP forwarding on transit node...")
-        nodes["transit"].ssh_command("sudo sysctl -w net.ipv4.ip_forward=1")
-        nodes["transit"].ssh_command("sudo sysctl -w net.ipv6.conf.all.forwarding=1")
+        enable_ip_forwarding(nodes["transit"], ipv4=True, ipv6=True)
 
         # Configure static routing on client
         client_iface = node_interfaces["client"]["net1"]
@@ -49,8 +50,11 @@ class TestThreeNodeIperf(BaseTopologyTests):
         logger.info(f"Configuring routing on client (via {transit_net1_ip})...")
         # IPv4 route: client needs to reach server's network via transit
         server_net = topology.get_network("net2")
-        nodes["client"].ssh_command(
-            f"sudo ip route add {server_net.subnet} via {str(transit_net1_ip)}"
+        add_route(
+            nodes["client"],
+            netaddr.IPNetwork(server_net.subnet),
+            netaddr.IPAddress(str(transit_net1_ip)),
+            ipv6=False,
         )
         logger.info(f"  ✓ IPv4 route: {server_net.subnet} via {transit_net1_ip}")
 
@@ -60,8 +64,12 @@ class TestThreeNodeIperf(BaseTopologyTests):
             and server_net.ipv6_subnet
             and transit_net1_ipv6
         ):
-            nodes["client"].ssh_command(
-                f"sudo ip -6 route add {server_net.ipv6_subnet} via {str(transit_net1_ipv6)} dev {client_iface.if_name}"
+            add_route(
+                nodes["client"],
+                netaddr.IPNetwork(server_net.ipv6_subnet),
+                netaddr.IPAddress(str(transit_net1_ipv6)),
+                dev=client_iface.if_name,
+                ipv6=True,
             )
             logger.info(
                 f"  ✓ IPv6 route: {server_net.ipv6_subnet} via {transit_net1_ipv6} dev {client_iface.if_name}"
@@ -82,8 +90,11 @@ class TestThreeNodeIperf(BaseTopologyTests):
         logger.info(f"Configuring routing on server (via {transit_net2_ip})...")
         # IPv4 route: server needs to reach client's network via transit
         client_net = topology.get_network("net1")
-        nodes["server"].ssh_command(
-            f"sudo ip route add {client_net.subnet} via {str(transit_net2_ip)}"
+        add_route(
+            nodes["server"],
+            netaddr.IPNetwork(client_net.subnet),
+            netaddr.IPAddress(str(transit_net2_ip)),
+            ipv6=False,
         )
         logger.info(f"  ✓ IPv4 route: {client_net.subnet} via {transit_net2_ip}")
 
@@ -93,8 +104,12 @@ class TestThreeNodeIperf(BaseTopologyTests):
             and client_net.ipv6_subnet
             and transit_net2_ipv6
         ):
-            nodes["server"].ssh_command(
-                f"sudo ip -6 route add {client_net.ipv6_subnet} via {str(transit_net2_ipv6)} dev {server_iface.if_name}"
+            add_route(
+                nodes["server"],
+                netaddr.IPNetwork(client_net.ipv6_subnet),
+                netaddr.IPAddress(str(transit_net2_ipv6)),
+                dev=server_iface.if_name,
+                ipv6=True,
             )
             logger.info(
                 f"  ✓ IPv6 route: {client_net.ipv6_subnet} via {transit_net2_ipv6} dev {server_iface.if_name}"
@@ -141,22 +156,6 @@ class TestThreeNodeIperf(BaseTopologyTests):
             "server",
         }
 
-    @staticmethod
-    def _kill_iperf(node, timeout=5):
-        """Aggressively kill all iperf3 processes on a node."""
-        try:
-            node.ssh_command("pkill -15 iperf3 || true", timeout=timeout)
-            time.sleep(0.5)
-            node.ssh_command("pkill -9 iperf3 || true", timeout=timeout)
-            result = node.ssh_command(
-                "pgrep iperf3 | wc -l", timeout=timeout
-            ).strip()
-            count = int(result) if result else 0
-            if count > 0:
-                node.ssh_command("killall -9 iperf3 || true", timeout=timeout)
-        except Exception:
-            pass
-
     def test_ipv4_ping_client_to_server(
         self, configure_node_interfaces, node_interfaces, nodes
     ):
@@ -191,6 +190,9 @@ class TestThreeNodeIperf(BaseTopologyTests):
         if not server_ipv6:
             pytest.skip("IPv6 not configured on server")
 
+        if not client_ipv6:
+            pytest.skip("IPv6 not configured on client")
+
         success, avg_rtt, output = self._ping_and_extract_rtt(
             nodes["client"], str(server_ipv6), count=3, ipv6=True
         )
@@ -213,7 +215,7 @@ class TestThreeNodeIperf(BaseTopologyTests):
         client_ip = client_iface.get_ip_address()
 
         # Pre-cleanup
-        self._kill_iperf(nodes["server"])
+        kill_process(nodes["server"], "iperf3")
         time.sleep(1)
 
         try:
@@ -241,7 +243,7 @@ class TestThreeNodeIperf(BaseTopologyTests):
                 f"IPv4 TCP iperf test failed: {e.stderr if e.stderr else str(e)}"
             )
         finally:
-            self._kill_iperf(nodes["server"])
+            kill_process(nodes["server"], "iperf3")
             time.sleep(0.5)
 
     def test_udp_throughput(
@@ -255,7 +257,7 @@ class TestThreeNodeIperf(BaseTopologyTests):
         client_ip = client_iface.get_ip_address()
 
         # Pre-cleanup
-        self._kill_iperf(nodes["server"])
+        kill_process(nodes["server"], "iperf3")
         time.sleep(1)
 
         try:
@@ -294,7 +296,7 @@ class TestThreeNodeIperf(BaseTopologyTests):
                 f"IPv4 UDP iperf test failed: {e.stderr if e.stderr else str(e)}"
             )
         finally:
-            self._kill_iperf(nodes["server"])
+            kill_process(nodes["server"], "iperf3")
             time.sleep(0.5)
 
     def test_bidirectional_throughput(
@@ -308,7 +310,7 @@ class TestThreeNodeIperf(BaseTopologyTests):
         client_ip = client_iface.get_ip_address()
 
         # Pre-cleanup
-        self._kill_iperf(nodes["server"])
+        kill_process(nodes["server"], "iperf3")
         time.sleep(1)
 
         try:
@@ -344,7 +346,7 @@ class TestThreeNodeIperf(BaseTopologyTests):
                 f"IPv4 Bidirectional iperf test failed: {e.stderr if e.stderr else str(e)}"
             )
         finally:
-            self._kill_iperf(nodes["server"])
+            kill_process(nodes["server"], "iperf3")
             time.sleep(0.5)
 
     def test_ipv6_tcp_throughput(
@@ -361,7 +363,7 @@ class TestThreeNodeIperf(BaseTopologyTests):
             pytest.skip("IPv6 not configured on server")
 
         # Pre-cleanup
-        self._kill_iperf(nodes["server"])
+        kill_process(nodes["server"], "iperf3")
         time.sleep(1)
 
         try:
@@ -389,7 +391,7 @@ class TestThreeNodeIperf(BaseTopologyTests):
                 f"IPv6 TCP iperf test failed: {e.stderr if e.stderr else str(e)}"
             )
         finally:
-            self._kill_iperf(nodes["server"])
+            kill_process(nodes["server"], "iperf3")
             time.sleep(0.5)
 
     def test_ipv6_udp_throughput(
@@ -406,7 +408,7 @@ class TestThreeNodeIperf(BaseTopologyTests):
             pytest.skip("IPv6 not configured on server")
 
         # Pre-cleanup
-        self._kill_iperf(nodes["server"])
+        kill_process(nodes["server"], "iperf3")
         time.sleep(1)
 
         try:
@@ -445,7 +447,7 @@ class TestThreeNodeIperf(BaseTopologyTests):
                 f"IPv6 UDP iperf test failed: {e.stderr if e.stderr else str(e)}"
             )
         finally:
-            self._kill_iperf(nodes["server"])
+            kill_process(nodes["server"], "iperf3")
             time.sleep(0.5)
 
     def test_ipv6_bidirectional_throughput(
@@ -462,7 +464,7 @@ class TestThreeNodeIperf(BaseTopologyTests):
             pytest.skip("IPv6 not configured on server")
 
         # Pre-cleanup
-        self._kill_iperf(nodes["server"])
+        kill_process(nodes["server"], "iperf3")
         time.sleep(1)
 
         try:
@@ -498,5 +500,5 @@ class TestThreeNodeIperf(BaseTopologyTests):
                 f"IPv6 Bidirectional iperf test failed: {e.stderr if e.stderr else str(e)}"
             )
         finally:
-            self._kill_iperf(nodes["server"])
+            kill_process(nodes["server"], "iperf3")
             time.sleep(0.5)

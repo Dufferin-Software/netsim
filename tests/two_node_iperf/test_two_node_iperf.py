@@ -13,6 +13,7 @@ import time
 import logging
 import pytest
 from tests.conftest import BaseTopologyTests
+from tests.process_helpers import kill_process
 
 logger = logging.getLogger(__name__)
 
@@ -28,23 +29,6 @@ class TestTwoNodeIperf(BaseTopologyTests):
         """Install iperf3 on all nodes."""
         for node in topology.nodes:
             install_packages(node.name, ["iperf3"])
-
-    @staticmethod
-    def _kill_iperf(node, timeout=5):
-        """Aggressively kill all iperf3 processes on a node."""
-        try:
-            # First try pkill with signal 15
-            node.ssh_command("pkill -15 iperf3 || true", timeout=timeout)
-            time.sleep(0.5)
-            # Then force kill any remaining
-            node.ssh_command("pkill -9 iperf3 || true", timeout=timeout)
-            # Verify they're gone
-            result = node.ssh_command("pgrep iperf3 | wc -l", timeout=timeout).strip()
-            count = int(result) if result else 0
-            if count > 0:
-                node.ssh_command("killall -9 iperf3 || true", timeout=timeout)
-        except Exception:
-            pass  # Ignore errors in cleanup
 
     def test_two_nodes_exist(self, topology):
         """Verify topology has exactly two nodes."""
@@ -65,7 +49,7 @@ class TestTwoNodeIperf(BaseTopologyTests):
         client_node = nodes["client"]
 
         # Pre-cleanup: kill any lingering iperf processes
-        self._kill_iperf(server_node)
+        kill_process(server_node, "iperf3")
         time.sleep(1)
 
         # Start iperf3 server in background
@@ -101,7 +85,7 @@ class TestTwoNodeIperf(BaseTopologyTests):
             )
         finally:
             # Aggressive cleanup
-            self._kill_iperf(server_node)
+            kill_process(server_node, "iperf3")
             time.sleep(0.5)
 
     def test_udp_throughput(
@@ -117,7 +101,7 @@ class TestTwoNodeIperf(BaseTopologyTests):
         client_node = nodes["client"]
 
         # Pre-cleanup: kill any lingering iperf processes
-        self._kill_iperf(server_node)
+        kill_process(server_node, "iperf3")
         time.sleep(1)
 
         # Start iperf3 server in background
@@ -166,7 +150,7 @@ class TestTwoNodeIperf(BaseTopologyTests):
             )
         finally:
             # Aggressive cleanup
-            self._kill_iperf(server_node)
+            kill_process(server_node, "iperf3")
             time.sleep(0.5)
 
     def test_bidirectional_throughput(
@@ -182,7 +166,7 @@ class TestTwoNodeIperf(BaseTopologyTests):
         client_node = nodes["client"]
 
         # Pre-cleanup: kill any lingering iperf processes
-        self._kill_iperf(server_node)
+        kill_process(server_node, "iperf3")
         time.sleep(1)
 
         # Start iperf3 server in background
@@ -226,7 +210,7 @@ class TestTwoNodeIperf(BaseTopologyTests):
             )
         finally:
             # Aggressive cleanup
-            self._kill_iperf(server_node)
+            kill_process(server_node, "iperf3")
             time.sleep(0.5)
 
     def test_ipv6_tcp_throughput(
@@ -245,7 +229,7 @@ class TestTwoNodeIperf(BaseTopologyTests):
             pytest.skip("IPv6 not configured on server")
 
         # Pre-cleanup: kill any lingering iperf processes
-        self._kill_iperf(server_node)
+        kill_process(server_node, "iperf3")
         time.sleep(1)
 
         # Start iperf3 server in background
@@ -281,7 +265,7 @@ class TestTwoNodeIperf(BaseTopologyTests):
             )
         finally:
             # Aggressive cleanup
-            self._kill_iperf(server_node)
+            kill_process(server_node, "iperf3")
             time.sleep(0.5)
 
     def test_ipv6_udp_throughput(
@@ -300,7 +284,7 @@ class TestTwoNodeIperf(BaseTopologyTests):
             pytest.skip("IPv6 not configured on server")
 
         # Pre-cleanup: kill any lingering iperf processes
-        self._kill_iperf(server_node)
+        kill_process(server_node, "iperf3")
         time.sleep(1)
 
         # Start iperf3 server in background
@@ -349,7 +333,7 @@ class TestTwoNodeIperf(BaseTopologyTests):
             )
         finally:
             # Aggressive cleanup
-            self._kill_iperf(server_node)
+            kill_process(server_node, "iperf3")
             time.sleep(0.5)
 
     def test_ipv6_bidirectional_throughput(
@@ -368,7 +352,7 @@ class TestTwoNodeIperf(BaseTopologyTests):
             pytest.skip("IPv6 not configured on server")
 
         # Pre-cleanup: kill any lingering iperf processes
-        self._kill_iperf(server_node)
+        kill_process(server_node, "iperf3")
         time.sleep(1)
 
         # Start iperf3 server in background
@@ -413,5 +397,5 @@ class TestTwoNodeIperf(BaseTopologyTests):
             )
         finally:
             # Aggressive cleanup
-            self._kill_iperf(server_node)
+            kill_process(server_node, "iperf3")
             time.sleep(0.5)
