@@ -25,7 +25,16 @@ def cleanup_leftover_vms(topology):
                     logger.warning(f"Found leftover VM: {node.name}, destroying it")
                     if dom.isActive():
                         dom.destroy()
-                    dom.undefine()
+                    # Use flags to handle managed save images and snapshots
+                    undefine_flags = (
+                        libvirt.VIR_DOMAIN_UNDEFINE_MANAGED_SAVE
+                        | libvirt.VIR_DOMAIN_UNDEFINE_SNAPSHOTS_METADATA
+                    )
+                    try:
+                        dom.undefineFlags(undefine_flags)
+                    except libvirt.libvirtError:
+                        # Fallback to simple undefine if flags not supported
+                        dom.undefine()
                 except libvirt.libvirtError:
                     pass  # VM doesn't exist, good
             conn.close()

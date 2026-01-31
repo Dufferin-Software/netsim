@@ -285,10 +285,18 @@ class LibvirtVM:
                 if state == libvirt.VIR_DOMAIN_RUNNING:
                     return
                 # Undefine to refresh XML for shutoff/crashed domains
+                # Use flags to handle managed save images and snapshots
+                undefine_flags = (
+                    libvirt.VIR_DOMAIN_UNDEFINE_MANAGED_SAVE
+                    | libvirt.VIR_DOMAIN_UNDEFINE_SNAPSHOTS_METADATA
+                )
                 try:
-                    dom.undefine()
+                    dom.undefineFlags(undefine_flags)
                 except libvirt.libvirtError:
-                    pass
+                    try:
+                        dom.undefine()
+                    except libvirt.libvirtError:
+                        pass
 
             # Define and start
             dom = conn.defineXML(xml)
@@ -342,10 +350,19 @@ class LibvirtVM:
                 state, _ = dom.state()
                 if state == libvirt.VIR_DOMAIN_RUNNING:
                     dom.destroy()
+                # Use flags to handle managed save images and snapshots
+                undefine_flags = (
+                    libvirt.VIR_DOMAIN_UNDEFINE_MANAGED_SAVE
+                    | libvirt.VIR_DOMAIN_UNDEFINE_SNAPSHOTS_METADATA
+                )
                 try:
-                    dom.undefine()
+                    dom.undefineFlags(undefine_flags)
                 except libvirt.libvirtError:
-                    pass
+                    # Fallback to simple undefine if flags not supported
+                    try:
+                        dom.undefine()
+                    except libvirt.libvirtError:
+                        pass
 
             # Remove runtime artifacts for this VM (COW disk, XML)
             try:
