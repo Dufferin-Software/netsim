@@ -15,10 +15,18 @@ import subprocess
 import tempfile
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Dict
 import pytest
 import yaml
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_fixed,
+    retry_if_exception_type,
+    before_sleep_log,
+)
 
 from netsim.topology import TopologyParser
 from netsim.simulator import TopologySimulator
@@ -475,30 +483,51 @@ def _apply_netplan_to_node(node_name, ifaces, netplan_yaml, node, mgmt_interface
         logger.info(f"✓ {node_name}: netplan configuration applied")
 
         # Wait for network interfaces to settle, especially IPv6
-        import time
-
         time.sleep(1)
 
-        # Wait for IPv6 to be ready on all configured interfaces
+        # Wait for IPv6 global addresses to be ready (not just link-local)
+        # IPv6 DAD (Duplicate Address Detection) can take 1-2 seconds
         for net_name, iface in ifaces.items():
-            max_retries = 10
-            for attempt in range(max_retries):
-                try:
-                    ipv6_output = node.ssh_command(
-                        f"ip -6 addr show {iface.if_name} | grep 'inet6'",
-                        timeout=5,
-                    )
-                    if ipv6_output and "inet6" in ipv6_output:
-                        logger.debug(f"{node_name} {iface.if_name}: IPv6 ready")
-                        break
-                except Exception:
-                    pass
-                if attempt < max_retries - 1:
-                    time.sleep(0.5)
-                else:
+            expected_ipv6 = iface.ipv6_addr
+            if not expected_ipv6:
+                continue
+
+            # Extract the address part without prefix length for matching
+            expected_ipv6_addr = expected_ipv6.split("/")[0]
+
+            class IPv6NotReady(Exception):
+                """Raised when IPv6 address is not yet ready."""
+
+                pass
+
+            @retry(
+                stop=stop_after_attempt(15),
+                wait=wait_fixed(0.5),
+                retry=retry_if_exception_type(IPv6NotReady),
+                reraise=True,
+            )
+            def wait_for_ipv6_ready():
+                ipv6_output = node.ssh_command(
+                    f"ip -6 addr show {iface.if_name} | grep 'inet6' | grep -v 'fe80'",
+                    timeout=5,
+                )
+                if not ipv6_output or expected_ipv6_addr not in ipv6_output:
+                    raise IPv6NotReady("Address not assigned yet")
+                if "tentative" in ipv6_output:
                     logger.debug(
-                        f"{node_name} {iface.if_name}: IPv6 not ready after {max_retries} attempts"
+                        f"{node_name} {iface.if_name}: IPv6 {expected_ipv6_addr} tentative (DAD in progress)"
                     )
+                    raise IPv6NotReady("Address is tentative")
+                logger.debug(
+                    f"{node_name} {iface.if_name}: IPv6 {expected_ipv6_addr} ready"
+                )
+
+            try:
+                wait_for_ipv6_ready()
+            except IPv6NotReady:
+                logger.warning(
+                    f"{node_name} {iface.if_name}: IPv6 {expected_ipv6_addr} not ready after retries"
+                )
 
         # Clean up temp file
         Path(temp_path).unlink()
@@ -579,6 +608,12 @@ def configure_node_interfaces(node_interfaces, node_allocations, nodes):
         _configure_node,
         [(node_name, ifaces) for node_name, ifaces in node_interfaces.items()],
     )
+
+    # Brief settling time after parallel configuration to ensure all
+    # interfaces are fully ready across all nodes (IPv6 DAD, neighbor discovery, etc.)
+    import time
+
+    time.sleep(2)
 
     logger.info("=" * 60)
     logger.info("✓ All interfaces configured")
@@ -893,20 +928,41 @@ class BaseTopologyTests:
                 source_ipv6 = source_iface.get_ipv6_address()
 
                 if target_ipv6 and source_ipv6:
-                    success, avg_rtt, output = self._ping_and_extract_rtt(
-                        source_node,
-                        str(target_ipv6),
-                        count=1,
-                        ipv6=True,
-                        timeout=15,  # IPv6 may need more time on first call
+
+                    class IPv6PingFailed(Exception):
+                        """Raised when IPv6 ping fails."""
+
+                        def __init__(self, output: str):
+                            self.output = output
+                            super().__init__(output)
+
+                    @retry(
+                        stop=stop_after_attempt(3),
+                        wait=wait_fixed(1.0),
+                        retry=retry_if_exception_type(IPv6PingFailed),
+                        before_sleep=before_sleep_log(logger, logging.DEBUG),
+                        reraise=True,
                     )
-                    if success:
+                    def ping_ipv6():
+                        success, avg_rtt, output = self._ping_and_extract_rtt(
+                            source_node,
+                            str(target_ipv6),
+                            count=1,
+                            ipv6=True,
+                            timeout=15,  # IPv6 may need more time on first call
+                        )
+                        if not success:
+                            raise IPv6PingFailed(output)
+                        return avg_rtt
+
+                    try:
+                        avg_rtt = ping_ipv6()
                         rtt_str = f" ({avg_rtt:.2f}ms)" if avg_rtt else ""
                         logger.info(
                             f"✓ IPv6 Ping {source_node_name} ({source_ipv6}) -> {target_node_name} ({target_ipv6}) on {net_name}{rtt_str}"
                         )
-                    else:
+                    except IPv6PingFailed as e:
                         pytest.fail(
                             f"IPv6 Ping failed: {source_node_name} ({source_ipv6}) -> {target_node_name} ({target_ipv6}) on {net_name}\n"
-                            f"Error: {output}"
+                            f"Error: {e.output}"
                         )
