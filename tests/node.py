@@ -77,6 +77,60 @@ class Node:
 
         return output
 
+    def copy_file(
+        self,
+        local_path: str,
+        remote_path: Optional[str] = None,
+        timeout: int = 60,
+    ) -> str:
+        """
+        Copy a local file to this node using scp.
+
+        Args:
+            local_path: Path to the local file to copy
+            remote_path: Destination path on the remote node.
+                        If None, copies to /tmp/<filename>
+
+        Returns:
+            The remote path where the file was copied
+
+        Raises:
+            subprocess.CalledProcessError: If scp fails
+        """
+        from pathlib import Path
+
+        local_file = Path(local_path)
+        if not local_file.exists():
+            raise FileNotFoundError(f"Local file not found: {local_path}")
+
+        if remote_path is None:
+            remote_path = f"/tmp/{local_file.name}"
+
+        logger.debug(f"[{self.name}] Copying {local_path} → {remote_path}")
+
+        scp_cmd = [
+            "scp",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            "-P",
+            str(self.ssh_port),
+            str(local_path),
+            f"netsim@localhost:{remote_path}",
+        ]
+
+        subprocess.run(
+            scp_cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=True,
+        )
+
+        logger.debug(f"[{self.name}] ✓ Copied to {remote_path}")
+        return remote_path
+
     def add_interface(self, interface: "NodeInterface") -> None:
         """Add an interface to this node."""
         self.interfaces[interface.if_name] = interface

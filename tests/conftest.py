@@ -156,6 +156,35 @@ def pytest_addoption(parser):
         default=False,
         help="Keep topology running and pause for debugging when tests fail",
     )
+    parser.addoption(
+        "--install-packages",
+        action="store",
+        default=None,
+        help="Comma-separated list of paths to debian packages to install on all nodes",
+    )
+
+
+def pytest_configure(config):
+    """Validate configuration before tests run (before VMs are started)."""
+    packages_opt = config.getoption("--install-packages", default=None)
+    if not packages_opt:
+        return
+
+    # Parse comma-separated package paths
+    package_paths = [p.strip() for p in packages_opt.split(",") if p.strip()]
+    if not package_paths:
+        return
+
+    # Validate all package paths exist before spinning up VMs
+    errors = []
+    for pkg_path in package_paths:
+        if not Path(pkg_path).exists():
+            errors.append(f"Package file not found: {pkg_path}")
+        elif not pkg_path.endswith(".deb"):
+            errors.append(f"Package must be a .deb file: {pkg_path}")
+
+    if errors:
+        raise pytest.UsageError("\n".join(errors))
 
 
 def pytest_runtest_makereport(item, call):
@@ -549,11 +578,14 @@ def _apply_netplan_to_node(node_name, ifaces, netplan_yaml, node, mgmt_interface
 
 
 @pytest.fixture(scope="module")
-def configure_node_interfaces(node_interfaces, node_allocations, nodes):
+def configure_node_interfaces(
+    node_interfaces, node_allocations, nodes, install_user_packages
+):
     """
     Fixture that configures all node interfaces with netplan in parallel.
 
     Depends on node_interfaces (which depends on running_topology).
+    Also depends on install_user_packages to ensure user packages are installed before configuration.
 
     Usage in tests:
         def test_example(configure_node_interfaces):
@@ -654,6 +686,85 @@ def nodes(topology) -> Dict[str, Node]:
         )
         node_objects[topo_node.name] = node
     return node_objects
+
+
+@pytest.fixture(scope="module")
+def install_user_packages(nodes, request):
+    """
+    Install debian packages on all nodes if --install-packages is specified.
+
+    Packages are copied to each node and installed with dpkg.
+    Fails the test if any package installation fails.
+
+    Usage:
+        pytest --install-packages=/path/to/pkg1.deb,/path/to/pkg2.deb tests/
+    """
+    packages_opt = request.config.getoption("--install-packages")
+    if not packages_opt:
+        logger.debug("No packages to install (--install-packages not specified)")
+        return
+
+    # Parse comma-separated package paths
+    package_paths = [p.strip() for p in packages_opt.split(",") if p.strip()]
+    if not package_paths:
+        return
+
+    logger.info("=" * 60)
+    logger.info(f"Installing {len(package_paths)} package(s) on all nodes")
+    logger.info("=" * 60)
+
+    # Package paths already validated in pytest_configure
+
+    def _install_packages_on_node(node_name, node):
+        """Install all packages on a single node."""
+        for pkg_path in package_paths:
+            pkg_name = Path(pkg_path).name
+
+            logger.info(f"  [{node_name}] Copying {pkg_name}...")
+
+            # Copy package to node
+            try:
+                remote_path = node.copy_file(pkg_path)
+            except FileNotFoundError as e:
+                pytest.fail(str(e))
+            except subprocess.CalledProcessError as e:
+                error_msg = e.stderr if e.stderr else "Unknown error"
+                pytest.fail(f"Failed to copy {pkg_name} to {node_name}: {error_msg}")
+
+            logger.info(f"  [{node_name}] Installing {pkg_name}...")
+
+            # Install package with dpkg
+            install_output = node.ssh_command(
+                f"sudo dpkg -i {remote_path} 2>&1",
+                timeout=120,
+            )
+            logger.debug(f"  [{node_name}] dpkg output: {install_output}")
+
+            # Check if installation succeeded by verifying exit code
+            # dpkg -i returns 0 on success
+            check_output = node.ssh_command(
+                f"dpkg -s $(dpkg-deb -f {remote_path} Package) 2>&1 | grep -q 'Status: install ok installed' && echo SUCCESS || echo FAILED",
+                timeout=30,
+            )
+            if "SUCCESS" not in check_output:
+                pytest.fail(
+                    f"Failed to install {pkg_name} on {node_name}. Output: {install_output}"
+                )
+
+            logger.info(f"  [{node_name}] ✓ {pkg_name} installed successfully")
+
+            # Clean up the package file
+            node.ssh_command(f"rm -f {remote_path}")
+
+    # Install packages on all nodes in parallel
+    run_parallel_simple(
+        _install_packages_on_node,
+        [(node_name, node) for node_name, node in nodes.items()],
+    )
+
+    logger.info("=" * 60)
+    logger.info("✓ All packages installed on all nodes")
+    logger.info("=" * 60)
 
 
 def _discover_interface_names(node_name, node):
