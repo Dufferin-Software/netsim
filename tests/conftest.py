@@ -138,8 +138,14 @@ def _pause_for_debugging(topology, request):
     logger.info("Press ENTER to tear down topology and continue...")
     logger.info("=" * 60)
     try:
-        input()
-    except (EOFError, KeyboardInterrupt):
+        # Check if stdin is available (not captured by pytest)
+        import sys
+
+        if sys.stdin.isatty():
+            input()
+        else:
+            logger.warning("stdin not available (pytest capturing?), skipping pause")
+    except (EOFError, KeyboardInterrupt, OSError):
         logger.info("Proceeding with teardown...")
 
 
