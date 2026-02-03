@@ -11,10 +11,15 @@ Tests basic features:
 - Various prefix lengths
 - IPv4 and IPv6 support
 - Negative tests for error handling
+
+Tests are parameterized to run against both:
+- CLI client (policy-client binary)
+- GraphQL API (direct HTTP requests)
 """
 
 import logging
 import time
+from typing import Union
 
 import netaddr
 import pytest
@@ -28,6 +33,7 @@ from tests.policy_client import (
     Protocol,
     XdpMode,
 )
+from tests.graphql_policy_client import GraphQLPolicyClient
 from tests.nping_utils import (
     send_icmp_with_type,
     send_ping,
@@ -36,6 +42,9 @@ from tests.nping_utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Type alias for either client type
+AnyPolicyClient = Union[PolicyClient, GraphQLPolicyClient]
 
 
 # ============================================================================
@@ -85,11 +94,45 @@ def nmap_installed(nodes, install_packages):
     yield
 
 
+# ============================================================================
+# Client type parameterization
+# ============================================================================
+
+
+@pytest.fixture(scope="module", params=["cli", "graphql"], ids=["cli", "graphql"])
+def client_type(request):
+    """Parameterized fixture for client type."""
+    return request.param
+
+
 @pytest.fixture(scope="module")
-def policy_client(nodes, policy_engine_service):
-    """Create a PolicyClient instance for the server."""
+def cli_policy_client(nodes, policy_engine_service):
+    """Create a CLI PolicyClient instance for the server."""
     server = nodes["server"]
     return PolicyClient(server)
+
+
+@pytest.fixture(scope="module")
+def graphql_policy_client(nodes, policy_engine_service):
+    """Create a GraphQL PolicyClient instance for the server."""
+    server = nodes["server"]
+    return GraphQLPolicyClient(server)
+
+
+@pytest.fixture(scope="module")
+def policy_client(
+    client_type, cli_policy_client, graphql_policy_client
+) -> AnyPolicyClient:
+    """
+    Parameterized policy client fixture.
+
+    Returns either the CLI client or GraphQL client based on client_type parameter.
+    Tests using this fixture will run twice: once with CLI, once with GraphQL.
+    """
+    if client_type == "cli":
+        return cli_policy_client
+    else:
+        return graphql_policy_client
 
 
 @pytest.fixture(scope="module")
@@ -1626,19 +1669,20 @@ class TestTrafficMatchingNegative:
     ):
         """Test that a rule for a different network doesn't match."""
         client = nodes["client"]
+        rule_id = 770001  # Unique ID for this test
 
         # Add a drop rule for a completely different network (TEST-NET-1)
         options = AddRuleOptions(
             src="192.0.2.0/24",  # TEST-NET-1, won't match client
             protocol="icmp",
             actions=[("drop", 0)],
+            rule_id=rule_id,
         )
         result = policy_client.add_rule(options)
         assert result.success
 
-        # Get stats BEFORE
-        initial_stats = policy_client.get_stats(attached_xdp)
-        initial_drops = initial_stats.global_stats.policy_drops
+        # Clear rule stats for deterministic measurement
+        policy_client.clear_rule_stats(rule_id)
 
         # Send ICMP - should pass (rule doesn't match)
         packets_to_send = 5
@@ -1649,12 +1693,16 @@ class TestTrafficMatchingNegative:
             interface=client_interface.if_name,
         )
 
-        # Get stats AFTER
-        final_stats = policy_client.get_stats(attached_xdp)
-        drops_delta = final_stats.global_stats.policy_drops - initial_drops
+        # Check the specific rule's stats - should have 0 matches
+        rule_stats = policy_client.get_rule_stats(rule_id)
+        rule_packets = 0
+        for rws in rule_stats.rules:
+            if rws.rule.rule_id == rule_id and rws.stats:
+                rule_packets = rws.stats.packets
+                break
 
-        logger.info(f"Non-matching rule: drops={drops_delta}, expected=0")
-        assert drops_delta == 0, "Rule should not have matched"
+        logger.info(f"Non-matching rule: rule_packets={rule_packets}, expected=0")
+        assert rule_packets == 0, "Rule should not have matched any packets"
         assert result.packets_received > 0, "Packets should have passed"
 
     def test_rule_does_not_match_different_protocol(
@@ -1670,19 +1718,20 @@ class TestTrafficMatchingNegative:
     ):
         """Test that a TCP rule doesn't match ICMP traffic."""
         client = nodes["client"]
+        rule_id = 770002  # Unique ID for this test
 
         # Add a drop rule for TCP only
         options = AddRuleOptions(
             src=client_network_v4,
             protocol="tcp",
             actions=[("drop", 0)],
+            rule_id=rule_id,
         )
         result = policy_client.add_rule(options)
         assert result.success
 
-        # Get stats BEFORE
-        initial_stats = policy_client.get_stats(attached_xdp)
-        initial_drops = initial_stats.global_stats.policy_drops
+        # Clear rule stats for deterministic measurement
+        policy_client.clear_rule_stats(rule_id)
 
         # Send ICMP - should pass (rule is for TCP)
         packets_to_send = 5
@@ -1693,12 +1742,18 @@ class TestTrafficMatchingNegative:
             interface=client_interface.if_name,
         )
 
-        # Get stats AFTER
-        final_stats = policy_client.get_stats(attached_xdp)
-        drops_delta = final_stats.global_stats.policy_drops - initial_drops
+        # Check the specific rule's stats - should have 0 matches
+        rule_stats = policy_client.get_rule_stats(rule_id)
+        rule_packets = 0
+        for rws in rule_stats.rules:
+            if rws.rule.rule_id == rule_id and rws.stats:
+                rule_packets = rws.stats.packets
+                break
 
-        logger.info(f"TCP rule vs ICMP traffic: drops={drops_delta}, expected=0")
-        assert drops_delta == 0, "TCP rule should not match ICMP traffic"
+        logger.info(
+            f"TCP rule vs ICMP traffic: rule_packets={rule_packets}, expected=0"
+        )
+        assert rule_packets == 0, "TCP rule should not match ICMP traffic"
         assert result.packets_received > 0, "ICMP should have passed"
 
     def test_rule_does_not_match_different_port(
@@ -1714,6 +1769,7 @@ class TestTrafficMatchingNegative:
     ):
         """Test that a rule for port 80 doesn't match traffic to port 443."""
         client = nodes["client"]
+        rule_id = 770003  # Unique ID for this test
 
         # Add a drop rule for TCP port 80
         options = AddRuleOptions(
@@ -1721,13 +1777,13 @@ class TestTrafficMatchingNegative:
             protocol="tcp",
             dport=80,
             actions=[("drop", 0)],
+            rule_id=rule_id,
         )
         result = policy_client.add_rule(options)
         assert result.success
 
-        # Get stats BEFORE
-        initial_stats = policy_client.get_stats(attached_xdp)
-        initial_drops = initial_stats.global_stats.policy_drops
+        # Clear rule stats for deterministic measurement
+        policy_client.clear_rule_stats(rule_id)
 
         # Send TCP to port 443 - should pass
         packets_to_send = 5
@@ -1739,14 +1795,18 @@ class TestTrafficMatchingNegative:
             interface=client_interface.if_name,
         )
 
-        # Get stats AFTER
-        final_stats = policy_client.get_stats(attached_xdp)
-        drops_delta = final_stats.global_stats.policy_drops - initial_drops
+        # Check the specific rule's stats - should have 0 matches
+        rule_stats = policy_client.get_rule_stats(rule_id)
+        rule_packets = 0
+        for rws in rule_stats.rules:
+            if rws.rule.rule_id == rule_id and rws.stats:
+                rule_packets = rws.stats.packets
+                break
 
         logger.info(
-            f"Port 80 rule vs port 443 traffic: drops={drops_delta}, expected=0"
+            f"Port 80 rule vs port 443 traffic: rule_packets={rule_packets}, expected=0"
         )
-        assert drops_delta == 0, "Port 80 rule should not match port 443 traffic"
+        assert rule_packets == 0, "Port 80 rule should not match port 443 traffic"
 
     def test_ipv4_rule_does_not_match_ipv6_traffic(
         self,
@@ -1760,19 +1820,20 @@ class TestTrafficMatchingNegative:
     ):
         """Test that an IPv4 rule doesn't match IPv6 traffic."""
         client = nodes["client"]
+        rule_id = 770004  # Unique ID for this test
 
         # Add a drop rule for IPv4 network
         options = AddRuleOptions(
             src="10.0.0.0/8",
             protocol="icmp",
             actions=[("drop", 0)],
+            rule_id=rule_id,
         )
         result = policy_client.add_rule(options)
         assert result.success
 
-        # Get stats BEFORE
-        initial_stats = policy_client.get_stats(attached_xdp)
-        initial_drops = initial_stats.global_stats.policy_drops
+        # Clear rule stats for deterministic measurement
+        policy_client.clear_rule_stats(rule_id)
 
         # Send ICMPv6 - should pass (rule is IPv4)
         packets_to_send = 5
@@ -1783,12 +1844,18 @@ class TestTrafficMatchingNegative:
             interface=client_interface.if_name,
         )
 
-        # Get stats AFTER
-        final_stats = policy_client.get_stats(attached_xdp)
-        drops_delta = final_stats.global_stats.policy_drops - initial_drops
+        # Check the specific rule's stats - should have 0 matches
+        rule_stats = policy_client.get_rule_stats(rule_id)
+        rule_packets = 0
+        for rws in rule_stats.rules:
+            if rws.rule.rule_id == rule_id and rws.stats:
+                rule_packets = rws.stats.packets
+                break
 
-        logger.info(f"IPv4 rule vs IPv6 traffic: drops={drops_delta}, expected=0")
-        assert drops_delta == 0, "IPv4 rule should not match IPv6 traffic"
+        logger.info(
+            f"IPv4 rule vs IPv6 traffic: rule_packets={rule_packets}, expected=0"
+        )
+        assert rule_packets == 0, "IPv4 rule should not match IPv6 traffic"
 
     def test_ipv6_rule_does_not_match_ipv4_traffic(
         self,
@@ -1802,6 +1869,7 @@ class TestTrafficMatchingNegative:
     ):
         """Test that an IPv6 rule doesn't match IPv4 traffic."""
         client = nodes["client"]
+        rule_id = 770005  # Unique ID for this test
 
         # Add a drop rule for IPv6 network
         options = AddRuleOptions(
@@ -1809,28 +1877,47 @@ class TestTrafficMatchingNegative:
             dst="::/0",
             protocol="icmp",
             actions=[("drop", 0)],
+            rule_id=rule_id,
         )
         result = policy_client.add_rule(options)
         assert result.success
 
-        # Clear stats for deterministic measurement
-        policy_client.clear_interface_stats(attached_xdp)
+        # Get rule stats BEFORE sending traffic (use delta, not absolute after clear)
+        initial_stats = policy_client.get_rule_stats(rule_id)
+        initial_packets = 0
+        for rws in initial_stats.rules:
+            if rws.rule.rule_id == rule_id and rws.stats:
+                initial_packets = rws.stats.packets
+                break
 
         # Send ICMP over IPv4 - should pass (rule is IPv6)
         packets_to_send = 5
-        result = send_ping(
+        ping_result = send_ping(
             client,
             server_ip_v4,
             count=packets_to_send,
             interface=client_interface.if_name,
         )
 
-        # Get stats AFTER
-        final_stats = policy_client.get_stats(attached_xdp)
-        drops = final_stats.global_stats.policy_drops
+        # Verify ping succeeded - this proves traffic passed through
+        assert ping_result.packets_received > 0, (
+            "IPv4 ping should succeed (rule is IPv6)"
+        )
 
-        logger.info(f"IPv6 rule vs IPv4 traffic: drops={drops}, expected=0")
-        assert drops == 0, "IPv6 rule should not match IPv4 traffic"
+        # Check the specific rule's stats - delta should be 0
+        final_stats = policy_client.get_rule_stats(rule_id)
+        final_packets = 0
+        for rws in final_stats.rules:
+            if rws.rule.rule_id == rule_id and rws.stats:
+                final_packets = rws.stats.packets
+                break
+
+        packets_delta = final_packets - initial_packets
+        logger.info(
+            f"IPv6 rule vs IPv4 traffic: initial={initial_packets}, "
+            f"final={final_packets}, delta={packets_delta}, expected=0"
+        )
+        assert packets_delta == 0, "IPv6 rule should not match IPv4 traffic"
 
     def test_udp_rule_does_not_match_tcp_traffic(
         self,
@@ -1845,6 +1932,7 @@ class TestTrafficMatchingNegative:
     ):
         """Test that a UDP rule doesn't match TCP traffic."""
         client = nodes["client"]
+        rule_id = 770006  # Unique ID for this test
 
         # Add a drop rule for UDP
         options = AddRuleOptions(
@@ -1852,12 +1940,13 @@ class TestTrafficMatchingNegative:
             protocol="udp",
             dport=8080,
             actions=[("drop", 0)],
+            rule_id=rule_id,
         )
         result = policy_client.add_rule(options)
         assert result.success
 
-        # Clear stats for deterministic measurement
-        policy_client.clear_interface_stats(attached_xdp)
+        # Clear rule stats for deterministic measurement
+        policy_client.clear_rule_stats(rule_id)
 
         # Send TCP to same port - should pass (rule is for UDP)
         packets_to_send = 5
@@ -1869,12 +1958,16 @@ class TestTrafficMatchingNegative:
             interface=client_interface.if_name,
         )
 
-        # Get stats AFTER
-        final_stats = policy_client.get_stats(attached_xdp)
-        drops = final_stats.global_stats.policy_drops
+        # Check the specific rule's stats - should have 0 matches
+        rule_stats = policy_client.get_rule_stats(rule_id)
+        rule_packets = 0
+        for rws in rule_stats.rules:
+            if rws.rule.rule_id == rule_id and rws.stats:
+                rule_packets = rws.stats.packets
+                break
 
-        logger.info(f"UDP rule vs TCP traffic: drops={drops}, expected=0")
-        assert drops == 0, "UDP rule should not match TCP traffic"
+        logger.info(f"UDP rule vs TCP traffic: rule_packets={rule_packets}, expected=0")
+        assert rule_packets == 0, "UDP rule should not match TCP traffic"
 
     def test_source_port_rule_does_not_match_wrong_sport(
         self,
@@ -1889,6 +1982,7 @@ class TestTrafficMatchingNegative:
     ):
         """Test that a rule for source port 12345 doesn't match traffic from port 54321."""
         client = nodes["client"]
+        rule_id = 770007  # Unique ID for this test
 
         # Add a drop rule for traffic FROM source port 12345
         options = AddRuleOptions(
@@ -1896,11 +1990,12 @@ class TestTrafficMatchingNegative:
             protocol="tcp",
             sport=12345,
             actions=[("drop", 0)],
+            rule_id=rule_id,
         )
         policy_client.add_rule(options)
 
-        # Clear stats for deterministic measurement
-        policy_client.clear_interface_stats(attached_xdp)
+        # Clear rule stats for deterministic measurement
+        policy_client.clear_rule_stats(rule_id)
 
         # Send TCP from different source port - should pass
         packets_to_send = 5
@@ -1913,9 +2008,15 @@ class TestTrafficMatchingNegative:
             interface=client_interface.if_name,
         )
 
-        # Get stats AFTER
-        final_stats = policy_client.get_stats(attached_xdp)
-        drops = final_stats.global_stats.policy_drops
+        # Check the specific rule's stats - should have 0 matches
+        rule_stats = policy_client.get_rule_stats(rule_id)
+        rule_packets = 0
+        for rws in rule_stats.rules:
+            if rws.rule.rule_id == rule_id and rws.stats:
+                rule_packets = rws.stats.packets
+                break
 
-        logger.info(f"Sport 12345 rule vs sport 54321: drops={drops}, expected=0")
-        assert drops == 0, "Source port rule should not match wrong source port"
+        logger.info(
+            f"Sport 12345 rule vs sport 54321: rule_packets={rule_packets}, expected=0"
+        )
+        assert rule_packets == 0, "Source port rule should not match wrong source port"
