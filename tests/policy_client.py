@@ -1,0 +1,727 @@
+# Copyright (c) Dufferin Software
+
+"""
+Policy Engine client wrapper for test infrastructure.
+
+Provides typed Python objects that mirror the policy-client JSON output.
+All interactions with the policy-engine are done via the policy-client CLI.
+"""
+
+import json
+import logging
+import subprocess
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import List, Optional
+
+from tests.node import Node
+
+logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# Enums matching the Rust GraphQL types
+# ============================================================================
+
+
+class PolicyAction(str, Enum):
+    """Policy action enum matching GqlPolicyAction."""
+
+    PASS = "Pass"
+    DROP = "Drop"
+    LOG = "Log"
+    NAT = "Nat"
+    TAIL_CALL = "TailCall"
+
+    @classmethod
+    def from_string(cls, value: str) -> "PolicyAction":
+        """Convert string to PolicyAction enum (case-insensitive)."""
+        value_lower = value.lower()
+        mapping = {
+            "pass": cls.PASS,
+            "drop": cls.DROP,
+            "log": cls.LOG,
+            "nat": cls.NAT,
+            "tailcall": cls.TAIL_CALL,
+            "tail_call": cls.TAIL_CALL,
+        }
+        if value_lower in mapping:
+            return mapping[value_lower]
+        raise ValueError(f"Unknown PolicyAction: {value}")
+
+
+class Protocol(str, Enum):
+    """Protocol enum matching GqlProtocol."""
+
+    ANY = "Any"
+    TCP = "Tcp"
+    UDP = "Udp"
+    ICMP = "Icmp"
+
+    @classmethod
+    def from_string(cls, value: str) -> "Protocol":
+        """Convert string to Protocol enum (case-insensitive)."""
+        value_lower = value.lower()
+        mapping = {
+            "any": cls.ANY,
+            "tcp": cls.TCP,
+            "udp": cls.UDP,
+            "icmp": cls.ICMP,
+        }
+        if value_lower in mapping:
+            return mapping[value_lower]
+        raise ValueError(f"Unknown Protocol: {value}")
+
+
+class XdpMode(str, Enum):
+    """XDP attach mode."""
+
+    AUTO = "auto"
+    NATIVE = "native"
+    GENERIC = "generic"
+    OFFLOAD = "offload"
+
+
+# ============================================================================
+# Data classes matching the Rust JSON output structures
+# ============================================================================
+
+
+@dataclass
+class OperationResult:
+    """Result of a policy-client operation."""
+
+    success: bool
+    message: str
+
+    @classmethod
+    def from_json(cls, data: dict) -> "OperationResult":
+        return cls(
+            success=data.get("success", False),
+            message=data.get("message", ""),
+        )
+
+
+@dataclass
+class ServerStatus:
+    """Server status output."""
+
+    running: bool
+    version: str
+    uptime_secs: int
+    program_attached: bool
+
+    @classmethod
+    def from_json(cls, data: dict) -> "ServerStatus":
+        return cls(
+            running=data.get("running", False),
+            version=data.get("version", ""),
+            uptime_secs=data.get("uptimeSecs", 0),
+            program_attached=data.get("programAttached", False),
+        )
+
+
+@dataclass
+class InterfaceAttachment:
+    """XDP interface attachment info."""
+
+    interface: str
+    ifindex: int
+    mode: str
+
+    @classmethod
+    def from_json(cls, data: dict) -> "InterfaceAttachment":
+        return cls(
+            interface=data.get("interface", ""),
+            ifindex=data.get("ifindex", 0),
+            mode=data.get("mode", ""),
+        )
+
+
+@dataclass
+class RuleAction:
+    """Rule action with priority."""
+
+    action: PolicyAction
+    priority: int
+
+    @classmethod
+    def from_json(cls, data: dict) -> "RuleAction":
+        action_str = data.get("action", "Pass")
+        return cls(
+            action=PolicyAction.from_string(action_str),
+            priority=data.get("priority", 0),
+        )
+
+
+@dataclass
+class LpmRule:
+    """LPM rule output (IPv4 or IPv6)."""
+
+    rule_id: int
+    src_prefix: str
+    dst_prefix: str
+    sport: int
+    dport: int
+    protocol: Protocol
+    priority: int
+    actions: List[RuleAction]
+
+    @classmethod
+    def from_json(cls, data: dict) -> "LpmRule":
+        protocol_str = data.get("protocol", "Any")
+        actions_data = data.get("actions", [])
+        return cls(
+            rule_id=data.get("ruleId", 0),
+            src_prefix=data.get("srcPrefix", "0.0.0.0/0"),
+            dst_prefix=data.get("dstPrefix", "0.0.0.0/0"),
+            sport=data.get("sport", 0),
+            dport=data.get("dport", 0),
+            protocol=Protocol.from_string(protocol_str),
+            priority=data.get("priority", 1000),
+            actions=[RuleAction.from_json(a) for a in actions_data],
+        )
+
+    @property
+    def is_ipv6(self) -> bool:
+        """Check if this is an IPv6 rule based on prefix format."""
+        return ":" in self.src_prefix
+
+
+@dataclass
+class RuleStats:
+    """Statistics for a rule."""
+
+    packets: int
+    bytes: int
+    last_seen_ns: int
+
+    @classmethod
+    def from_json(cls, data: dict) -> "RuleStats":
+        return cls(
+            packets=data.get("packets", 0),
+            bytes=data.get("bytes", 0),
+            last_seen_ns=data.get("lastSeenNs", 0),
+        )
+
+
+@dataclass
+class RuleWithStats:
+    """Rule with its statistics."""
+
+    rule: LpmRule
+    stats: Optional[RuleStats]
+
+    @classmethod
+    def from_json(cls, data: dict) -> "RuleWithStats":
+        rule_data = data.get("rule", {})
+        stats_data = data.get("stats")
+        return cls(
+            rule=LpmRule.from_json(rule_data),
+            stats=RuleStats.from_json(stats_data) if stats_data else None,
+        )
+
+
+@dataclass
+class GlobalStats:
+    """Global statistics output."""
+
+    rx_packets: int
+    rx_bytes: int
+    tx_packets: int
+    tx_bytes: int
+    policy_matches: int
+    policy_drops: int
+    policy_pass: int
+    policy_redirects: int
+    parse_errors: int
+    tail_calls: int
+    bum_packets: int
+    non_ip_unicast: int
+
+    @classmethod
+    def from_json(cls, data: dict) -> "GlobalStats":
+        return cls(
+            rx_packets=data.get("rxPackets", 0),
+            rx_bytes=data.get("rxBytes", 0),
+            tx_packets=data.get("txPackets", 0),
+            tx_bytes=data.get("txBytes", 0),
+            policy_matches=data.get("policyMatches", 0),
+            policy_drops=data.get("policyDrops", 0),
+            policy_pass=data.get("policyPass", 0),
+            policy_redirects=data.get("policyRedirects", 0),
+            parse_errors=data.get("parseErrors", 0),
+            tail_calls=data.get("tailCalls", 0),
+            bum_packets=data.get("bumPackets", 0),
+            non_ip_unicast=data.get("nonIpUnicast", 0),
+        )
+
+
+@dataclass
+class EthertypeStats:
+    """Ethertype statistics."""
+
+    ethertype: int
+    ethertype_hex: str
+    name: str
+    packets: int
+
+    @classmethod
+    def from_json(cls, data: dict) -> "EthertypeStats":
+        return cls(
+            ethertype=data.get("ethertype", 0),
+            ethertype_hex=data.get("ethertypeHex", ""),
+            name=data.get("name", ""),
+            packets=data.get("packets", 0),
+        )
+
+
+@dataclass
+class InterfaceStats:
+    """Combined stats response for an interface."""
+
+    interface: str
+    program_attached: bool
+    global_stats: GlobalStats
+    ethertype_stats: List[EthertypeStats]
+
+    @classmethod
+    def from_json(cls, data: dict) -> "InterfaceStats":
+        return cls(
+            interface=data.get("interface", ""),
+            program_attached=data.get("programAttached", False),
+            global_stats=GlobalStats.from_json(data.get("globalStats", {})),
+            ethertype_stats=[
+                EthertypeStats.from_json(e) for e in data.get("ethertypeStats", [])
+            ],
+        )
+
+
+@dataclass
+class RuleStatsResponse:
+    """Response for rule stats query."""
+
+    program_attached: bool
+    rules: List[RuleWithStats]
+
+    @classmethod
+    def from_json(cls, data: dict) -> "RuleStatsResponse":
+        return cls(
+            program_attached=data.get("programAttached", False),
+            rules=[RuleWithStats.from_json(r) for r in data.get("rules", [])],
+        )
+
+
+# ============================================================================
+# Policy Client class
+# ============================================================================
+
+
+@dataclass
+class AddRuleOptions:
+    """Options for adding a rule."""
+
+    src: Optional[str] = None
+    dst: Optional[str] = None
+    sport: int = 0
+    dport: int = 0
+    protocol: str = "any"
+    actions: List[tuple[str, int]] = field(default_factory=list)  # [(action, priority)]
+    rule_id: Optional[int] = None
+    priority: int = 1000
+
+
+class PolicyClient:
+    """
+    Wrapper for the policy-client CLI.
+
+    Executes policy-client commands on a remote node via SSH and parses JSON output.
+    """
+
+    def __init__(self, node: Node, server_url: str = "http://127.0.0.1:8080/graphql"):
+        """
+        Initialize the policy client wrapper.
+
+        Args:
+            node: Node where policy-engine is running
+            server_url: URL of the policy-engine GraphQL server
+        """
+        self.node = node
+        self.server_url = server_url
+
+    def _run_command(self, args: List[str], timeout: int = 30) -> str:
+        """
+        Run a policy-client command and return JSON output.
+
+        Args:
+            args: Command arguments (after 'policy-client')
+            timeout: Command timeout in seconds
+
+        Returns:
+            Raw JSON output string
+
+        Raises:
+            subprocess.CalledProcessError: If command fails without JSON output
+        """
+        cmd_parts = ["policy-client", "--json", f"--server={self.server_url}"] + args
+        cmd = " ".join(cmd_parts)
+        logger.debug(f"[{self.node.name}] Running: {cmd}")
+
+        try:
+            output = self.node.ssh_command(cmd, timeout=timeout)
+            return output
+        except subprocess.CalledProcessError as e:
+            # Check if we got JSON output despite the error (e.g., validation errors)
+            # The policy-client returns exit code 2 for clap errors but still outputs JSON
+            # CalledProcessError has 'output' (alias for stdout) when capture_output=True
+            stdout = e.output or e.stdout or ""
+            if stdout and stdout.strip():
+                try:
+                    # Verify it's valid JSON before returning
+                    json.loads(stdout.strip())
+                    logger.debug(
+                        f"[{self.node.name}] Command failed with exit {e.returncode} but returned JSON"
+                    )
+                    return stdout.strip()
+                except json.JSONDecodeError:
+                    pass
+            # Re-raise if we didn't get valid JSON output
+            raise
+
+    def _run_command_json(self, args: List[str], timeout: int = 30) -> dict:
+        """Run command and parse JSON output."""
+        output = self._run_command(args, timeout)
+        try:
+            return json.loads(output)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse JSON output: {output}")
+            raise ValueError(f"Invalid JSON from policy-client: {e}") from e
+
+    # ========================================================================
+    # Status commands
+    # ========================================================================
+
+    def status(self) -> ServerStatus:
+        """Get server status."""
+        data = self._run_command_json(["status"])
+        return ServerStatus.from_json(data)
+
+    # ========================================================================
+    # Attach/Detach commands
+    # ========================================================================
+
+    def attach_xdp(
+        self, interface: str, mode: XdpMode = XdpMode.AUTO
+    ) -> OperationResult:
+        """
+        Attach XDP program to an interface.
+
+        Args:
+            interface: Interface name
+            mode: XDP attach mode
+
+        Returns:
+            OperationResult indicating success/failure
+        """
+        data = self._run_command_json(
+            ["attach", "xdp", "--interface", interface, "--mode", mode.value]
+        )
+        return OperationResult.from_json(data)
+
+    def detach_xdp(self, interface: str) -> OperationResult:
+        """
+        Detach XDP program from an interface.
+
+        Args:
+            interface: Interface name
+
+        Returns:
+            OperationResult indicating success/failure
+        """
+        data = self._run_command_json(["detach", "xdp", "--interface", interface])
+        return OperationResult.from_json(data)
+
+    def detach_all(self) -> OperationResult:
+        """
+        Detach all XDP programs.
+
+        Returns:
+            OperationResult indicating success/failure
+        """
+        data = self._run_command_json(["detach", "all"])
+        return OperationResult.from_json(data)
+
+    # ========================================================================
+    # Rule commands
+    # ========================================================================
+
+    def add_rule(self, options: AddRuleOptions) -> OperationResult:
+        """
+        Add a policy rule.
+
+        Args:
+            options: Rule configuration options
+
+        Returns:
+            OperationResult indicating success/failure
+        """
+        args = ["rule", "add"]
+
+        if options.src:
+            args.extend(["--src", options.src])
+        if options.dst:
+            args.extend(["--dst", options.dst])
+        if options.sport:
+            args.extend(["--sport", str(options.sport)])
+        if options.dport:
+            args.extend(["--dport", str(options.dport)])
+        if options.protocol:
+            args.extend(["--proto", options.protocol])
+        if options.rule_id is not None:
+            args.extend(["--id", str(options.rule_id)])
+        if options.priority:
+            args.extend(["--priority", str(options.priority)])
+
+        # Add actions
+        for action, priority in options.actions:
+            args.extend(["--action", f"{action}:{priority}"])
+
+        data = self._run_command_json(args)
+        return OperationResult.from_json(data)
+
+    def delete_rule(
+        self,
+        rule_id: Optional[int] = None,
+        src: Optional[str] = None,
+        dst: Optional[str] = None,
+        sport: Optional[int] = None,
+        dport: Optional[int] = None,
+        protocol: Optional[str] = None,
+    ) -> OperationResult:
+        """
+        Delete a policy rule.
+
+        Args:
+            rule_id: Rule ID to delete
+            src: Source prefix (alternative to id)
+            dst: Destination prefix
+            sport: Source port
+            dport: Destination port
+            protocol: Protocol
+
+        Returns:
+            OperationResult indicating success/failure
+        """
+        args = ["rule", "delete"]
+
+        if rule_id is not None:
+            args.extend(["--id", str(rule_id)])
+        if src:
+            args.extend(["--src", src])
+        if dst:
+            args.extend(["--dst", dst])
+        if sport is not None:
+            args.extend(["--sport", str(sport)])
+        if dport is not None:
+            args.extend(["--dport", str(dport)])
+        if protocol:
+            args.extend(["--proto", protocol])
+
+        data = self._run_command_json(args)
+        return OperationResult.from_json(data)
+
+    def list_rules(self) -> List[LpmRule]:
+        """
+        List all policy rules.
+
+        Returns:
+            List of LpmRule objects
+        """
+        data = self._run_command_json(["rule", "list"])
+        if isinstance(data, list):
+            return [LpmRule.from_json(r) for r in data]
+        return []
+
+    def flush_rules(self) -> OperationResult:
+        """
+        Flush all policy rules.
+
+        Returns:
+            OperationResult indicating success/failure
+        """
+        data = self._run_command_json(["rule", "flush"])
+        return OperationResult.from_json(data)
+
+    # ========================================================================
+    # Show commands
+    # ========================================================================
+
+    def list_interfaces(self) -> List[InterfaceAttachment]:
+        """
+        List attached interfaces.
+
+        Returns:
+            List of InterfaceAttachment objects
+        """
+        data = self._run_command_json(["show", "interfaces"])
+        if isinstance(data, list):
+            return [InterfaceAttachment.from_json(i) for i in data]
+        return []
+
+    def get_stats(self, interface: str) -> InterfaceStats:
+        """
+        Get statistics for an interface.
+
+        Args:
+            interface: Interface name
+
+        Returns:
+            InterfaceStats object
+        """
+        data = self._run_command_json(["show", "stats", "--interface", interface])
+        return InterfaceStats.from_json(data)
+
+    def get_rule_stats(self, rule_id: Optional[int] = None) -> RuleStatsResponse:
+        """
+        Get rule statistics.
+
+        Args:
+            rule_id: Optional rule ID (all rules if not specified)
+
+        Returns:
+            RuleStatsResponse object
+        """
+        args = ["show", "rule-stats"]
+        if rule_id is not None:
+            args.extend(["--id", str(rule_id)])
+        data = self._run_command_json(args)
+        return RuleStatsResponse.from_json(data)
+
+    # ========================================================================
+    # Config commands
+    # ========================================================================
+
+    def set_default_action(self, action: PolicyAction) -> OperationResult:
+        """
+        Set the default action for unmatched packets.
+
+        Args:
+            action: Default action
+
+        Returns:
+            OperationResult indicating success/failure
+        """
+        action_str = action.value.lower()
+        data = self._run_command_json(
+            ["config", "default-action", "--action", action_str]
+        )
+        return OperationResult.from_json(data)
+
+    def register_tail_call(self, slot: int, program: str) -> OperationResult:
+        """
+        Register a tail call program.
+
+        Args:
+            slot: Slot number (0-63)
+            program: Program name
+
+        Returns:
+            OperationResult indicating success/failure
+        """
+        data = self._run_command_json(
+            ["config", "tail-call", "--slot", str(slot), "--program", program]
+        )
+        return OperationResult.from_json(data)
+
+    # ========================================================================
+    # Clear stats commands
+    # ========================================================================
+
+    def clear_global_stats(self, interface: str) -> OperationResult:
+        """
+        Clear global statistics for an interface.
+
+        Args:
+            interface: Interface name
+
+        Returns:
+            OperationResult indicating success/failure
+        """
+        data = self._run_command_json(
+            ["clear-stats", "global", "--interface", interface]
+        )
+        return OperationResult.from_json(data)
+
+    def clear_interface_stats(self, interface: str) -> OperationResult:
+        """
+        Clear all statistics for an interface (global + ethertype).
+
+        Args:
+            interface: Interface name
+
+        Returns:
+            OperationResult indicating success/failure
+        """
+        data = self._run_command_json(
+            ["clear-stats", "interface", "--interface", interface]
+        )
+        return OperationResult.from_json(data)
+
+    def clear_rule_stats(self, rule_id: Optional[int] = None) -> OperationResult:
+        """
+        Clear rule statistics.
+
+        Args:
+            rule_id: Optional rule ID (clears all rules if not specified)
+
+        Returns:
+            OperationResult indicating success/failure
+        """
+        args = ["clear-stats", "rule"]
+        if rule_id is not None:
+            args.extend(["--id", str(rule_id)])
+        data = self._run_command_json(args)
+        return OperationResult.from_json(data)
+
+    def clear_ethertype_stats(self, interface: str) -> OperationResult:
+        """
+        Clear ethertype statistics for an interface.
+
+        Args:
+            interface: Interface name
+
+        Returns:
+            OperationResult indicating success/failure
+        """
+        data = self._run_command_json(
+            ["clear-stats", "ethertype", "--interface", interface]
+        )
+        return OperationResult.from_json(data)
+
+    def clear_all_stats(self) -> OperationResult:
+        """
+        Clear all statistics.
+
+        Returns:
+            OperationResult indicating success/failure
+        """
+        data = self._run_command_json(["clear-stats", "all"])
+        return OperationResult.from_json(data)
+
+
+# ============================================================================
+# Convenience functions
+# ============================================================================
+
+
+def create_policy_client(node: Node) -> PolicyClient:
+    """
+    Create a PolicyClient for a node.
+
+    Args:
+        node: Node where policy-engine is running
+
+    Returns:
+        PolicyClient instance
+    """
+    return PolicyClient(node)

@@ -43,6 +43,9 @@ SSH_LOG_PATH = Path(os.getenv("NETSIM_SSH_LOG", "ssh_commands.log")).resolve()
 # Track if any test failed
 _test_failed: bool = False
 
+# Track current topology for PDB debugging
+_current_topology = None
+
 
 # Helper functions for running_topology
 def _cleanup_leftover_vms(topology):
@@ -118,6 +121,11 @@ def _pause_for_debugging(topology, request):
     global _test_failed
 
     if not _test_failed:
+        return
+
+    # Skip pause if --pdb was used - user already had debugging opportunity
+    if request.config.getoption("--pdb", False):
+        logger.info("Skipping pause (--pdb was used for debugging)")
         return
 
     pause_on_failure = request.config.getoption(
@@ -200,6 +208,20 @@ def pytest_runtest_makereport(item, call):
         _test_failed = True
 
 
+def pytest_enter_pdb(config, pdb):
+    """Called when entering PDB debugger - print connection info."""
+    global _current_topology
+    if _current_topology is not None:
+        print("\n" + "=" * 60)
+        print("⚠ ENTERING PDB - TOPOLOGY IS STILL RUNNING")
+        print("=" * 60)
+        print("SSH access to nodes:")
+        for idx, node in enumerate(_current_topology.nodes):
+            ssh_port = 2200 + idx
+            print(f"  {node.name}: ssh -p {ssh_port} netsim@localhost")
+        print("=" * 60 + "\n")
+
+
 @pytest.fixture(scope="module")
 @lru_cache
 def topology_path(request) -> Path:
@@ -243,6 +265,9 @@ def running_topology(topology, request):
     The topology is started once per module and destroyed after that module's tests complete.
     Tests within the same module share the same running topology instance.
     """
+    global _current_topology
+    _current_topology = topology
+
     logger.info("=" * 60)
     logger.info(f"Starting topology for test module: {topology.name}")
     logger.info(f"Topology fixture ID: {id(topology)}")
@@ -287,6 +312,9 @@ def running_topology(topology, request):
             except Exception as e:
                 logger.warning(f"Cleanup error: {e}")
             finally:
+                # Clear global topology reference
+                _current_topology = None
+
                 # Explicitly clear all references
                 simulator.vms.clear()
                 simulator.bridges.clear()

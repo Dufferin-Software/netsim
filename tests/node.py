@@ -213,6 +213,24 @@ class NodeInterface:
             return None
         return netaddr.IPAddress(cidr_str.split("/")[0])
 
+    def get_ipv4_network(self):
+        """Get IPv4 network as netaddr.IPNetwork object."""
+        import netaddr
+
+        cidr_str = self.get_ip()
+        if not cidr_str:
+            return None
+        return netaddr.IPNetwork(cidr_str).cidr
+
+    def get_ipv6_network(self):
+        """Get IPv6 network as netaddr.IPNetwork object."""
+        import netaddr
+
+        cidr_str = self.get_ipv6()
+        if not cidr_str:
+            return None
+        return netaddr.IPNetwork(cidr_str).cidr
+
     def is_up(self) -> bool:
         """Check if interface is up."""
         output = self._ssh(f"ip link show {self.if_name}")
