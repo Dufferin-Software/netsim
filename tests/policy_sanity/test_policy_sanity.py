@@ -94,6 +94,14 @@ def nmap_installed(nodes, install_packages):
     yield
 
 
+@pytest.fixture(scope="module")
+def bpftool_installed(nodes, install_packages):
+    """Ensure bpftool is installed on the server for BPF operations."""
+    nodes["server"]
+    install_packages("server", ["bpftool"])
+    yield
+
+
 # ============================================================================
 # Client type parameterization
 # ============================================================================
@@ -2557,6 +2565,39 @@ class TestRuleInstallationPerformance:
             pass
         return 0
 
+    def _get_bpf_kernel_memory_kb(self, nodes) -> int:
+        """Estimate kernel memory used by BPF maps/programs for this policy_engine instance in KB.
+
+        This attempts to sum the approximate bytes allocated for pinned maps under
+        /sys/fs/bpf/policy_engine by parsing `bpftool map show` output on the server.
+        The result is an estimate; if bpftool or parsing is unavailable we return 0.
+        """
+        server = nodes["server"]
+
+        # Simpler: find the policy-engine process cgroup and read its memory.stat
+        # Return the sum of 'kernel' and 'slab' fields (in KB).
+        cmd = (
+            "pid=$(pgrep -x policy-engine | head -1); "
+            'if [ -z "$pid" ]; then echo 0; exit 0; fi; '
+            "cpath=$(awk -F: '{print $3}' /proc/$pid/cgroup | tail -1); "
+            "if [ -f /sys/fs/cgroup${cpath}/memory.stat ]; then f=/sys/fs/cgroup${cpath}/memory.stat; "
+            "elif [ -f /sys/fs/cgroup/memory${cpath}/memory.stat ]; then f=/sys/fs/cgroup/memory${cpath}/memory.stat; "
+            "else echo 0; exit 0; fi; "
+            "awk '/^kernel /{k=$2} /^slab /{s=$2} END{print int(((k?k:0)+(s?s:0))/1024)}' $f"
+        )
+
+        try:
+            output = server.ssh_command(cmd, timeout=10)
+            if output and output.strip():
+                try:
+                    return int(output.strip())
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        return 0
+
     def _generate_ipv4_prefix(self, index: int) -> str:
         """Generate a unique IPv4 /32 prefix from an index."""
         # Use 10.x.x.x range to generate unique addresses
@@ -2577,21 +2618,22 @@ class TestRuleInstallationPerformance:
         low = index & 0xFFFF
         return f"2001:db8:{high:04x}:{low:04x}::1/128"
 
-    @pytest.mark.performance
-    @pytest.mark.slow
     def test_ipv4_rule_installation_performance(
         self,
         nodes,
         policy_client,
         attached_xdp,
         clean_rules,
+        bpftool_installed,
     ):
         """Test performance of installing many IPv4 rules."""
         num_rules = self.NUM_RULES
 
         # Get initial memory usage
         initial_memory_kb = self._get_memory_usage_kb(nodes)
+        initial_kernel_kb = self._get_bpf_kernel_memory_kb(nodes)
         logger.info(f"Initial memory usage: {initial_memory_kb} KB")
+        logger.info(f"Initial BPF kernel memory (est): {initial_kernel_kb} KB")
 
         # Track individual rule installation times
         install_times = []
@@ -2634,7 +2676,9 @@ class TestRuleInstallationPerformance:
 
         # Get final memory usage
         final_memory_kb = self._get_memory_usage_kb(nodes)
+        final_kernel_kb = self._get_bpf_kernel_memory_kb(nodes)
         memory_delta_kb = final_memory_kb - initial_memory_kb
+        kernel_delta_kb = final_kernel_kb - initial_kernel_kb
 
         # Calculate statistics
         avg_time_ms = (sum(install_times) / len(install_times)) * 1000
@@ -2666,30 +2710,31 @@ class TestRuleInstallationPerformance:
         logger.info(
             f"Memory delta:       {memory_delta_kb} KB ({memory_delta_kb / 1024:.2f} MB)"
         )
+        logger.info(f"Final BPF kernel memory (est): {final_kernel_kb} KB")
+        logger.info(
+            f"BPF kernel memory delta (est): {kernel_delta_kb} KB ({kernel_delta_kb / 1024:.2f} MB)"
+        )
         logger.info(f"Memory per rule:    {memory_delta_kb / num_rules:.2f} KB")
         logger.info("=" * 60)
 
-        # Basic assertions - ensure most rules were installed
-        success_rate = (num_rules - failed_rules) / num_rules
-        assert success_rate >= 0.99, (
-            f"Too many failed rules: {failed_rules}/{num_rules}"
-        )
+        assert failed_rules == 0, f"Failed rules: {failed_rules}"
 
-    @pytest.mark.performance
-    @pytest.mark.slow
     def test_ipv6_rule_installation_performance(
         self,
         nodes,
         policy_client,
         attached_xdp,
         clean_rules,
+        bpftool_installed,
     ):
         """Test performance of installing many IPv6 rules."""
         num_rules = self.NUM_RULES
 
         # Get initial memory usage
         initial_memory_kb = self._get_memory_usage_kb(nodes)
+        initial_kernel_kb = self._get_bpf_kernel_memory_kb(nodes)
         logger.info(f"Initial memory usage: {initial_memory_kb} KB")
+        logger.info(f"Initial BPF kernel memory (est): {initial_kernel_kb} KB")
 
         # Track individual rule installation times
         install_times = []
@@ -2732,7 +2777,9 @@ class TestRuleInstallationPerformance:
 
         # Get final memory usage
         final_memory_kb = self._get_memory_usage_kb(nodes)
+        final_kernel_kb = self._get_bpf_kernel_memory_kb(nodes)
         memory_delta_kb = final_memory_kb - initial_memory_kb
+        kernel_delta_kb = final_kernel_kb - initial_kernel_kb
 
         # Calculate statistics
         avg_time_ms = (sum(install_times) / len(install_times)) * 1000
@@ -2764,30 +2811,31 @@ class TestRuleInstallationPerformance:
         logger.info(
             f"Memory delta:       {memory_delta_kb} KB ({memory_delta_kb / 1024:.2f} MB)"
         )
+        logger.info(f"Final BPF kernel memory (est): {final_kernel_kb} KB")
+        logger.info(
+            f"BPF kernel memory delta (est): {kernel_delta_kb} KB ({kernel_delta_kb / 1024:.2f} MB)"
+        )
         logger.info(f"Memory per rule:    {memory_delta_kb / num_rules:.2f} KB")
         logger.info("=" * 60)
 
-        # Basic assertions - ensure most rules were installed
-        success_rate = (num_rules - failed_rules) / num_rules
-        assert success_rate >= 0.99, (
-            f"Too many failed rules: {failed_rules}/{num_rules}"
-        )
+        assert failed_rules == 0, f"Failed rules: {failed_rules}"
 
-    @pytest.mark.performance
-    @pytest.mark.slow
     def test_mixed_v4_v6_rule_installation_performance(
         self,
         nodes,
         policy_client,
         attached_xdp,
         clean_rules,
+        bpftool_installed,
     ):
         """Test performance of installing mixed IPv4 and IPv6 rules (alternating)."""
         num_rules = self.NUM_RULES
 
         # Get initial memory usage
         initial_memory_kb = self._get_memory_usage_kb(nodes)
+        initial_kernel_kb = self._get_bpf_kernel_memory_kb(nodes)
         logger.info(f"Initial memory usage: {initial_memory_kb} KB")
+        logger.info(f"Initial BPF kernel memory (est): {initial_kernel_kb} KB")
 
         # Track individual rule installation times separately
         ipv4_times = []
@@ -2850,7 +2898,9 @@ class TestRuleInstallationPerformance:
 
         # Get final memory usage
         final_memory_kb = self._get_memory_usage_kb(nodes)
+        final_kernel_kb = self._get_bpf_kernel_memory_kb(nodes)
         memory_delta_kb = final_memory_kb - initial_memory_kb
+        kernel_delta_kb = final_kernel_kb - initial_kernel_kb
 
         # Calculate statistics for combined
         all_times = ipv4_times + ipv6_times
@@ -2891,23 +2941,22 @@ class TestRuleInstallationPerformance:
         logger.info(
             f"Memory delta:       {memory_delta_kb} KB ({memory_delta_kb / 1024:.2f} MB)"
         )
+        logger.info(f"Final BPF kernel memory (est): {final_kernel_kb} KB")
+        logger.info(
+            f"BPF kernel memory delta (est): {kernel_delta_kb} KB ({kernel_delta_kb / 1024:.2f} MB)"
+        )
         logger.info(f"Memory per rule:    {memory_delta_kb / num_rules:.2f} KB")
         logger.info("=" * 60)
 
-        # Basic assertions - ensure most rules were installed
-        success_rate = (num_rules - failed_rules) / num_rules
-        assert success_rate >= 0.99, (
-            f"Too many failed rules: {failed_rules}/{num_rules}"
-        )
+        assert failed_rules == 0, f"Failed rules: {failed_rules}"
 
-    @pytest.mark.performance
-    @pytest.mark.slow
     def test_rule_deletion_performance(
         self,
         nodes,
         policy_client,
         attached_xdp,
         clean_rules,
+        bpftool_installed,
     ):
         """Test performance of deleting many rules after installation."""
         num_rules = self.NUM_RULES
@@ -2936,6 +2985,7 @@ class TestRuleInstallationPerformance:
 
         # Get memory before deletion
         memory_before_delete_kb = self._get_memory_usage_kb(nodes)
+        kernel_before_delete_kb = self._get_bpf_kernel_memory_kb(nodes)
 
         # Now time the deletions
         delete_times = []
@@ -2967,7 +3017,9 @@ class TestRuleInstallationPerformance:
 
         # Get memory after deletion
         memory_after_delete_kb = self._get_memory_usage_kb(nodes)
+        kernel_after_delete_kb = self._get_bpf_kernel_memory_kb(nodes)
         memory_freed_kb = memory_before_delete_kb - memory_after_delete_kb
+        kernel_freed_kb = kernel_before_delete_kb - kernel_after_delete_kb
 
         # Calculate statistics
         avg_time_ms = (sum(delete_times) / len(delete_times)) * 1000
@@ -2998,6 +3050,11 @@ class TestRuleInstallationPerformance:
         logger.info(
             f"Memory freed:       {memory_freed_kb} KB ({memory_freed_kb / 1024:.2f} MB)"
         )
+        logger.info(f"BPF kernel memory before del (est): {kernel_before_delete_kb} KB")
+        logger.info(f"BPF kernel memory after del (est):  {kernel_after_delete_kb} KB")
+        logger.info(
+            f"BPF kernel memory freed (est):      {kernel_freed_kb} KB ({kernel_freed_kb / 1024:.2f} MB)"
+        )
         logger.info("=" * 60)
 
         success_rate = (num_rules - failed_deletes) / num_rules
@@ -3005,14 +3062,13 @@ class TestRuleInstallationPerformance:
             f"Too many failed deletes: {failed_deletes}/{num_rules}"
         )
 
-    @pytest.mark.performance
-    @pytest.mark.slow
     def test_batch_rule_installation_performance(
         self,
         nodes,
         graphql_policy_client,
         attached_xdp,
         clean_rules,
+        bpftool_installed,
     ):
         """
         Test performance of batch rule installation using the addRules GraphQL mutation.
@@ -3030,7 +3086,9 @@ class TestRuleInstallationPerformance:
 
         # Get initial memory usage
         initial_memory_kb = self._get_memory_usage_kb(nodes)
+        initial_kernel_kb = self._get_bpf_kernel_memory_kb(nodes)
         logger.info(f"Initial memory usage: {initial_memory_kb} KB")
+        logger.info(f"Initial BPF kernel memory (est): {initial_kernel_kb} KB")
 
         # Build the batch of rules
         rules = []
@@ -3060,7 +3118,9 @@ class TestRuleInstallationPerformance:
 
         # Get final memory usage
         final_memory_kb = self._get_memory_usage_kb(nodes)
+        final_kernel_kb = self._get_bpf_kernel_memory_kb(nodes)
         memory_delta_kb = final_memory_kb - initial_memory_kb
+        kernel_delta_kb = final_kernel_kb - initial_kernel_kb
 
         # Calculate statistics
         rules_per_sec = num_rules / total_elapsed
@@ -3080,19 +3140,20 @@ class TestRuleInstallationPerformance:
         logger.info(
             f"Memory delta:       {memory_delta_kb} KB ({memory_delta_kb / 1024:.2f} MB)"
         )
+        logger.info(f"Final BPF kernel memory (est): {final_kernel_kb} KB")
+        logger.info(
+            f"BPF kernel memory delta (est): {kernel_delta_kb} KB ({kernel_delta_kb / 1024:.2f} MB)"
+        )
         logger.info(f"Memory per rule:    {memory_delta_kb / num_rules:.2f} KB")
         logger.info("=" * 60)
 
-        # Basic assertions
         assert result.success, f"Batch installation failed: {result.message}"
-        success_rate = result.succeeded / num_rules
-        assert success_rate >= 0.99, (
-            f"Too many failed rules: {result.failed}/{num_rules}"
+        assert result.succeeded == num_rules, (
+            f"Failed rules: {num_rules - result.succeeded} out of {num_rules}"
         )
 
-    @pytest.mark.integration
     def test_batch_rule_deletion(
-        self, nodes, graphql_policy_client, attached_xdp, clean_rules
+        self, nodes, graphql_policy_client, attached_xdp, clean_rules, bpftool_installed
     ):
         """
         Add a small batch of rules, then delete them using the deleteRules batch mutation.
@@ -3105,23 +3166,22 @@ class TestRuleInstallationPerformance:
         # Use the same pattern as the batch installation performance test
         num_rules = self.NUM_RULES
 
-        # Get initial memory usage
+        # Get initial memory (userland) and kernel BPF memory estimates
         initial_memory_kb = self._get_memory_usage_kb(nodes)
+        initial_kernel_kb = self._get_bpf_kernel_memory_kb(nodes)
 
-        # Build the batch of rules using the helper
-        rules = []
-        ids = []
-        for i in range(num_rules):
-            prefix = self._generate_ipv4_prefix(i)
-            options = AddRuleOptions(
+        # Build the batch of rules and ids using comprehensions
+        rules = [
+            AddRuleOptions(
                 rule_id=700000 + i,
-                src=prefix,
+                src=self._generate_ipv4_prefix(i),
                 dst="0.0.0.0/0",
                 protocol="any",
                 actions=[("pass", 0)],
             )
-            rules.append(options)
-            ids.append(700000 + i)
+            for i in range(num_rules)
+        ]
+        ids = [700000 + i for i in range(num_rules)]
 
         logger.info(
             f"Starting batch installation of {num_rules} IPv4 rules for deletion test..."
@@ -3136,12 +3196,14 @@ class TestRuleInstallationPerformance:
         if not add_result.success and "Unknown field" in add_result.message:
             pytest.skip("Batch addRules API not implemented yet")
 
-        # Get final memory usage
+        # Get final memory usage and kernel estimate after add
         final_memory_kb = self._get_memory_usage_kb(nodes)
+        final_kernel_kb = self._get_bpf_kernel_memory_kb(nodes)
         memory_delta_kb = final_memory_kb - initial_memory_kb
+        kernel_delta_kb = final_kernel_kb - initial_kernel_kb
 
         logger.info(
-            f"Batch add: total={num_rules} succeeded={add_result.succeeded} failed={add_result.failed} time={total_elapsed:.2f}s mem_delta={memory_delta_kb}KB"
+            f"Batch add: total={num_rules} succeeded={add_result.succeeded} failed={add_result.failed} time={total_elapsed:.2f}s mem_delta={memory_delta_kb}KB kernel_delta={kernel_delta_kb}KB"
         )
 
         assert add_result.succeeded == num_rules
@@ -3152,7 +3214,7 @@ class TestRuleInstallationPerformance:
         for rid in ids:
             assert rid in present_ids
 
-        # Now delete them in a batch
+        # Now delete them in a batch and measure
         delete_start = time.perf_counter()
         delete_result = graphql_policy_client.delete_rules_batch(ids)
         delete_elapsed = time.perf_counter() - delete_start
@@ -3161,10 +3223,14 @@ class TestRuleInstallationPerformance:
         if not delete_result.success and "Unknown field" in delete_result.message:
             pytest.skip("Batch deleteRules API not implemented yet")
 
-        # Get memory after deletion
+        # Get memory after deletion and kernel estimate
         mem_after_delete_kb = self._get_memory_usage_kb(nodes)
+        kernel_after_delete_kb = self._get_bpf_kernel_memory_kb(nodes)
+        memory_freed_kb = final_memory_kb - mem_after_delete_kb
+        kernel_freed_kb = final_kernel_kb - kernel_after_delete_kb
+
         logger.info(
-            f"Batch delete: succeeded={delete_result.succeeded} failed={delete_result.failed} time={delete_elapsed:.2f}s mem_after_delete={mem_after_delete_kb}KB"
+            f"Batch delete: succeeded={delete_result.succeeded} failed={delete_result.failed} time={delete_elapsed:.2f}s mem_after_delete={mem_after_delete_kb}KB mem_freed={memory_freed_kb}KB kernel_freed={kernel_freed_kb}KB"
         )
 
         assert delete_result.succeeded == num_rules
