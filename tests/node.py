@@ -4,13 +4,20 @@
 
 import subprocess
 import logging
+import threading
 from typing import Dict, Optional
+
+import paramiko
 
 logger = logging.getLogger(__name__)
 
 
 class Node:
     """Represents a node in the test topology with SSH access and interface info."""
+
+    # Class-level connection cache for reusing SSH connections
+    _ssh_connections: Dict[str, paramiko.SSHClient] = {}
+    _ssh_lock = threading.Lock()
 
     def __init__(
         self,
@@ -30,10 +37,63 @@ class Node:
         self.ssh_port = ssh_port
         self.topology = topology
         self.interfaces: Dict[str, "NodeInterface"] = {}
+        self._connection_key = f"{name}:{ssh_port}"
+
+    def _get_ssh_client(self) -> paramiko.SSHClient:
+        """
+        Get or create a persistent SSH connection to this node.
+
+        Returns:
+            Connected SSHClient instance
+        """
+        with Node._ssh_lock:
+            # Check if we have an existing connection
+            if self._connection_key in Node._ssh_connections:
+                client = Node._ssh_connections[self._connection_key]
+                # Verify the connection is still alive
+                try:
+                    transport = client.get_transport()
+                    if transport is not None and transport.is_active():
+                        return client
+                except Exception:
+                    pass
+                # Connection is dead, remove it
+                try:
+                    client.close()
+                except Exception:
+                    pass
+                del Node._ssh_connections[self._connection_key]
+
+            # Create a new connection
+            logger.debug(f"[{self.name}] Opening persistent SSH connection")
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            client.connect(
+                hostname="localhost",
+                port=self.ssh_port,
+                username="netsim",
+                timeout=5,
+                allow_agent=True,
+                look_for_keys=True,
+            )
+            Node._ssh_connections[self._connection_key] = client
+            return client
+
+    @classmethod
+    def close_all_connections(cls) -> None:
+        """Close all cached SSH connections."""
+        with cls._ssh_lock:
+            for key, client in cls._ssh_connections.items():
+                try:
+                    client.close()
+                    logger.debug(f"Closed SSH connection: {key}")
+                except Exception:
+                    pass
+            cls._ssh_connections.clear()
 
     def ssh_command(self, cmd: str, timeout: int = 10) -> str:
         """
-        Execute an SSH command on this node.
+        Execute an SSH command on this node using a persistent connection.
 
         Args:
             cmd: Shell command to run
@@ -46,6 +106,156 @@ class Node:
             subprocess.CalledProcessError: If command fails
         """
         logger.debug(f"[{self.name}] $ {cmd}")
+
+        try:
+            client = self._get_ssh_client()
+            stdin, stdout, stderr = client.exec_command(cmd, timeout=timeout)
+
+            # Read output
+            output = stdout.read().decode("utf-8").strip()
+            exit_status = stdout.channel.recv_exit_status()
+
+            if output and len(output) < 200:
+                logger.debug(f"[{self.name}] → {output}")
+            elif output:
+                logger.debug(f"[{self.name}] → <{len(output)} bytes of output>")
+
+            if exit_status != 0:
+                stderr_output = stderr.read().decode("utf-8").strip()
+                raise subprocess.CalledProcessError(
+                    exit_status,
+                    cmd,
+                    output=output,
+                    stderr=stderr_output,
+                )
+
+            return output
+
+        except paramiko.SSHException as e:
+            # If paramiko fails, try to reconnect once
+            logger.warning(f"[{self.name}] SSH error, reconnecting: {e}")
+            with Node._ssh_lock:
+                if self._connection_key in Node._ssh_connections:
+                    try:
+                        Node._ssh_connections[self._connection_key].close()
+                    except Exception:
+                        pass
+                    del Node._ssh_connections[self._connection_key]
+
+            # Retry with fresh connection
+            client = self._get_ssh_client()
+            stdin, stdout, stderr = client.exec_command(cmd, timeout=timeout)
+            output = stdout.read().decode("utf-8").strip()
+            exit_status = stdout.channel.recv_exit_status()
+
+            if exit_status != 0:
+                stderr_output = stderr.read().decode("utf-8").strip()
+                raise subprocess.CalledProcessError(
+                    exit_status,
+                    cmd,
+                    output=output,
+                    stderr=stderr_output,
+                )
+
+            return output
+
+    def ssh_command_with_stdin(
+        self, cmd: str, stdin_data: str, timeout: int = 10
+    ) -> str:
+        """
+        Execute an SSH command on this node with data sent to stdin.
+
+        This is useful for commands that need large input data that would
+        exceed command-line length limits.
+
+        Args:
+            cmd: Shell command to run
+            stdin_data: Data to send to stdin
+            timeout: Command timeout in seconds
+
+        Returns:
+            Command output (stdout)
+
+        Raises:
+            subprocess.CalledProcessError: If command fails
+        """
+        logger.debug(f"[{self.name}] $ {cmd} (with {len(stdin_data)} bytes stdin)")
+
+        try:
+            client = self._get_ssh_client()
+            stdin, stdout, stderr = client.exec_command(cmd, timeout=timeout)
+
+            # Write data to stdin and close it
+            stdin.write(stdin_data)
+            stdin.channel.shutdown_write()
+
+            # Read output
+            output = stdout.read().decode("utf-8").strip()
+            exit_status = stdout.channel.recv_exit_status()
+
+            if output and len(output) < 200:
+                logger.debug(f"[{self.name}] → {output}")
+            elif output:
+                logger.debug(f"[{self.name}] → <{len(output)} bytes of output>")
+
+            if exit_status != 0:
+                stderr_output = stderr.read().decode("utf-8").strip()
+                raise subprocess.CalledProcessError(
+                    exit_status,
+                    cmd,
+                    output=output,
+                    stderr=stderr_output,
+                )
+
+            return output
+
+        except paramiko.SSHException as e:
+            # If paramiko fails, try to reconnect once
+            logger.warning(f"[{self.name}] SSH error, reconnecting: {e}")
+            with Node._ssh_lock:
+                if self._connection_key in Node._ssh_connections:
+                    try:
+                        Node._ssh_connections[self._connection_key].close()
+                    except Exception:
+                        pass
+                    del Node._ssh_connections[self._connection_key]
+
+            # Retry with fresh connection
+            client = self._get_ssh_client()
+            stdin, stdout, stderr = client.exec_command(cmd, timeout=timeout)
+            stdin.write(stdin_data)
+            stdin.channel.shutdown_write()
+            output = stdout.read().decode("utf-8").strip()
+            exit_status = stdout.channel.recv_exit_status()
+
+            if exit_status != 0:
+                stderr_output = stderr.read().decode("utf-8").strip()
+                raise subprocess.CalledProcessError(
+                    exit_status,
+                    cmd,
+                    output=output,
+                    stderr=stderr_output,
+                )
+
+            return output
+
+    def ssh_command_subprocess(self, cmd: str, timeout: int = 10) -> str:
+        """
+        Execute an SSH command using subprocess (original method).
+
+        This is slower but may be needed for certain edge cases.
+
+        Args:
+            cmd: Shell command to run
+            timeout: Command timeout in seconds
+
+        Returns:
+            Command output (stdout)
+
+        Raises:
+            subprocess.CalledProcessError: If command fails
+        """
+        logger.debug(f"[{self.name}] (subprocess) $ {cmd}")
 
         full_cmd = [
             "ssh",
@@ -70,7 +280,7 @@ class Node:
         )
 
         output = result.stdout.strip()
-        if output and len(output) < 200:  # Only log short outputs
+        if output and len(output) < 200:
             logger.debug(f"[{self.name}] → {output}")
         elif output:
             logger.debug(f"[{self.name}] → <{len(output)} bytes of output>")

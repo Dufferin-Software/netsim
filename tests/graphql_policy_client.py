@@ -14,6 +14,8 @@ from typing import List, Optional
 from tests.node import Node
 from tests.policy_client import (
     AddRuleOptions,
+    BatchAddRulesResult,
+    BatchDeleteRulesResult,
     EthertypeStats,
     GlobalStats,
     InterfaceAttachment,
@@ -70,13 +72,19 @@ class GraphQLPolicyClient:
         if variables:
             payload["variables"] = variables
 
-        # Use curl via SSH to make the request from the node
-        payload_json = json.dumps(payload).replace("'", "'\\''")  # Escape single quotes
-        cmd = f"curl -s -X POST -H 'Content-Type: application/json' -d '{payload_json}' {self.server_url}"
-
+        payload_json = json.dumps(payload)
         logger.debug(f"[{self.node.name}] GraphQL: {query[:100]}...")
 
-        output = self.node.ssh_command(cmd, timeout=30)
+        # Use stdin for large payloads to avoid command-line length limits
+        if len(payload_json) > 10000:
+            # Use curl with stdin (-d @-)
+            cmd = f"curl -s -X POST -H 'Content-Type: application/json' -d @- {self.server_url}"
+            output = self.node.ssh_command_with_stdin(cmd, payload_json, timeout=30)
+        else:
+            # For small payloads, use command line (simpler)
+            payload_escaped = payload_json.replace("'", "'\\''")  # Escape single quotes
+            cmd = f"curl -s -X POST -H 'Content-Type: application/json' -d '{payload_escaped}' {self.server_url}"
+            output = self.node.ssh_command(cmd, timeout=30)
 
         try:
             response = json.loads(output)
@@ -287,6 +295,145 @@ class GraphQLPolicyClient:
             success=result.get("success", False),
             message=result.get("message", ""),
         )
+
+    def add_rules_batch(self, rules: List[AddRuleOptions]) -> BatchAddRulesResult:
+        """
+        Add multiple policy rules in a single batch operation.
+
+        This is more efficient than calling add_rule multiple times as it
+        reduces network round-trips and allows the server to batch updates.
+
+        Args:
+            rules: List of rule configuration options
+
+        Returns:
+            BatchAddRulesResult with success status and per-rule results
+        """
+        mutation = """
+        mutation AddRules($rules: [AddRuleInput!]!) {
+            addRules(rules: $rules) {
+                total
+                succeeded
+                failed
+                success
+                message
+                results {
+                    index
+                    ruleId
+                    success
+                    error
+                }
+            }
+        }
+        """
+
+        # Map action string to GraphQL enum value
+        action_map = {
+            "pass": "PASS",
+            "drop": "DROP",
+            "log": "LOG",
+            "nat": "NAT",
+        }
+
+        # Map protocol string to GraphQL string value (server expects lowercase)
+        proto_map = {
+            "any": "any",
+            "tcp": "tcp",
+            "udp": "udp",
+            "icmp": "icmp",
+            "icmpv6": "icmp",  # Server auto-converts to icmpv6 for IPv6 rules
+        }
+
+        gql_rules = []
+        for options in rules:
+            # Convert actions to GraphQL format
+            gql_actions = []
+            for action, priority in options.actions:
+                gql_action = action_map.get(action.lower(), "PASS")
+                gql_actions.append({"action": gql_action, "priority": priority})
+
+            gql_protocol = proto_map.get(options.protocol.lower(), "any")
+
+            input_data = {
+                "protocol": gql_protocol,
+                "sport": options.sport,
+                "dport": options.dport,
+                "priority": options.priority,
+                "actions": gql_actions,
+            }
+
+            if options.src:
+                input_data["src"] = options.src
+            if options.dst:
+                input_data["dst"] = options.dst
+            if options.rule_id is not None:
+                input_data["id"] = options.rule_id
+
+            gql_rules.append(input_data)
+
+        variables = {"rules": gql_rules}
+        data = self._execute_graphql(mutation, variables)
+
+        if "__error__" in data:
+            return BatchAddRulesResult(
+                total=len(rules),
+                succeeded=0,
+                failed=len(rules),
+                success=False,
+                message=data["__error__"],
+                results=[],
+            )
+
+        result = data.get("addRules", {})
+        return BatchAddRulesResult.from_json(result)
+
+    def delete_rules_batch(self, ids: List[int]) -> "BatchDeleteRulesResult":
+        """
+        Delete multiple rules in a single batch operation via GraphQL.
+
+        Args:
+            ids: List of rule IDs to delete
+
+        Returns:
+            BatchDeleteRulesResult with per-item results
+        """
+        mutation = """
+        mutation DeleteRules($rules: [DeleteRuleInput!]!) {
+            deleteRules(rules: $rules) {
+                total
+                succeeded
+                failed
+                success
+                message
+                results {
+                    index
+                    ruleId
+                    success
+                    error
+                }
+            }
+        }
+        """
+
+        gql_rules = []
+        for i, rid in enumerate(ids):
+            gql_rules.append({"id": rid})
+
+        variables = {"rules": gql_rules}
+        data = self._execute_graphql(mutation, variables)
+
+        if "__error__" in data:
+            return BatchDeleteRulesResult(
+                total=len(ids),
+                succeeded=0,
+                failed=len(ids),
+                success=False,
+                message=data["__error__"],
+                results=[],
+            )
+
+        result = data.get("deleteRules", {})
+        return BatchDeleteRulesResult.from_json(result)
 
     def delete_rule(
         self,
@@ -644,6 +791,10 @@ class GraphQLPolicyClient:
 
         rules_with_stats = []
         for r in rules_data:
+            # Skip rules that don't match if we're filtering by rule_id
+            if rule_id is not None and r.get("ruleId") != rule_id:
+                continue
+
             # Convert rule data
             proto_str = r.get("protocol", "ANY")
             protocol = Protocol.from_string(proto_str)
@@ -669,9 +820,10 @@ class GraphQLPolicyClient:
                 actions=actions,
             )
 
-            # Get stats for this rule if we queried for a specific one
+            # Get stats for this rule
             stats = None
-            if rule_id is not None and r.get("ruleId") == rule_id:
+            if rule_id is not None:
+                # Use the ruleStats from the query for the specific rule
                 stats_data = data.get("ruleStats")
                 if stats_data:
                     stats = RuleStats(
@@ -679,7 +831,7 @@ class GraphQLPolicyClient:
                         bytes=stats_data.get("bytes", 0),
                         last_seen_ns=stats_data.get("lastSeenNs", 0),
                     )
-            elif rule_id is None:
+            else:
                 # Query stats individually for each rule
                 rule_stats_data = self._get_single_rule_stats(r.get("ruleId", 0))
                 if rule_stats_data:

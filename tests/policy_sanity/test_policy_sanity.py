@@ -2020,3 +2020,1157 @@ class TestTrafficMatchingNegative:
             f"Sport 12345 rule vs sport 54321: rule_packets={rule_packets}, expected=0"
         )
         assert rule_packets == 0, "Source port rule should not match wrong source port"
+
+
+# ============================================================================
+# Rule Priority/Specificity Tests
+# ============================================================================
+
+
+class TestRulePriority:
+    """
+    Test that more specific rules take precedence over less specific rules.
+
+    Tests the scenario where:
+    - Rule 1: src=<client_network>/24 dst=0.0.0.0/0 tcp dport=80 action=drop
+    - Rule 2: src=0.0.0.0/0 dst=0.0.0.0/0 tcp dport=80 action=log (pass)
+
+    Traffic from client_network should match Rule 1 (more specific) and be dropped.
+    Traffic from other networks should match Rule 2 and pass/log.
+    """
+
+    @pytest.mark.parametrize("client_type", ["cli", "graphql"], indirect=True)
+    def test_tcp_rule_specificity_v4(
+        self,
+        configure_node_interfaces,
+        nodes,
+        policy_client,
+        attached_xdp,
+        clean_rules,
+        client_interface,
+        client_network_v4,
+        server_ip_v4,
+        nmap_installed,
+    ):
+        """Test TCP traffic with overlapping rules - more specific rule should match first (IPv4)."""
+        client = nodes["client"]
+
+        # Add more specific rule: drop traffic from client network to port 80
+        specific_rule_id = 100001
+        options_specific = AddRuleOptions(
+            rule_id=specific_rule_id,
+            src=client_network_v4,
+            dst="0.0.0.0/0",
+            protocol="tcp",
+            dport=80,
+            actions=[("drop", 0)],
+        )
+        policy_client.add_rule(options_specific)
+
+        # Add less specific rule: log (pass) traffic from anywhere to port 80
+        general_rule_id = 100002
+        options_general = AddRuleOptions(
+            rule_id=general_rule_id,
+            src="0.0.0.0/0",
+            dst="0.0.0.0/0",
+            protocol="tcp",
+            dport=80,
+            actions=[("log", 0)],
+        )
+        policy_client.add_rule(options_general)
+
+        # Clear rule stats before testing
+        policy_client.clear_rule_stats(specific_rule_id)
+        policy_client.clear_rule_stats(general_rule_id)
+
+        # Send traffic from client (matches specific rule - should be dropped)
+        packets_to_send = 5
+        send_tcp_syn(
+            client,
+            server_ip_v4,
+            dest_port=80,
+            count=packets_to_send,
+            interface=client_interface.if_name,
+        )
+
+        # Check specific rule stats - should have matched
+        specific_stats = policy_client.get_rule_stats(specific_rule_id)
+        specific_packets = (
+            specific_stats.rules[0].stats.packets
+            if specific_stats.rules and specific_stats.rules[0].stats
+            else 0
+        )
+
+        logger.info(
+            f"Specific rule ({client_network_v4}): matched={specific_packets}, expected={packets_to_send}"
+        )
+        assert specific_packets == packets_to_send, (
+            f"Specific rule should match traffic from {client_network_v4}"
+        )
+
+        # Check general rule stats - should NOT have matched
+        general_stats = policy_client.get_rule_stats(general_rule_id)
+        general_packets = (
+            general_stats.rules[0].stats.packets
+            if general_stats.rules and general_stats.rules[0].stats
+            else 0
+        )
+
+        logger.info(f"General rule (0.0.0.0/0): matched={general_packets}, expected=0")
+        assert general_packets == 0, (
+            "General rule should not match when specific rule matches"
+        )
+
+    @pytest.mark.parametrize("client_type", ["cli", "graphql"], indirect=True)
+    def test_udp_rule_specificity_v4(
+        self,
+        configure_node_interfaces,
+        nodes,
+        policy_client,
+        attached_xdp,
+        clean_rules,
+        client_interface,
+        client_network_v4,
+        server_ip_v4,
+        nmap_installed,
+    ):
+        """Test UDP traffic with overlapping rules - more specific rule should match first (IPv4)."""
+        client = nodes["client"]
+
+        # Add more specific rule: drop traffic from client network to UDP port 53
+        specific_rule_id = 100003
+        options_specific = AddRuleOptions(
+            rule_id=specific_rule_id,
+            src=client_network_v4,
+            dst="0.0.0.0/0",
+            protocol="udp",
+            dport=53,
+            actions=[("drop", 0)],
+        )
+        policy_client.add_rule(options_specific)
+
+        # Add less specific rule: log (pass) traffic from anywhere to UDP port 53
+        general_rule_id = 100004
+        options_general = AddRuleOptions(
+            rule_id=general_rule_id,
+            src="0.0.0.0/0",
+            dst="0.0.0.0/0",
+            protocol="udp",
+            dport=53,
+            actions=[("log", 0)],
+        )
+        policy_client.add_rule(options_general)
+
+        policy_client.clear_rule_stats(specific_rule_id)
+        policy_client.clear_rule_stats(general_rule_id)
+
+        # Send UDP from client (should match specific rule and be dropped)
+        packets_to_send = 5
+        send_udp_packets(
+            client,
+            server_ip_v4,
+            dest_port=53,
+            count=packets_to_send,
+            interface=client_interface.if_name,
+        )
+
+        specific_stats = policy_client.get_rule_stats(specific_rule_id)
+        specific_packets = (
+            specific_stats.rules[0].stats.packets
+            if specific_stats.rules and specific_stats.rules[0].stats
+            else 0
+        )
+
+        logger.info(
+            f"UDP specific rule ({client_network_v4}): matched={specific_packets}, expected={packets_to_send}"
+        )
+        assert specific_packets == packets_to_send, (
+            f"Specific rule should match traffic from {client_network_v4}"
+        )
+
+        # Check general rule stats - should NOT have matched
+        general_stats = policy_client.get_rule_stats(general_rule_id)
+        general_packets = (
+            general_stats.rules[0].stats.packets
+            if general_stats.rules and general_stats.rules[0].stats
+            else 0
+        )
+
+        logger.info(f"General rule (0.0.0.0/0): matched={general_packets}, expected=0")
+        assert general_packets == 0, (
+            "General rule should not match when specific rule matches"
+        )
+
+    @pytest.mark.parametrize("client_type", ["cli", "graphql"], indirect=True)
+    def test_icmp_rule_specificity_v4(
+        self,
+        configure_node_interfaces,
+        nodes,
+        policy_client,
+        attached_xdp,
+        clean_rules,
+        client_interface,
+        client_network_v4,
+        server_ip_v4,
+        nmap_installed,
+    ):
+        """Test ICMP traffic with overlapping rules - more specific rule should match first (IPv4)."""
+        client = nodes["client"]
+
+        # Add more specific rule: drop ICMP from client network
+        specific_rule_id = 100005
+        options_specific = AddRuleOptions(
+            rule_id=specific_rule_id,
+            src=client_network_v4,
+            dst="0.0.0.0/0",
+            protocol="icmp",
+            actions=[("drop", 0)],
+        )
+        policy_client.add_rule(options_specific)
+
+        # Add less specific rule: log (pass) ICMP from anywhere
+        general_rule_id = 100006
+        options_general = AddRuleOptions(
+            rule_id=general_rule_id,
+            src="0.0.0.0/0",
+            dst="0.0.0.0/0",
+            protocol="icmp",
+            actions=[("log", 0)],
+        )
+        policy_client.add_rule(options_general)
+
+        policy_client.clear_rule_stats(specific_rule_id)
+        policy_client.clear_rule_stats(general_rule_id)
+
+        # Send ICMP from client (should match specific rule)
+        packets_to_send = 5
+        send_ping(
+            client,
+            server_ip_v4,
+            count=packets_to_send,
+            interface=client_interface.if_name,
+        )
+
+        specific_stats = policy_client.get_rule_stats(specific_rule_id)
+        specific_packets = (
+            specific_stats.rules[0].stats.packets
+            if specific_stats.rules and specific_stats.rules[0].stats
+            else 0
+        )
+
+        logger.info(
+            f"ICMP specific rule ({client_network_v4}): matched={specific_packets}, expected={packets_to_send}"
+        )
+        assert specific_packets == packets_to_send, (
+            f"Specific rule should match traffic from {client_network_v4}"
+        )
+
+        # Check general rule stats - should NOT have matched
+        general_stats = policy_client.get_rule_stats(general_rule_id)
+        general_packets = (
+            general_stats.rules[0].stats.packets
+            if general_stats.rules and general_stats.rules[0].stats
+            else 0
+        )
+
+        logger.info(f"General rule (0.0.0.0/0): matched={general_packets}, expected=0")
+        assert general_packets == 0, (
+            "General rule should not match when specific rule matches"
+        )
+
+    @pytest.mark.parametrize("client_type", ["cli", "graphql"], indirect=True)
+    def test_tcp_rule_specificity_v6(
+        self,
+        configure_node_interfaces,
+        nodes,
+        policy_client,
+        attached_xdp,
+        clean_rules,
+        client_interface,
+        client_network_v6,
+        client_ip_v6,
+        server_ip_v6,
+        nmap_installed,
+    ):
+        """Test TCP traffic with overlapping rules - more specific rule should match first (IPv6)."""
+        client = nodes["client"]
+
+        # Add more specific rule: drop traffic from client network to port 80
+        specific_rule_id = 100007
+        options_specific = AddRuleOptions(
+            rule_id=specific_rule_id,
+            src=client_network_v6,
+            dst="::/0",
+            protocol="tcp",
+            dport=80,
+            actions=[("drop", 0)],
+        )
+        policy_client.add_rule(options_specific)
+
+        # Add less specific rule: log (pass) traffic from anywhere to port 80
+        # Use 2000::/3 (global unicast) instead of ::/0 to exclude link-local ND traffic
+        general_rule_id = 100008
+        options_general = AddRuleOptions(
+            rule_id=general_rule_id,
+            src="2000::/3",
+            dst="::/0",
+            protocol="tcp",
+            dport=80,
+            actions=[("log", 0)],
+        )
+        policy_client.add_rule(options_general)
+
+        policy_client.clear_rule_stats(specific_rule_id)
+        policy_client.clear_rule_stats(general_rule_id)
+
+        # Send TCP from client (should match specific rule)
+        packets_to_send = 5
+        send_tcp_syn(
+            client,
+            server_ip_v6,
+            dest_port=80,
+            source_ip=str(client_ip_v6),
+            count=packets_to_send,
+            interface=client_interface.if_name,
+        )
+
+        specific_stats = policy_client.get_rule_stats(specific_rule_id)
+        specific_packets = (
+            specific_stats.rules[0].stats.packets
+            if specific_stats.rules and specific_stats.rules[0].stats
+            else 0
+        )
+
+        logger.info(
+            f"TCP v6 specific rule ({client_network_v6}): matched={specific_packets}, expected={packets_to_send}"
+        )
+        assert specific_packets == packets_to_send, (
+            f"Specific rule should match traffic from {client_network_v6}"
+        )
+
+        # Check general rule stats - should NOT have matched (ND traffic excluded by 2000::/3)
+        general_stats = policy_client.get_rule_stats(general_rule_id)
+        general_packets = (
+            general_stats.rules[0].stats.packets
+            if general_stats.rules and general_stats.rules[0].stats
+            else 0
+        )
+
+        logger.info(f"General rule (2000::/3): matched={general_packets}, expected=0")
+        assert general_packets == 0, (
+            "General rule should not match when specific rule matches"
+        )
+
+    @pytest.mark.parametrize("client_type", ["cli", "graphql"], indirect=True)
+    def test_udp_rule_specificity_v6(
+        self,
+        configure_node_interfaces,
+        nodes,
+        policy_client,
+        attached_xdp,
+        clean_rules,
+        client_interface,
+        client_network_v6,
+        client_ip_v6,
+        server_ip_v6,
+        nmap_installed,
+    ):
+        """Test UDP traffic with overlapping rules - more specific rule should match first (IPv6)."""
+        client = nodes["client"]
+
+        # Add more specific rule: drop UDP from client network to port 53
+        specific_rule_id = 100009
+        options_specific = AddRuleOptions(
+            rule_id=specific_rule_id,
+            src=client_network_v6,
+            dst="::/0",
+            protocol="udp",
+            dport=53,
+            actions=[("drop", 0)],
+        )
+        policy_client.add_rule(options_specific)
+
+        # Add less specific rule: log (pass) UDP from anywhere to port 53
+        # Use 2000::/3 (global unicast) instead of ::/0 to exclude link-local ND traffic
+        general_rule_id = 100010
+        options_general = AddRuleOptions(
+            rule_id=general_rule_id,
+            src="2000::/3",
+            dst="::/0",
+            protocol="udp",
+            dport=53,
+            actions=[("log", 0)],
+        )
+        policy_client.add_rule(options_general)
+
+        policy_client.clear_rule_stats(specific_rule_id)
+        policy_client.clear_rule_stats(general_rule_id)
+
+        # Send UDP from client
+        packets_to_send = 5
+        send_udp_packets(
+            client,
+            server_ip_v6,
+            dest_port=53,
+            source_ip=str(client_ip_v6),
+            count=packets_to_send,
+            interface=client_interface.if_name,
+        )
+
+        specific_stats = policy_client.get_rule_stats(specific_rule_id)
+        specific_packets = (
+            specific_stats.rules[0].stats.packets
+            if specific_stats.rules and specific_stats.rules[0].stats
+            else 0
+        )
+
+        logger.info(
+            f"UDP v6 specific rule ({client_network_v6}): matched={specific_packets}, expected={packets_to_send}"
+        )
+        assert specific_packets == packets_to_send, (
+            f"Specific rule should match traffic from {client_network_v6}"
+        )
+
+        # Check general rule stats - should NOT have matched (ND traffic excluded by 2000::/3)
+        general_stats = policy_client.get_rule_stats(general_rule_id)
+        general_packets = (
+            general_stats.rules[0].stats.packets
+            if general_stats.rules and general_stats.rules[0].stats
+            else 0
+        )
+
+        logger.info(f"General rule (2000::/3): matched={general_packets}, expected=0")
+        assert general_packets == 0, (
+            "General rule should not match when specific rule matches"
+        )
+
+    @pytest.mark.parametrize("client_type", ["cli", "graphql"], indirect=True)
+    def test_icmp_rule_specificity_v6(
+        self,
+        configure_node_interfaces,
+        nodes,
+        policy_client,
+        attached_xdp,
+        clean_rules,
+        client_interface,
+        client_network_v6,
+        server_ip_v6,
+        nmap_installed,
+    ):
+        """Test ICMPv6 traffic with overlapping rules - more specific rule should match first (IPv6)."""
+        client = nodes["client"]
+
+        # Add more specific rule: drop ICMPv6 from client network
+        specific_rule_id = 100011
+        options_specific = AddRuleOptions(
+            rule_id=specific_rule_id,
+            src=client_network_v6,
+            dst="::/0",
+            protocol="icmp",
+            actions=[("drop", 0)],
+        )
+        policy_client.add_rule(options_specific)
+
+        # Add less specific rule: log (pass) ICMPv6 from anywhere
+        # Use 2000::/3 (global unicast) instead of ::/0 to exclude link-local ND traffic
+        general_rule_id = 100012
+        options_general = AddRuleOptions(
+            rule_id=general_rule_id,
+            src="2000::/3",
+            dst="::/0",
+            protocol="icmp",
+            actions=[("log", 0)],
+        )
+        policy_client.add_rule(options_general)
+
+        policy_client.clear_rule_stats(specific_rule_id)
+        policy_client.clear_rule_stats(general_rule_id)
+
+        # Send ICMPv6 from client
+        packets_to_send = 5
+        send_ping(
+            client,
+            server_ip_v6,
+            count=packets_to_send,
+            interface=client_interface.if_name,
+        )
+
+        specific_stats = policy_client.get_rule_stats(specific_rule_id)
+        specific_packets = (
+            specific_stats.rules[0].stats.packets
+            if specific_stats.rules and specific_stats.rules[0].stats
+            else 0
+        )
+
+        logger.info(
+            f"ICMPv6 specific rule ({client_network_v6}): matched={specific_packets}, expected={packets_to_send}"
+        )
+        assert specific_packets == packets_to_send, (
+            f"Specific rule should match traffic from {client_network_v6}"
+        )
+
+        # Check general rule stats - should NOT have matched (ND traffic excluded by 2000::/3)
+        general_stats = policy_client.get_rule_stats(general_rule_id)
+        general_packets = (
+            general_stats.rules[0].stats.packets
+            if general_stats.rules and general_stats.rules[0].stats
+            else 0
+        )
+
+        logger.info(f"General rule (2000::/3): matched={general_packets}, expected=0")
+        assert general_packets == 0, (
+            "General rule should not match when specific rule matches"
+        )
+
+
+# ============================================================================
+# Rule Installation Performance Tests
+# ============================================================================
+
+
+class TestRuleInstallationPerformance:
+    """
+    Performance tests for rule installation.
+
+    These tests measure the time and memory usage for installing large numbers
+    of rules. Useful for benchmarking and identifying if a bulk rule installation
+    API would be beneficial.
+
+    Run with: pytest -m performance -v
+    Or for a specific test: pytest -k test_ipv4_rule_installation_performance -v
+    """
+
+    NUM_RULES = 1000  # Number of rules to install in each test
+
+    def _get_memory_usage_kb(self, nodes) -> int:
+        """Get the policy-engine process memory usage in KB from the server node."""
+        server = nodes["server"]
+        # Get RSS (Resident Set Size) of the policy-engine process
+        try:
+            output = server.ssh_command(
+                "ps -o rss= -C policy-engine 2>/dev/null | head -1",
+                timeout=5,
+            )
+            if output.strip():
+                return int(output.strip())
+        except Exception:
+            pass
+        return 0
+
+    def _generate_ipv4_prefix(self, index: int) -> str:
+        """Generate a unique IPv4 /32 prefix from an index."""
+        # Use 10.x.x.x range to generate unique addresses
+        # index 0-255: 10.0.0.x
+        # index 256-65535: 10.0.x.x
+        # index 65536+: 10.x.x.x
+        octet1 = 10
+        octet2 = (index >> 16) & 0xFF
+        octet3 = (index >> 8) & 0xFF
+        octet4 = index & 0xFF
+        return f"{octet1}.{octet2}.{octet3}.{octet4}/32"
+
+    def _generate_ipv6_prefix(self, index: int) -> str:
+        """Generate a unique IPv6 /128 prefix from an index."""
+        # Use 2001:db8::/32 documentation range
+        # Format: 2001:db8:XXXX:XXXX::1/128
+        high = (index >> 16) & 0xFFFF
+        low = index & 0xFFFF
+        return f"2001:db8:{high:04x}:{low:04x}::1/128"
+
+    @pytest.mark.performance
+    @pytest.mark.slow
+    def test_ipv4_rule_installation_performance(
+        self,
+        nodes,
+        policy_client,
+        attached_xdp,
+        clean_rules,
+    ):
+        """Test performance of installing many IPv4 rules."""
+        num_rules = self.NUM_RULES
+
+        # Get initial memory usage
+        initial_memory_kb = self._get_memory_usage_kb(nodes)
+        logger.info(f"Initial memory usage: {initial_memory_kb} KB")
+
+        # Track individual rule installation times
+        install_times = []
+        failed_rules = 0
+
+        logger.info(f"Starting installation of {num_rules} IPv4 rules...")
+        total_start = time.perf_counter()
+
+        for i in range(num_rules):
+            prefix = self._generate_ipv4_prefix(i)
+            options = AddRuleOptions(
+                rule_id=200000 + i,
+                src=prefix,
+                dst="0.0.0.0/0",
+                protocol="any",
+                dport=(i % 65535) + 1,
+                actions=[("pass", 0)],
+            )
+
+            rule_start = time.perf_counter()
+            result = policy_client.add_rule(options)
+            rule_elapsed = time.perf_counter() - rule_start
+            install_times.append(rule_elapsed)
+
+            if not result.success:
+                failed_rules += 1
+                if failed_rules <= 5:  # Only log first few failures
+                    logger.warning(f"Rule {i} failed: {result.message}")
+
+            # Log progress every 1000 rules
+            if (i + 1) % 1000 == 0:
+                elapsed = time.perf_counter() - total_start
+                rate = (i + 1) / elapsed
+                logger.info(
+                    f"Progress: {i + 1}/{num_rules} rules installed "
+                    f"({elapsed:.2f}s, {rate:.1f} rules/sec)"
+                )
+
+        total_elapsed = time.perf_counter() - total_start
+
+        # Get final memory usage
+        final_memory_kb = self._get_memory_usage_kb(nodes)
+        memory_delta_kb = final_memory_kb - initial_memory_kb
+
+        # Calculate statistics
+        avg_time_ms = (sum(install_times) / len(install_times)) * 1000
+        min_time_ms = min(install_times) * 1000
+        max_time_ms = max(install_times) * 1000
+        rules_per_sec = num_rules / total_elapsed
+
+        # Sort for percentiles
+        sorted_times = sorted(install_times)
+        p50_ms = sorted_times[len(sorted_times) // 2] * 1000
+        p95_ms = sorted_times[int(len(sorted_times) * 0.95)] * 1000
+        p99_ms = sorted_times[int(len(sorted_times) * 0.99)] * 1000
+
+        logger.info("=" * 60)
+        logger.info("IPv4 Rule Installation Performance Results")
+        logger.info("=" * 60)
+        logger.info(f"Total rules:        {num_rules}")
+        logger.info(f"Failed rules:       {failed_rules}")
+        logger.info(f"Total time:         {total_elapsed:.2f} seconds")
+        logger.info(f"Rules per second:   {rules_per_sec:.1f}")
+        logger.info(f"Avg install time:   {avg_time_ms:.3f} ms")
+        logger.info(f"Min install time:   {min_time_ms:.3f} ms")
+        logger.info(f"Max install time:   {max_time_ms:.3f} ms")
+        logger.info(f"P50 install time:   {p50_ms:.3f} ms")
+        logger.info(f"P95 install time:   {p95_ms:.3f} ms")
+        logger.info(f"P99 install time:   {p99_ms:.3f} ms")
+        logger.info(f"Initial memory:     {initial_memory_kb} KB")
+        logger.info(f"Final memory:       {final_memory_kb} KB")
+        logger.info(
+            f"Memory delta:       {memory_delta_kb} KB ({memory_delta_kb / 1024:.2f} MB)"
+        )
+        logger.info(f"Memory per rule:    {memory_delta_kb / num_rules:.2f} KB")
+        logger.info("=" * 60)
+
+        # Basic assertions - ensure most rules were installed
+        success_rate = (num_rules - failed_rules) / num_rules
+        assert success_rate >= 0.99, (
+            f"Too many failed rules: {failed_rules}/{num_rules}"
+        )
+
+    @pytest.mark.performance
+    @pytest.mark.slow
+    def test_ipv6_rule_installation_performance(
+        self,
+        nodes,
+        policy_client,
+        attached_xdp,
+        clean_rules,
+    ):
+        """Test performance of installing many IPv6 rules."""
+        num_rules = self.NUM_RULES
+
+        # Get initial memory usage
+        initial_memory_kb = self._get_memory_usage_kb(nodes)
+        logger.info(f"Initial memory usage: {initial_memory_kb} KB")
+
+        # Track individual rule installation times
+        install_times = []
+        failed_rules = 0
+
+        logger.info(f"Starting installation of {num_rules} IPv6 rules...")
+        total_start = time.perf_counter()
+
+        for i in range(num_rules):
+            prefix = self._generate_ipv6_prefix(i)
+            options = AddRuleOptions(
+                rule_id=300000 + i,
+                src=prefix,
+                dst="::/0",
+                protocol="any",
+                dport=(i % 65535) + 1,
+                actions=[("pass", 0)],
+            )
+
+            rule_start = time.perf_counter()
+            result = policy_client.add_rule(options)
+            rule_elapsed = time.perf_counter() - rule_start
+            install_times.append(rule_elapsed)
+
+            if not result.success:
+                failed_rules += 1
+                if failed_rules <= 5:
+                    logger.warning(f"Rule {i} failed: {result.message}")
+
+            # Log progress every 1000 rules
+            if (i + 1) % 1000 == 0:
+                elapsed = time.perf_counter() - total_start
+                rate = (i + 1) / elapsed
+                logger.info(
+                    f"Progress: {i + 1}/{num_rules} rules installed "
+                    f"({elapsed:.2f}s, {rate:.1f} rules/sec)"
+                )
+
+        total_elapsed = time.perf_counter() - total_start
+
+        # Get final memory usage
+        final_memory_kb = self._get_memory_usage_kb(nodes)
+        memory_delta_kb = final_memory_kb - initial_memory_kb
+
+        # Calculate statistics
+        avg_time_ms = (sum(install_times) / len(install_times)) * 1000
+        min_time_ms = min(install_times) * 1000
+        max_time_ms = max(install_times) * 1000
+        rules_per_sec = num_rules / total_elapsed
+
+        # Sort for percentiles
+        sorted_times = sorted(install_times)
+        p50_ms = sorted_times[len(sorted_times) // 2] * 1000
+        p95_ms = sorted_times[int(len(sorted_times) * 0.95)] * 1000
+        p99_ms = sorted_times[int(len(sorted_times) * 0.99)] * 1000
+
+        logger.info("=" * 60)
+        logger.info("IPv6 Rule Installation Performance Results")
+        logger.info("=" * 60)
+        logger.info(f"Total rules:        {num_rules}")
+        logger.info(f"Failed rules:       {failed_rules}")
+        logger.info(f"Total time:         {total_elapsed:.2f} seconds")
+        logger.info(f"Rules per second:   {rules_per_sec:.1f}")
+        logger.info(f"Avg install time:   {avg_time_ms:.3f} ms")
+        logger.info(f"Min install time:   {min_time_ms:.3f} ms")
+        logger.info(f"Max install time:   {max_time_ms:.3f} ms")
+        logger.info(f"P50 install time:   {p50_ms:.3f} ms")
+        logger.info(f"P95 install time:   {p95_ms:.3f} ms")
+        logger.info(f"P99 install time:   {p99_ms:.3f} ms")
+        logger.info(f"Initial memory:     {initial_memory_kb} KB")
+        logger.info(f"Final memory:       {final_memory_kb} KB")
+        logger.info(
+            f"Memory delta:       {memory_delta_kb} KB ({memory_delta_kb / 1024:.2f} MB)"
+        )
+        logger.info(f"Memory per rule:    {memory_delta_kb / num_rules:.2f} KB")
+        logger.info("=" * 60)
+
+        # Basic assertions - ensure most rules were installed
+        success_rate = (num_rules - failed_rules) / num_rules
+        assert success_rate >= 0.99, (
+            f"Too many failed rules: {failed_rules}/{num_rules}"
+        )
+
+    @pytest.mark.performance
+    @pytest.mark.slow
+    def test_mixed_v4_v6_rule_installation_performance(
+        self,
+        nodes,
+        policy_client,
+        attached_xdp,
+        clean_rules,
+    ):
+        """Test performance of installing mixed IPv4 and IPv6 rules (alternating)."""
+        num_rules = self.NUM_RULES
+
+        # Get initial memory usage
+        initial_memory_kb = self._get_memory_usage_kb(nodes)
+        logger.info(f"Initial memory usage: {initial_memory_kb} KB")
+
+        # Track individual rule installation times separately
+        ipv4_times = []
+        ipv6_times = []
+        failed_rules = 0
+
+        logger.info(f"Starting installation of {num_rules} mixed IPv4/IPv6 rules...")
+        total_start = time.perf_counter()
+
+        for i in range(num_rules):
+            is_ipv6 = i % 2 == 1  # Alternate between v4 and v6
+
+            if is_ipv6:
+                prefix = self._generate_ipv6_prefix(i // 2)
+                options = AddRuleOptions(
+                    rule_id=400000 + i,
+                    src=prefix,
+                    dst="::/0",
+                    protocol="any",
+                    dport=(i % 65535) + 1,
+                    actions=[("pass", 0)],
+                )
+            else:
+                prefix = self._generate_ipv4_prefix(i // 2)
+                options = AddRuleOptions(
+                    rule_id=400000 + i,
+                    src=prefix,
+                    dst="0.0.0.0/0",
+                    protocol="any",
+                    dport=(i % 65535) + 1,
+                    actions=[("pass", 0)],
+                )
+
+            rule_start = time.perf_counter()
+            result = policy_client.add_rule(options)
+            rule_elapsed = time.perf_counter() - rule_start
+
+            if is_ipv6:
+                ipv6_times.append(rule_elapsed)
+            else:
+                ipv4_times.append(rule_elapsed)
+
+            if not result.success:
+                failed_rules += 1
+                if failed_rules <= 5:
+                    logger.warning(
+                        f"Rule {i} ({'v6' if is_ipv6 else 'v4'}) failed: {result.message}"
+                    )
+
+            # Log progress every 1000 rules
+            if (i + 1) % 1000 == 0:
+                elapsed = time.perf_counter() - total_start
+                rate = (i + 1) / elapsed
+                logger.info(
+                    f"Progress: {i + 1}/{num_rules} rules installed "
+                    f"({elapsed:.2f}s, {rate:.1f} rules/sec)"
+                )
+
+        total_elapsed = time.perf_counter() - total_start
+
+        # Get final memory usage
+        final_memory_kb = self._get_memory_usage_kb(nodes)
+        memory_delta_kb = final_memory_kb - initial_memory_kb
+
+        # Calculate statistics for combined
+        all_times = ipv4_times + ipv6_times
+        avg_time_ms = (sum(all_times) / len(all_times)) * 1000
+        min_time_ms = min(all_times) * 1000
+        max_time_ms = max(all_times) * 1000
+        rules_per_sec = num_rules / total_elapsed
+
+        # IPv4 specific stats
+        ipv4_avg_ms = (sum(ipv4_times) / len(ipv4_times)) * 1000 if ipv4_times else 0
+        ipv6_avg_ms = (sum(ipv6_times) / len(ipv6_times)) * 1000 if ipv6_times else 0
+
+        # Sort for percentiles
+        sorted_times = sorted(all_times)
+        p50_ms = sorted_times[len(sorted_times) // 2] * 1000
+        p95_ms = sorted_times[int(len(sorted_times) * 0.95)] * 1000
+        p99_ms = sorted_times[int(len(sorted_times) * 0.99)] * 1000
+
+        logger.info("=" * 60)
+        logger.info("Mixed IPv4/IPv6 Rule Installation Performance Results")
+        logger.info("=" * 60)
+        logger.info(
+            f"Total rules:        {num_rules} ({len(ipv4_times)} v4, {len(ipv6_times)} v6)"
+        )
+        logger.info(f"Failed rules:       {failed_rules}")
+        logger.info(f"Total time:         {total_elapsed:.2f} seconds")
+        logger.info(f"Rules per second:   {rules_per_sec:.1f}")
+        logger.info(f"Avg install time:   {avg_time_ms:.3f} ms (combined)")
+        logger.info(f"  IPv4 avg time:    {ipv4_avg_ms:.3f} ms")
+        logger.info(f"  IPv6 avg time:    {ipv6_avg_ms:.3f} ms")
+        logger.info(f"Min install time:   {min_time_ms:.3f} ms")
+        logger.info(f"Max install time:   {max_time_ms:.3f} ms")
+        logger.info(f"P50 install time:   {p50_ms:.3f} ms")
+        logger.info(f"P95 install time:   {p95_ms:.3f} ms")
+        logger.info(f"P99 install time:   {p99_ms:.3f} ms")
+        logger.info(f"Initial memory:     {initial_memory_kb} KB")
+        logger.info(f"Final memory:       {final_memory_kb} KB")
+        logger.info(
+            f"Memory delta:       {memory_delta_kb} KB ({memory_delta_kb / 1024:.2f} MB)"
+        )
+        logger.info(f"Memory per rule:    {memory_delta_kb / num_rules:.2f} KB")
+        logger.info("=" * 60)
+
+        # Basic assertions - ensure most rules were installed
+        success_rate = (num_rules - failed_rules) / num_rules
+        assert success_rate >= 0.99, (
+            f"Too many failed rules: {failed_rules}/{num_rules}"
+        )
+
+    @pytest.mark.performance
+    @pytest.mark.slow
+    def test_rule_deletion_performance(
+        self,
+        nodes,
+        policy_client,
+        attached_xdp,
+        clean_rules,
+    ):
+        """Test performance of deleting many rules after installation."""
+        num_rules = self.NUM_RULES
+
+        # First, install the rules
+        logger.info(f"Installing {num_rules} IPv4 rules for deletion test...")
+        install_start = time.perf_counter()
+
+        for i in range(num_rules):
+            prefix = self._generate_ipv4_prefix(i)
+            options = AddRuleOptions(
+                rule_id=500000 + i,
+                src=prefix,
+                dst="0.0.0.0/0",
+                protocol="any",
+                dport=(i % 65535) + 1,
+                actions=[("pass", 0)],
+            )
+            policy_client.add_rule(options)
+
+            if (i + 1) % 2000 == 0:
+                logger.info(f"Installed {i + 1}/{num_rules} rules...")
+
+        install_elapsed = time.perf_counter() - install_start
+        logger.info(f"Installation complete in {install_elapsed:.2f}s")
+
+        # Get memory before deletion
+        memory_before_delete_kb = self._get_memory_usage_kb(nodes)
+
+        # Now time the deletions
+        delete_times = []
+        failed_deletes = 0
+
+        logger.info(f"Starting deletion of {num_rules} rules...")
+        delete_start = time.perf_counter()
+
+        for i in range(num_rules):
+            rule_id = 500000 + i
+
+            rule_start = time.perf_counter()
+            result = policy_client.delete_rule(rule_id=rule_id)
+            rule_elapsed = time.perf_counter() - rule_start
+            delete_times.append(rule_elapsed)
+
+            if not result.success:
+                failed_deletes += 1
+
+            if (i + 1) % 1000 == 0:
+                elapsed = time.perf_counter() - delete_start
+                rate = (i + 1) / elapsed
+                logger.info(
+                    f"Progress: {i + 1}/{num_rules} rules deleted "
+                    f"({elapsed:.2f}s, {rate:.1f} rules/sec)"
+                )
+
+        delete_elapsed = time.perf_counter() - delete_start
+
+        # Get memory after deletion
+        memory_after_delete_kb = self._get_memory_usage_kb(nodes)
+        memory_freed_kb = memory_before_delete_kb - memory_after_delete_kb
+
+        # Calculate statistics
+        avg_time_ms = (sum(delete_times) / len(delete_times)) * 1000
+        min_time_ms = min(delete_times) * 1000
+        max_time_ms = max(delete_times) * 1000
+        rules_per_sec = num_rules / delete_elapsed
+
+        sorted_times = sorted(delete_times)
+        p50_ms = sorted_times[len(sorted_times) // 2] * 1000
+        p95_ms = sorted_times[int(len(sorted_times) * 0.95)] * 1000
+        p99_ms = sorted_times[int(len(sorted_times) * 0.99)] * 1000
+
+        logger.info("=" * 60)
+        logger.info("Rule Deletion Performance Results")
+        logger.info("=" * 60)
+        logger.info(f"Total rules:        {num_rules}")
+        logger.info(f"Failed deletes:     {failed_deletes}")
+        logger.info(f"Total time:         {delete_elapsed:.2f} seconds")
+        logger.info(f"Rules per second:   {rules_per_sec:.1f}")
+        logger.info(f"Avg delete time:    {avg_time_ms:.3f} ms")
+        logger.info(f"Min delete time:    {min_time_ms:.3f} ms")
+        logger.info(f"Max delete time:    {max_time_ms:.3f} ms")
+        logger.info(f"P50 delete time:    {p50_ms:.3f} ms")
+        logger.info(f"P95 delete time:    {p95_ms:.3f} ms")
+        logger.info(f"P99 delete time:    {p99_ms:.3f} ms")
+        logger.info(f"Memory before del:  {memory_before_delete_kb} KB")
+        logger.info(f"Memory after del:   {memory_after_delete_kb} KB")
+        logger.info(
+            f"Memory freed:       {memory_freed_kb} KB ({memory_freed_kb / 1024:.2f} MB)"
+        )
+        logger.info("=" * 60)
+
+        success_rate = (num_rules - failed_deletes) / num_rules
+        assert success_rate >= 0.99, (
+            f"Too many failed deletes: {failed_deletes}/{num_rules}"
+        )
+
+    @pytest.mark.performance
+    @pytest.mark.slow
+    def test_batch_rule_installation_performance(
+        self,
+        nodes,
+        graphql_policy_client,
+        attached_xdp,
+        clean_rules,
+    ):
+        """
+        Test performance of batch rule installation using the addRules GraphQL mutation.
+
+        This test uses the batch API which installs all rules in a single request,
+        compared to the individual installation tests that make one request per rule.
+        """
+        from tests.graphql_policy_client import GraphQLPolicyClient
+
+        # This test specifically requires the GraphQL client for batch support
+        if not isinstance(graphql_policy_client, GraphQLPolicyClient):
+            pytest.skip("Batch API requires GraphQL client")
+
+        num_rules = self.NUM_RULES
+
+        # Get initial memory usage
+        initial_memory_kb = self._get_memory_usage_kb(nodes)
+        logger.info(f"Initial memory usage: {initial_memory_kb} KB")
+
+        # Build the batch of rules
+        rules = []
+        for i in range(num_rules):
+            prefix = self._generate_ipv4_prefix(i)
+            options = AddRuleOptions(
+                rule_id=600000 + i,
+                src=prefix,
+                dst="0.0.0.0/0",
+                protocol="any",
+                dport=(i % 65535) + 1,
+                actions=[("pass", 0)],
+            )
+            rules.append(options)
+
+        logger.info(f"Starting batch installation of {num_rules} IPv4 rules...")
+        total_start = time.perf_counter()
+
+        # Single batch call for all rules
+        result = graphql_policy_client.add_rules_batch(rules)
+
+        total_elapsed = time.perf_counter() - total_start
+
+        # Skip if batch API is not implemented yet
+        if not result.success and "Unknown field" in result.message:
+            pytest.skip("Batch addRules API not implemented yet")
+
+        # Get final memory usage
+        final_memory_kb = self._get_memory_usage_kb(nodes)
+        memory_delta_kb = final_memory_kb - initial_memory_kb
+
+        # Calculate statistics
+        rules_per_sec = num_rules / total_elapsed
+        avg_time_per_rule_ms = (total_elapsed / num_rules) * 1000
+
+        logger.info("=" * 60)
+        logger.info("Batch Rule Installation Performance Results")
+        logger.info("=" * 60)
+        logger.info(f"Total rules:        {num_rules}")
+        logger.info(f"Succeeded:          {result.succeeded}")
+        logger.info(f"Failed:             {result.failed}")
+        logger.info(f"Total time:         {total_elapsed:.2f} seconds")
+        logger.info(f"Rules per second:   {rules_per_sec:.1f}")
+        logger.info(f"Avg time per rule:  {avg_time_per_rule_ms:.3f} ms")
+        logger.info(f"Initial memory:     {initial_memory_kb} KB")
+        logger.info(f"Final memory:       {final_memory_kb} KB")
+        logger.info(
+            f"Memory delta:       {memory_delta_kb} KB ({memory_delta_kb / 1024:.2f} MB)"
+        )
+        logger.info(f"Memory per rule:    {memory_delta_kb / num_rules:.2f} KB")
+        logger.info("=" * 60)
+
+        # Basic assertions
+        assert result.success, f"Batch installation failed: {result.message}"
+        success_rate = result.succeeded / num_rules
+        assert success_rate >= 0.99, (
+            f"Too many failed rules: {result.failed}/{num_rules}"
+        )
+
+    @pytest.mark.integration
+    def test_batch_rule_deletion(
+        self, nodes, graphql_policy_client, attached_xdp, clean_rules
+    ):
+        """
+        Add a small batch of rules, then delete them using the deleteRules batch mutation.
+        """
+        from tests.graphql_policy_client import GraphQLPolicyClient
+
+        if not isinstance(graphql_policy_client, GraphQLPolicyClient):
+            pytest.skip("Batch API requires GraphQL client")
+
+        # Use the same pattern as the batch installation performance test
+        num_rules = self.NUM_RULES
+
+        # Get initial memory usage
+        initial_memory_kb = self._get_memory_usage_kb(nodes)
+
+        # Build the batch of rules using the helper
+        rules = []
+        ids = []
+        for i in range(num_rules):
+            prefix = self._generate_ipv4_prefix(i)
+            options = AddRuleOptions(
+                rule_id=700000 + i,
+                src=prefix,
+                dst="0.0.0.0/0",
+                protocol="any",
+                actions=[("pass", 0)],
+            )
+            rules.append(options)
+            ids.append(700000 + i)
+
+        logger.info(
+            f"Starting batch installation of {num_rules} IPv4 rules for deletion test..."
+        )
+        total_start = time.perf_counter()
+
+        add_result = graphql_policy_client.add_rules_batch(rules)
+
+        total_elapsed = time.perf_counter() - total_start
+
+        # If batch add isn't implemented, skip the test
+        if not add_result.success and "Unknown field" in add_result.message:
+            pytest.skip("Batch addRules API not implemented yet")
+
+        # Get final memory usage
+        final_memory_kb = self._get_memory_usage_kb(nodes)
+        memory_delta_kb = final_memory_kb - initial_memory_kb
+
+        logger.info(
+            f"Batch add: total={num_rules} succeeded={add_result.succeeded} failed={add_result.failed} time={total_elapsed:.2f}s mem_delta={memory_delta_kb}KB"
+        )
+
+        assert add_result.succeeded == num_rules
+
+        # Confirm rules present
+        existing = graphql_policy_client.list_rules()
+        present_ids = {r.rule_id for r in existing}
+        for rid in ids:
+            assert rid in present_ids
+
+        # Now delete them in a batch
+        delete_start = time.perf_counter()
+        delete_result = graphql_policy_client.delete_rules_batch(ids)
+        delete_elapsed = time.perf_counter() - delete_start
+
+        # If server doesn't implement deleteRules, skip
+        if not delete_result.success and "Unknown field" in delete_result.message:
+            pytest.skip("Batch deleteRules API not implemented yet")
+
+        # Get memory after deletion
+        mem_after_delete_kb = self._get_memory_usage_kb(nodes)
+        logger.info(
+            f"Batch delete: succeeded={delete_result.succeeded} failed={delete_result.failed} time={delete_elapsed:.2f}s mem_after_delete={mem_after_delete_kb}KB"
+        )
+
+        assert delete_result.succeeded == num_rules
+
+        # Verify they are gone
+        existing_after = graphql_policy_client.list_rules()
+        present_after = {r.rule_id for r in existing_after}
+        for rid in ids:
+            assert rid not in present_after

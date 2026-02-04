@@ -1111,3 +1111,23 @@ class BaseTopologyTests:
                             f"IPv6 Ping failed: {source_node_name} ({source_ipv6}) -> {target_node_name} ({target_ipv6}) on {net_name}\n"
                             f"Error: {e.output}"
                         )
+
+
+# ============================================================================
+# Session-scoped cleanup
+# ============================================================================
+
+
+@pytest.fixture(scope="session", autouse=True)
+def cleanup_ssh_connections():
+    """
+    Cleanup SSH connections at the end of the test session.
+
+    This fixture runs automatically and closes all persistent SSH
+    connections created by the Node class using paramiko.
+    """
+    yield
+    # Teardown: close all SSH connections
+    logger.info("Closing all persistent SSH connections...")
+    Node.close_all_connections()
+    logger.info("✓ SSH connections closed")

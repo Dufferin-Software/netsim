@@ -103,6 +103,73 @@ class OperationResult:
 
 
 @dataclass
+class BatchRuleResult:
+    """Result for a single rule in a batch operation."""
+
+    index: int
+    rule_id: Optional[int]
+    success: bool
+    error: Optional[str]
+
+    @classmethod
+    def from_json(cls, data: dict) -> "BatchRuleResult":
+        return cls(
+            index=data.get("index", 0),
+            rule_id=data.get("ruleId"),
+            success=data.get("success", False),
+            error=data.get("error"),
+        )
+
+
+@dataclass
+class BatchAddRulesResult:
+    """Result for batch add rules operation."""
+
+    total: int
+    succeeded: int
+    failed: int
+    success: bool
+    message: str
+    results: List["BatchRuleResult"]
+
+    @classmethod
+    def from_json(cls, data: dict) -> "BatchAddRulesResult":
+        results = [BatchRuleResult.from_json(r) for r in data.get("results", [])]
+        return cls(
+            total=data.get("total", 0),
+            succeeded=data.get("succeeded", 0),
+            failed=data.get("failed", 0),
+            success=data.get("success", False),
+            message=data.get("message", ""),
+            results=results,
+        )
+
+
+@dataclass
+class BatchDeleteRulesResult:
+    """Result for batch delete rules operation."""
+
+    total: int
+    succeeded: int
+    failed: int
+    success: bool
+    message: str
+    results: List[BatchRuleResult]
+
+    @classmethod
+    def from_json(cls, data: dict) -> "BatchDeleteRulesResult":
+        results = [BatchRuleResult.from_json(r) for r in data.get("results", [])]
+        return cls(
+            total=data.get("total", 0),
+            succeeded=data.get("succeeded", 0),
+            failed=data.get("failed", 0),
+            success=data.get("success", False),
+            message=data.get("message", ""),
+            results=results,
+        )
+
+
+@dataclass
 class ServerStatus:
     """Server status output."""
 
@@ -306,9 +373,23 @@ class RuleStatsResponse:
 
     @classmethod
     def from_json(cls, data: dict) -> "RuleStatsResponse":
+        # Handle both single-rule response (with --id) and all-rules response
+        if "rules" in data:
+            # All rules response: {"programAttached": true, "rules": [...]}
+            rules = [RuleWithStats.from_json(r) for r in data.get("rules", [])]
+        elif "ruleId" in data and "stats" in data:
+            # Single rule response: {"programAttached": true, "ruleId": X, "stats": {...}}
+            # Convert to RuleWithStats format
+            rule_data = {
+                "rule": {"ruleId": data["ruleId"]},
+                "stats": data["stats"],
+            }
+            rules = [RuleWithStats.from_json(rule_data)]
+        else:
+            rules = []
         return cls(
             program_attached=data.get("programAttached", False),
-            rules=[RuleWithStats.from_json(r) for r in data.get("rules", [])],
+            rules=rules,
         )
 
 
