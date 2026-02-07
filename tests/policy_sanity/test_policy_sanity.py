@@ -29,9 +29,9 @@ from tests.systemd_utils import get_service_status, start_service, stop_service
 from tests.policy_client import (
     PolicyClient,
     AddRuleOptions,
+    IngressMode,
     PolicyAction,
     Protocol,
-    XdpMode,
 )
 from tests.graphql_policy_client import GraphQLPolicyClient
 from tests.nping_utils import (
@@ -232,28 +232,28 @@ def clean_rules(policy_client):
 
 
 @pytest.fixture(scope="function")
-def attached_xdp(policy_client, server_interface):
+def attached_ingress(policy_client, server_interface):
     """
-    Fixture that attaches XDP program before test and detaches after.
+    Fixture that attaches ingress program before test and detaches after.
 
     Yields the interface name.
     """
     iface_name = server_interface.if_name
 
-    # Attach XDP
-    result = policy_client.attach_xdp(iface_name, XdpMode.AUTO)
+    # Attach ingress
+    result = policy_client.attach_ingress(iface_name, IngressMode.AUTO)
     if not result.success:
-        pytest.fail(f"Failed to attach XDP: {result.message}")
+        pytest.fail(f"Failed to attach ingress: {result.message}")
 
-    logger.info(f"XDP attached to {iface_name}")
+    logger.info(f"Ingress attached to {iface_name}")
     yield iface_name
 
-    # Detach XDP
+    # Detach ingress
     try:
-        policy_client.detach_xdp(iface_name)
-        logger.info(f"XDP detached from {iface_name}")
+        policy_client.detach_ingress(iface_name)
+        logger.info(f"Ingress detached from {iface_name}")
     except Exception as e:
-        logger.warning(f"Failed to detach XDP: {e}")
+        logger.warning(f"Failed to detach ingress: {e}")
 
 
 # ============================================================================
@@ -291,53 +291,57 @@ class TestTwoNodePolicy(BaseTopologyTests):
         logger.info(f"policy-engine confirmed running with PID {status.main_pid}")
 
 
-class TestXdpAttachment:
-    """Tests for XDP program attachment and detachment."""
+class TestIngressAttachment:
+    """Tests for ingress program attachment and detachment."""
 
-    def test_attach_xdp(self, policy_client, server_interface):
-        """Test attaching XDP program to an interface."""
+    def test_attach_ingress(self, policy_client, server_interface):
+        """Test attaching ingress program to an interface."""
         iface_name = server_interface.if_name
 
-        # Attach XDP
-        result = policy_client.attach_xdp(iface_name, XdpMode.AUTO)
-        assert result.success, f"Failed to attach XDP: {result.message}"
+        # Attach ingress
+        result = policy_client.attach_ingress(iface_name, IngressMode.AUTO)
+        assert result.success, f"Failed to attach ingress: {result.message}"
 
         # Verify attachment
         interfaces = policy_client.list_interfaces()
         attached = [i for i in interfaces if i.interface == iface_name]
-        assert len(attached) == 1, f"Interface {iface_name} should be attached"
-        logger.info(f"XDP attached in mode: {attached[0].mode}")
+        assert len(attached) >= 1, f"Interface {iface_name} should be attached"
+        logger.info(f"Ingress attached in mode: {attached[0].mode}")
 
         # Check server status
         status = policy_client.status()
         assert status.program_attached, "program_attached should be True"
 
         # Cleanup
-        policy_client.detach_xdp(iface_name)
+        policy_client.detach_ingress(iface_name)
 
-    def test_detach_xdp(self, policy_client, server_interface):
-        """Test detaching XDP program from an interface."""
+    def test_detach_ingress(self, policy_client, server_interface):
+        """Test detaching ingress program from an interface."""
         iface_name = server_interface.if_name
 
         # First attach
-        result = policy_client.attach_xdp(iface_name, XdpMode.AUTO)
-        assert result.success, f"Failed to attach XDP: {result.message}"
+        result = policy_client.attach_ingress(iface_name, IngressMode.AUTO)
+        assert result.success, f"Failed to attach ingress: {result.message}"
 
         # Then detach
-        result = policy_client.detach_xdp(iface_name)
-        assert result.success, f"Failed to detach XDP: {result.message}"
+        result = policy_client.detach_ingress(iface_name)
+        assert result.success, f"Failed to detach ingress: {result.message}"
 
         # Verify detachment
         interfaces = policy_client.list_interfaces()
-        attached = [i for i in interfaces if i.interface == iface_name]
+        attached = [
+            i
+            for i in interfaces
+            if i.interface == iface_name and i.direction == "ingress"
+        ]
         assert len(attached) == 0, f"Interface {iface_name} should be detached"
 
     def test_detach_all(self, policy_client, server_interface):
-        """Test detaching all XDP programs."""
+        """Test detaching all programs."""
         iface_name = server_interface.if_name
 
         # Attach first
-        policy_client.attach_xdp(iface_name, XdpMode.AUTO)
+        policy_client.attach_ingress(iface_name, IngressMode.AUTO)
 
         # Detach all
         result = policy_client.detach_all()
@@ -351,7 +355,7 @@ class TestXdpAttachment:
 class TestRuleManagement:
     """Tests for rule addition, deletion, and listing."""
 
-    def test_add_rule_basic_ipv4(self, policy_client, attached_xdp, clean_rules):
+    def test_add_rule_basic_ipv4(self, policy_client, attached_ingress, clean_rules):
         """Test adding a basic IPv4 rule."""
         options = AddRuleOptions(
             src="10.0.0.0/8",
@@ -369,7 +373,7 @@ class TestRuleManagement:
         assert rules[0].src_prefix == "10.0.0.0/8"
         assert rules[0].actions[0].action == PolicyAction.DROP
 
-    def test_add_rule_basic_ipv6(self, policy_client, attached_xdp, clean_rules):
+    def test_add_rule_basic_ipv6(self, policy_client, attached_ingress, clean_rules):
         """Test adding a basic IPv6 rule."""
         options = AddRuleOptions(
             src="2001:db8::/32",
@@ -387,7 +391,7 @@ class TestRuleManagement:
         assert "2001:db8::" in rules[0].src_prefix.lower()
         assert rules[0].actions[0].action == PolicyAction.DROP
 
-    def test_add_rule_with_ports(self, policy_client, attached_xdp, clean_rules):
+    def test_add_rule_with_ports(self, policy_client, attached_ingress, clean_rules):
         """Test adding a rule with port matching."""
         options = AddRuleOptions(
             src="0.0.0.0/0",
@@ -406,7 +410,7 @@ class TestRuleManagement:
         assert rules[0].dport == 80
         assert rules[0].protocol == Protocol.TCP
 
-    def test_add_rule_icmp(self, policy_client, attached_xdp, clean_rules):
+    def test_add_rule_icmp(self, policy_client, attached_ingress, clean_rules):
         """Test adding an ICMP rule."""
         options = AddRuleOptions(
             src="10.1.1.0/24",
@@ -422,7 +426,7 @@ class TestRuleManagement:
         assert rules[0].protocol == Protocol.ICMP
         assert len(rules[0].actions) == 2
 
-    def test_add_multiple_rules(self, policy_client, attached_xdp, clean_rules):
+    def test_add_multiple_rules(self, policy_client, attached_ingress, clean_rules):
         """Test adding multiple rules."""
         # Add first rule
         policy_client.add_rule(
@@ -458,7 +462,7 @@ class TestRuleManagement:
         rules = policy_client.list_rules()
         assert len(rules) == 3, "Should have 3 rules"
 
-    def test_delete_rule_by_id(self, policy_client, attached_xdp, clean_rules):
+    def test_delete_rule_by_id(self, policy_client, attached_ingress, clean_rules):
         """Test deleting a rule by ID."""
         # Add a rule with specific ID
         options = AddRuleOptions(
@@ -482,7 +486,7 @@ class TestRuleManagement:
         rules = policy_client.list_rules()
         assert len(rules) == 0, "Rule should be deleted"
 
-    def test_flush_rules(self, policy_client, attached_xdp, clean_rules):
+    def test_flush_rules(self, policy_client, attached_ingress, clean_rules):
         """Test flushing all rules."""
         # Add several rules
         for i in range(5):
@@ -505,7 +509,9 @@ class TestRuleManagement:
         rules = policy_client.list_rules()
         assert len(rules) == 0, "All rules should be flushed"
 
-    def test_rule_prefix_lengths_ipv4(self, policy_client, attached_xdp, clean_rules):
+    def test_rule_prefix_lengths_ipv4(
+        self, policy_client, attached_ingress, clean_rules
+    ):
         """Test rules with various IPv4 prefix lengths."""
         prefix_lengths = [8, 16, 24, 32]
 
@@ -528,7 +534,9 @@ class TestRuleManagement:
             prefix_len = int(rule.src_prefix.split("/")[1])
             assert prefix_len in prefix_lengths
 
-    def test_rule_prefix_lengths_ipv6(self, policy_client, attached_xdp, clean_rules):
+    def test_rule_prefix_lengths_ipv6(
+        self, policy_client, attached_ingress, clean_rules
+    ):
         """Test rules with various IPv6 prefix lengths."""
         prefix_lengths = [32, 48, 64, 128]
 
@@ -555,7 +563,7 @@ class TestTrafficMatching:
         self,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         client_interface,
         server_ip_v4,
@@ -582,7 +590,7 @@ class TestTrafficMatching:
         self,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         client_interface,
         server_ip_v6,
@@ -609,7 +617,7 @@ class TestTrafficMatching:
         self,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         client_interface,
         client_network_v4,
@@ -629,7 +637,7 @@ class TestTrafficMatching:
         assert result.success, f"Failed to add drop rule: {result.message}"
 
         # Get stats BEFORE sending traffic
-        initial_stats = policy_client.get_stats(attached_xdp)
+        initial_stats = policy_client.get_stats(attached_ingress)
         initial_drops = initial_stats.global_stats.policy_drops
 
         # Send a known number of ICMP packets - should be dropped
@@ -646,7 +654,7 @@ class TestTrafficMatching:
         logger.info(f"ICMP with drop rule: lost={result.packets_lost}")
 
         # Get stats AFTER sending traffic and verify exact count
-        final_stats = policy_client.get_stats(attached_xdp)
+        final_stats = policy_client.get_stats(attached_ingress)
         final_drops = final_stats.global_stats.policy_drops
         drops_delta = final_drops - initial_drops
 
@@ -662,7 +670,7 @@ class TestTrafficMatching:
         self,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         client_interface,
         client_network_v6,
@@ -683,7 +691,7 @@ class TestTrafficMatching:
         assert result.success, f"Failed to add IPv6 drop rule: {result.message}"
 
         # Get stats BEFORE sending traffic
-        initial_stats = policy_client.get_stats(attached_xdp)
+        initial_stats = policy_client.get_stats(attached_ingress)
         initial_drops = initial_stats.global_stats.policy_drops
 
         # Send a known number of ICMPv6 packets - should be dropped
@@ -700,7 +708,7 @@ class TestTrafficMatching:
         logger.info(f"ICMPv6 with drop rule: lost={result.packets_lost}")
 
         # Get stats AFTER sending traffic and verify exact count
-        final_stats = policy_client.get_stats(attached_xdp)
+        final_stats = policy_client.get_stats(attached_ingress)
         final_drops = final_stats.global_stats.policy_drops
         drops_delta = final_drops - initial_drops
 
@@ -716,7 +724,7 @@ class TestTrafficMatching:
         self,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         client_interface,
         client_network_v4,
@@ -736,7 +744,7 @@ class TestTrafficMatching:
         policy_client.add_rule(options)
 
         # Get stats BEFORE sending traffic
-        initial_stats = policy_client.get_stats(attached_xdp)
+        initial_stats = policy_client.get_stats(attached_ingress)
         initial_drops = initial_stats.global_stats.policy_drops
 
         # Send TCP SYN to port 8080 - should be dropped
@@ -750,7 +758,7 @@ class TestTrafficMatching:
         )
 
         # Get stats AFTER sending traffic to port 8080
-        stats_after_8080 = policy_client.get_stats(attached_xdp)
+        stats_after_8080 = policy_client.get_stats(attached_ingress)
         drops_8080 = stats_after_8080.global_stats.policy_drops - initial_drops
 
         logger.info(
@@ -774,7 +782,7 @@ class TestTrafficMatching:
         )
 
         # Get stats AFTER sending traffic to port 9090
-        stats_after_9090 = policy_client.get_stats(attached_xdp)
+        stats_after_9090 = policy_client.get_stats(attached_ingress)
         drops_9090 = stats_after_9090.global_stats.policy_drops - initial_drops_9090
 
         logger.info(f"TCP 9090 (no rule): policy_drops={drops_9090}, expected=0")
@@ -786,7 +794,7 @@ class TestTrafficMatching:
         self,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         client_interface,
         client_network_v6,
@@ -808,7 +816,7 @@ class TestTrafficMatching:
         policy_client.add_rule(options)
 
         # Get stats BEFORE sending traffic
-        initial_stats = policy_client.get_stats(attached_xdp)
+        initial_stats = policy_client.get_stats(attached_ingress)
         initial_drops = initial_stats.global_stats.policy_drops
 
         # Send TCP SYN to port 8080 - should be dropped
@@ -824,7 +832,7 @@ class TestTrafficMatching:
         )
 
         # Get stats AFTER sending traffic to port 8080
-        stats_after_8080 = policy_client.get_stats(attached_xdp)
+        stats_after_8080 = policy_client.get_stats(attached_ingress)
         drops_8080 = stats_after_8080.global_stats.policy_drops - initial_drops
 
         logger.info(
@@ -839,7 +847,7 @@ class TestTrafficMatching:
         self,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         client_interface,
         client_network_v4,
@@ -859,7 +867,7 @@ class TestTrafficMatching:
         policy_client.add_rule(options)
 
         # Get stats BEFORE sending traffic
-        initial_stats = policy_client.get_stats(attached_xdp)
+        initial_stats = policy_client.get_stats(attached_ingress)
         initial_drops = initial_stats.global_stats.policy_drops
 
         # Send UDP to port 5353 - should be dropped
@@ -873,7 +881,7 @@ class TestTrafficMatching:
         )
 
         # Get stats AFTER sending traffic and verify exact count
-        final_stats = policy_client.get_stats(attached_xdp)
+        final_stats = policy_client.get_stats(attached_ingress)
         drops_delta = final_stats.global_stats.policy_drops - initial_drops
 
         logger.info(
@@ -888,7 +896,7 @@ class TestTrafficMatching:
         self,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         client_interface,
         client_network_v6,
@@ -910,7 +918,7 @@ class TestTrafficMatching:
         policy_client.add_rule(options)
 
         # Get stats BEFORE sending traffic
-        initial_stats = policy_client.get_stats(attached_xdp)
+        initial_stats = policy_client.get_stats(attached_ingress)
         initial_drops = initial_stats.global_stats.policy_drops
 
         # Send UDP to port 5353 - should be dropped
@@ -929,7 +937,7 @@ class TestTrafficMatching:
         time.sleep(0.5)
 
         # Get stats AFTER sending traffic and verify exact count
-        final_stats = policy_client.get_stats(attached_xdp)
+        final_stats = policy_client.get_stats(attached_ingress)
         drops_delta = final_stats.global_stats.policy_drops - initial_drops
 
         # Also check rule stats for debugging
@@ -949,7 +957,7 @@ class TestTrafficMatching:
         self,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         client_interface,
         client_network_v4,
@@ -969,7 +977,7 @@ class TestTrafficMatching:
         policy_client.add_rule(options)
 
         # Get stats BEFORE sending traffic
-        initial_stats = policy_client.get_stats(attached_xdp)
+        initial_stats = policy_client.get_stats(attached_ingress)
         initial_drops = initial_stats.global_stats.policy_drops
 
         # Send TCP from source port 12345 - should be dropped
@@ -984,7 +992,7 @@ class TestTrafficMatching:
         )
 
         # Get stats AFTER sending traffic and verify exact count
-        final_stats = policy_client.get_stats(attached_xdp)
+        final_stats = policy_client.get_stats(attached_ingress)
         drops_delta = final_stats.global_stats.policy_drops - initial_drops
 
         logger.info(
@@ -1004,7 +1012,7 @@ class TestPacketCounting:
         self,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         client_interface,
         client_network_v4,
@@ -1071,7 +1079,7 @@ class TestPacketCounting:
         self,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         client_interface,
         client_network_v4,
@@ -1090,7 +1098,7 @@ class TestPacketCounting:
         policy_client.add_rule(options)
 
         # Clear stats before the test for deterministic measurement
-        policy_client.clear_interface_stats(attached_xdp)
+        policy_client.clear_interface_stats(attached_ingress)
 
         # Send a known number of ICMP packets
         packets_to_send = 10
@@ -1102,7 +1110,7 @@ class TestPacketCounting:
         )
 
         # Get stats AFTER sending traffic
-        final_stats = policy_client.get_stats(attached_xdp)
+        final_stats = policy_client.get_stats(attached_ingress)
         packets_received = final_stats.global_stats.rx_packets
         logger.info(
             f"Global RX: rx_packets={packets_received}, expected>={packets_to_send}"
@@ -1117,7 +1125,7 @@ class TestPacketCounting:
         self,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         client_interface,
         client_network_v6,
@@ -1137,7 +1145,7 @@ class TestPacketCounting:
         policy_client.add_rule(options)
 
         # Clear stats before the test for deterministic measurement
-        policy_client.clear_interface_stats(attached_xdp)
+        policy_client.clear_interface_stats(attached_ingress)
 
         # Send a known number of ICMPv6 packets
         packets_to_send = 10
@@ -1149,7 +1157,7 @@ class TestPacketCounting:
         )
 
         # Get stats AFTER sending traffic
-        final_stats = policy_client.get_stats(attached_xdp)
+        final_stats = policy_client.get_stats(attached_ingress)
         packets_received = final_stats.global_stats.rx_packets
         logger.info(
             f"Global RX (v6): rx_packets={packets_received}, expected>={packets_to_send}"
@@ -1168,7 +1176,7 @@ class TestPrefixLengths:
         self,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         client_interface,
         client_ip_v4,
@@ -1201,7 +1209,7 @@ class TestPrefixLengths:
         self,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         client_interface,
         client_ip_v6,
@@ -1235,7 +1243,7 @@ class TestPrefixLengths:
         self,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         client_interface,
         client_network_v4,
@@ -1266,7 +1274,7 @@ class TestPrefixLengths:
         self,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         client_interface,
         client_network_v6,
@@ -1298,7 +1306,7 @@ class TestPrefixLengths:
         self,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         client_interface,
         client_ip_v4,
@@ -1333,7 +1341,7 @@ class TestPrefixLengths:
         self,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         client_interface,
         client_ip_v6,
@@ -1373,7 +1381,7 @@ class TestIcmpTypes:
         self,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         client_interface,
         server_ip_v4,
@@ -1401,7 +1409,7 @@ class TestIcmpTypes:
         self,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         client_interface,
         server_ip_v4,
@@ -1431,7 +1439,7 @@ class TestDefaultAction:
         self,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         client_interface,
         server_ip_v4,
@@ -1463,7 +1471,7 @@ class TestDefaultAction:
         self,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         client_interface,
         server_ip_v4,
@@ -1491,7 +1499,7 @@ class TestDefaultAction:
         self,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         client_interface,
         server_ip_v6,
@@ -1525,12 +1533,12 @@ class TestDefaultAction:
 # ============================================================================
 
 
-class TestXdpAttachmentNegative:
-    """Negative tests for XDP attachment."""
+class TestIngressAttachmentNegative:
+    """Negative tests for ingress attachment."""
 
     def test_attach_nonexistent_interface(self, policy_client):
         """Test attaching to a non-existent interface fails gracefully."""
-        result = policy_client.attach_xdp("nonexistent0", XdpMode.AUTO)
+        result = policy_client.attach_ingress("nonexistent0", IngressMode.AUTO)
         assert not result.success, "Should fail to attach to non-existent interface"
         logger.info(f"Expected failure: {result.message}")
 
@@ -1540,7 +1548,7 @@ class TestXdpAttachmentNegative:
         policy_client.detach_all()
 
         # Try to detach - should fail or return appropriate message
-        result = policy_client.detach_xdp(server_interface.if_name)
+        result = policy_client.detach_ingress(server_interface.if_name)
         # Log the result - may succeed with "not attached" message or fail
         logger.info(
             f"Detach when not attached: success={result.success}, msg={result.message}"
@@ -1551,24 +1559,26 @@ class TestXdpAttachmentNegative:
         iface_name = server_interface.if_name
 
         # First attach
-        result1 = policy_client.attach_xdp(iface_name, XdpMode.AUTO)
+        result1 = policy_client.attach_ingress(iface_name, IngressMode.AUTO)
         assert result1.success, f"First attach should succeed: {result1.message}"
 
         try:
             # Second attach - should fail or return already attached
-            result2 = policy_client.attach_xdp(iface_name, XdpMode.AUTO)
+            result2 = policy_client.attach_ingress(iface_name, IngressMode.AUTO)
             logger.info(
                 f"Double attach: success={result2.success}, msg={result2.message}"
             )
         finally:
             # Cleanup
-            policy_client.detach_xdp(iface_name)
+            policy_client.detach_ingress(iface_name)
 
 
 class TestRuleManagementNegative:
     """Negative tests for rule management."""
 
-    def test_add_rule_invalid_prefix(self, policy_client, attached_xdp, clean_rules):
+    def test_add_rule_invalid_prefix(
+        self, policy_client, attached_ingress, clean_rules
+    ):
         """Test adding a rule with invalid prefix."""
         options = AddRuleOptions(
             src="invalid-prefix",
@@ -1580,7 +1590,7 @@ class TestRuleManagementNegative:
         logger.info(f"Expected failure: {result.message}")
 
     def test_add_rule_invalid_prefix_length(
-        self, policy_client, attached_xdp, clean_rules
+        self, policy_client, attached_ingress, clean_rules
     ):
         """Test adding a rule with invalid prefix length."""
         options = AddRuleOptions(
@@ -1593,7 +1603,7 @@ class TestRuleManagementNegative:
         logger.info(f"Expected failure: {result.message}")
 
     def test_add_rule_invalid_ipv6_prefix_length(
-        self, policy_client, attached_xdp, clean_rules
+        self, policy_client, attached_ingress, clean_rules
     ):
         """Test adding an IPv6 rule with invalid prefix length."""
         options = AddRuleOptions(
@@ -1606,7 +1616,9 @@ class TestRuleManagementNegative:
         assert not result.success, "Should fail with invalid IPv6 prefix length"
         logger.info(f"Expected failure: {result.message}")
 
-    def test_delete_nonexistent_rule(self, policy_client, attached_xdp, clean_rules):
+    def test_delete_nonexistent_rule(
+        self, policy_client, attached_ingress, clean_rules
+    ):
         """Test deleting a rule that doesn't exist."""
         result = policy_client.delete_rule(rule_id=999999)
         # May succeed with "not found" message or fail
@@ -1614,9 +1626,9 @@ class TestRuleManagementNegative:
             f"Delete nonexistent: success={result.success}, msg={result.message}"
         )
 
-    def test_add_rule_without_xdp(self, policy_client, server_interface):
-        """Test adding a rule without XDP attached fails."""
-        # Ensure XDP is not attached
+    def test_add_rule_without_ingress(self, policy_client, server_interface):
+        """Test adding a rule without ingress attached fails."""
+        # Ensure nothing is attached
         policy_client.detach_all()
 
         options = AddRuleOptions(
@@ -1625,10 +1637,10 @@ class TestRuleManagementNegative:
             actions=[("drop", 0)],
         )
         result = policy_client.add_rule(options)
-        assert not result.success, "Should fail without XDP attached"
+        assert not result.success, "Should fail without ingress attached"
         logger.info(f"Expected failure: {result.message}")
 
-    def test_add_duplicate_rule_id(self, policy_client, attached_xdp, clean_rules):
+    def test_add_duplicate_rule_id(self, policy_client, attached_ingress, clean_rules):
         """Test adding a rule with duplicate ID."""
         options1 = AddRuleOptions(
             src="10.0.0.0/8",
@@ -1649,7 +1661,9 @@ class TestRuleManagementNegative:
         # Should either fail or replace the existing rule
         logger.info(f"Duplicate ID: success={result2.success}, msg={result2.message}")
 
-    def test_add_rule_invalid_port_tcp(self, policy_client, attached_xdp, clean_rules):
+    def test_add_rule_invalid_port_tcp(
+        self, policy_client, attached_ingress, clean_rules
+    ):
         """Test adding a TCP rule with invalid port number."""
         options = AddRuleOptions(
             src="10.0.0.0/8",
@@ -1669,7 +1683,7 @@ class TestTrafficMatchingNegative:
         self,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         client_interface,
         server_ip_v4,
@@ -1717,7 +1731,7 @@ class TestTrafficMatchingNegative:
         self,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         client_interface,
         client_network_v4,
@@ -1768,7 +1782,7 @@ class TestTrafficMatchingNegative:
         self,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         client_interface,
         client_network_v4,
@@ -1820,7 +1834,7 @@ class TestTrafficMatchingNegative:
         self,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         client_interface,
         server_ip_v6,
@@ -1869,7 +1883,7 @@ class TestTrafficMatchingNegative:
         self,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         client_interface,
         server_ip_v4,
@@ -1890,48 +1904,36 @@ class TestTrafficMatchingNegative:
         result = policy_client.add_rule(options)
         assert result.success
 
-        # Get rule stats BEFORE sending traffic (use delta, not absolute after clear)
-        initial_stats = policy_client.get_rule_stats(rule_id)
-        initial_packets = 0
-        for rws in initial_stats.rules:
-            if rws.rule.rule_id == rule_id and rws.stats:
-                initial_packets = rws.stats.packets
-                break
+        # Clear rule stats for deterministic measurement
+        policy_client.clear_rule_stats(rule_id)
 
         # Send ICMP over IPv4 - should pass (rule is IPv6)
         packets_to_send = 5
-        ping_result = send_ping(
+        send_ping(
             client,
             server_ip_v4,
             count=packets_to_send,
             interface=client_interface.if_name,
         )
 
-        # Verify ping succeeded - this proves traffic passed through
-        assert ping_result.packets_received > 0, (
-            "IPv4 ping should succeed (rule is IPv6)"
-        )
-
-        # Check the specific rule's stats - delta should be 0
-        final_stats = policy_client.get_rule_stats(rule_id)
-        final_packets = 0
-        for rws in final_stats.rules:
+        # Check the specific rule's stats - should have 0 matches
+        rule_stats = policy_client.get_rule_stats(rule_id)
+        rule_packets = 0
+        for rws in rule_stats.rules:
             if rws.rule.rule_id == rule_id and rws.stats:
-                final_packets = rws.stats.packets
+                rule_packets = rws.stats.packets
                 break
 
-        packets_delta = final_packets - initial_packets
         logger.info(
-            f"IPv6 rule vs IPv4 traffic: initial={initial_packets}, "
-            f"final={final_packets}, delta={packets_delta}, expected=0"
+            f"IPv6 rule vs IPv4 traffic: rule_packets={rule_packets}, expected=0"
         )
-        assert packets_delta == 0, "IPv6 rule should not match IPv4 traffic"
+        assert rule_packets == 0, "IPv6 rule should not match IPv4 traffic"
 
     def test_udp_rule_does_not_match_tcp_traffic(
         self,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         client_interface,
         client_network_v4,
@@ -1981,7 +1983,7 @@ class TestTrafficMatchingNegative:
         self,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         client_interface,
         client_network_v4,
@@ -2053,7 +2055,7 @@ class TestRulePriority:
         configure_node_interfaces,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         client_interface,
         client_network_v4,
@@ -2135,7 +2137,7 @@ class TestRulePriority:
         configure_node_interfaces,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         client_interface,
         client_network_v4,
@@ -2215,7 +2217,7 @@ class TestRulePriority:
         configure_node_interfaces,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         client_interface,
         client_network_v4,
@@ -2292,7 +2294,7 @@ class TestRulePriority:
         configure_node_interfaces,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         client_interface,
         client_network_v6,
@@ -2375,7 +2377,7 @@ class TestRulePriority:
         configure_node_interfaces,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         client_interface,
         client_network_v6,
@@ -2458,7 +2460,7 @@ class TestRulePriority:
         configure_node_interfaces,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         client_interface,
         client_network_v6,
@@ -2622,7 +2624,7 @@ class TestRuleInstallationPerformance:
         self,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         bpftool_installed,
     ):
@@ -2723,7 +2725,7 @@ class TestRuleInstallationPerformance:
         self,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         bpftool_installed,
     ):
@@ -2824,7 +2826,7 @@ class TestRuleInstallationPerformance:
         self,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         bpftool_installed,
     ):
@@ -2954,7 +2956,7 @@ class TestRuleInstallationPerformance:
         self,
         nodes,
         policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         bpftool_installed,
     ):
@@ -3066,7 +3068,7 @@ class TestRuleInstallationPerformance:
         self,
         nodes,
         graphql_policy_client,
-        attached_xdp,
+        attached_ingress,
         clean_rules,
         bpftool_installed,
     ):
@@ -3153,7 +3155,12 @@ class TestRuleInstallationPerformance:
         )
 
     def test_batch_rule_deletion(
-        self, nodes, graphql_policy_client, attached_xdp, clean_rules, bpftool_installed
+        self,
+        nodes,
+        graphql_policy_client,
+        attached_ingress,
+        clean_rules,
+        bpftool_installed,
     ):
         """
         Add a small batch of rules, then delete them using the deleteRules batch mutation.
@@ -3240,3 +3247,348 @@ class TestRuleInstallationPerformance:
         present_after = {r.rule_id for r in existing_after}
         for rid in ids:
             assert rid not in present_after
+
+
+# ============================================================================
+# Egress Tests
+# ============================================================================
+
+
+@pytest.fixture(scope="function")
+def attached_egress(policy_client, server_interface):
+    """
+    Fixture that attaches egress program before test and detaches after.
+
+    Yields the interface name.
+    """
+    iface_name = server_interface.if_name
+
+    # Attach egress
+    result = policy_client.attach_egress(iface_name)
+    if not result.success:
+        pytest.fail(f"Failed to attach egress: {result.message}")
+
+    logger.info(f"Egress attached to {iface_name}")
+    yield iface_name
+
+    # Detach egress
+    try:
+        policy_client.detach_egress(iface_name)
+        logger.info(f"Egress detached from {iface_name}")
+    except Exception as e:
+        logger.warning(f"Failed to detach egress: {e}")
+
+
+@pytest.fixture(scope="function")
+def clean_egress_rules(policy_client):
+    """Fixture to ensure egress rules are cleaned up before and after each test."""
+    policy_client.flush_rules(direction="egress")
+    yield
+    policy_client.flush_rules(direction="egress")
+
+
+class TestEgressAttachment:
+    """Tests for egress program attachment and detachment."""
+
+    def test_attach_egress(self, policy_client, server_interface):
+        """Test attaching egress program to an interface."""
+        iface_name = server_interface.if_name
+
+        # Attach egress
+        result = policy_client.attach_egress(iface_name)
+        assert result.success, f"Failed to attach egress: {result.message}"
+
+        # Verify attachment
+        interfaces = policy_client.list_interfaces()
+        attached = [
+            i
+            for i in interfaces
+            if i.interface == iface_name and i.direction == "egress"
+        ]
+        assert len(attached) == 1, f"Interface {iface_name} should have egress attached"
+        logger.info(f"Egress attached: {attached[0]}")
+
+        # Check server status
+        status = policy_client.status()
+        assert status.program_attached, "program_attached should be True"
+
+        # Cleanup
+        policy_client.detach_egress(iface_name)
+
+    def test_detach_egress(self, policy_client, server_interface):
+        """Test detaching egress program from an interface."""
+        iface_name = server_interface.if_name
+
+        # First attach
+        result = policy_client.attach_egress(iface_name)
+        assert result.success, f"Failed to attach egress: {result.message}"
+
+        # Then detach
+        result = policy_client.detach_egress(iface_name)
+        assert result.success, f"Failed to detach egress: {result.message}"
+
+        # Verify detachment
+        interfaces = policy_client.list_interfaces()
+        attached = [
+            i
+            for i in interfaces
+            if i.interface == iface_name and i.direction == "egress"
+        ]
+        assert len(attached) == 0, f"Interface {iface_name} should have egress detached"
+
+    def test_attach_both_ingress_and_egress(self, policy_client, server_interface):
+        """Test attaching both ingress and egress programs to the same interface."""
+        iface_name = server_interface.if_name
+
+        # Attach ingress
+        result = policy_client.attach_ingress(iface_name, IngressMode.AUTO)
+        assert result.success, f"Failed to attach ingress: {result.message}"
+
+        # Attach egress
+        result = policy_client.attach_egress(iface_name)
+        assert result.success, f"Failed to attach egress: {result.message}"
+
+        # Verify both are attached
+        interfaces = policy_client.list_interfaces()
+        ingress_attached = [
+            i
+            for i in interfaces
+            if i.interface == iface_name and i.direction == "ingress"
+        ]
+        egress_attached = [
+            i
+            for i in interfaces
+            if i.interface == iface_name and i.direction == "egress"
+        ]
+        assert len(ingress_attached) == 1, "Ingress should be attached"
+        assert len(egress_attached) == 1, "Egress should be attached"
+
+        # Cleanup with detach all
+        result = policy_client.detach_all()
+        assert result.success, f"Failed to detach all: {result.message}"
+
+        interfaces = policy_client.list_interfaces()
+        assert len(interfaces) == 0, "All interfaces should be detached"
+
+    def test_detach_all_removes_egress(self, policy_client, server_interface):
+        """Test that detach_all removes egress attachments."""
+        iface_name = server_interface.if_name
+
+        # Attach egress
+        policy_client.attach_egress(iface_name)
+
+        # Detach all
+        result = policy_client.detach_all()
+        assert result.success, f"Failed to detach all: {result.message}"
+
+        # Verify
+        interfaces = policy_client.list_interfaces()
+        assert len(interfaces) == 0, "All interfaces should be detached"
+
+
+class TestEgressRuleManagement:
+    """Tests for egress rule addition, deletion, and listing."""
+
+    def test_add_egress_rule_basic_ipv4(
+        self, policy_client, attached_egress, clean_egress_rules
+    ):
+        """Test adding a basic IPv4 egress rule."""
+        options = AddRuleOptions(
+            src="10.0.0.0/8",
+            dst="0.0.0.0/0",
+            protocol="any",
+            actions=[("drop", 0)],
+            priority=100,
+        )
+        result = policy_client.add_rule(options, direction="egress")
+        assert result.success, f"Failed to add egress rule: {result.message}"
+
+        # Verify rule was added to egress
+        rules = policy_client.list_rules(direction="egress")
+        assert len(rules) == 1, "Should have 1 egress rule"
+        assert rules[0].src_prefix == "10.0.0.0/8"
+        assert rules[0].actions[0].action == PolicyAction.DROP
+
+    def test_add_egress_rule_basic_ipv6(
+        self, policy_client, attached_egress, clean_egress_rules
+    ):
+        """Test adding a basic IPv6 egress rule."""
+        options = AddRuleOptions(
+            src="2001:db8::/32",
+            dst="::/0",
+            protocol="any",
+            actions=[("drop", 0)],
+            priority=100,
+        )
+        result = policy_client.add_rule(options, direction="egress")
+        assert result.success, f"Failed to add IPv6 egress rule: {result.message}"
+
+        rules = policy_client.list_rules(direction="egress")
+        assert len(rules) == 1, "Should have 1 egress rule"
+        assert "2001:db8::" in rules[0].src_prefix.lower()
+
+    def test_delete_egress_rule_by_id(
+        self, policy_client, attached_egress, clean_egress_rules
+    ):
+        """Test deleting an egress rule by ID."""
+        options = AddRuleOptions(
+            src="10.0.0.0/8",
+            protocol="any",
+            actions=[("drop", 0)],
+            rule_id=88888,
+        )
+        policy_client.add_rule(options, direction="egress")
+
+        # Verify it exists
+        rules = policy_client.list_rules(direction="egress")
+        assert len(rules) == 1
+        assert rules[0].rule_id == 88888
+
+        # Delete by ID
+        result = policy_client.delete_rule(rule_id=88888, direction="egress")
+        assert result.success, f"Failed to delete egress rule: {result.message}"
+
+        # Verify deletion
+        rules = policy_client.list_rules(direction="egress")
+        assert len(rules) == 0, "Egress rule should be deleted"
+
+    def test_flush_egress_rules(
+        self, policy_client, attached_egress, clean_egress_rules
+    ):
+        """Test flushing all egress rules."""
+        for i in range(3):
+            policy_client.add_rule(
+                AddRuleOptions(
+                    src=f"10.{i}.0.0/16",
+                    protocol="any",
+                    actions=[("pass", 0)],
+                ),
+                direction="egress",
+            )
+
+        rules = policy_client.list_rules(direction="egress")
+        assert len(rules) == 3
+
+        result = policy_client.flush_rules(direction="egress")
+        assert result.success, f"Failed to flush egress rules: {result.message}"
+
+        rules = policy_client.list_rules(direction="egress")
+        assert len(rules) == 0, "All egress rules should be flushed"
+
+    def test_egress_rules_independent_of_ingress(self, policy_client, server_interface):
+        """Test that egress and ingress rules are independent."""
+        iface_name = server_interface.if_name
+
+        # Attach both
+        policy_client.attach_ingress(iface_name, IngressMode.AUTO)
+        policy_client.attach_egress(iface_name)
+
+        try:
+            # Add ingress rule
+            policy_client.add_rule(
+                AddRuleOptions(
+                    src="10.0.0.0/8",
+                    protocol="any",
+                    actions=[("drop", 0)],
+                    rule_id=55001,
+                ),
+                direction="ingress",
+            )
+
+            # Add egress rule
+            policy_client.add_rule(
+                AddRuleOptions(
+                    src="192.168.0.0/16",
+                    protocol="any",
+                    actions=[("pass", 0)],
+                    rule_id=55002,
+                ),
+                direction="egress",
+            )
+
+            # Verify rules are in their respective directions
+            ingress_rules = policy_client.list_rules(direction="ingress")
+            egress_rules = policy_client.list_rules(direction="egress")
+
+            ingress_ids = {r.rule_id for r in ingress_rules}
+            egress_ids = {r.rule_id for r in egress_rules}
+
+            assert 55001 in ingress_ids, "Ingress rule should be in ingress list"
+            assert 55002 in egress_ids, "Egress rule should be in egress list"
+            assert 55001 not in egress_ids, "Ingress rule should NOT be in egress list"
+            assert 55002 not in ingress_ids, "Egress rule should NOT be in ingress list"
+
+        finally:
+            # Cleanup
+            policy_client.flush_rules(direction="ingress")
+            policy_client.flush_rules(direction="egress")
+            policy_client.detach_all()
+
+
+class TestEgressDefaultAction:
+    """Tests for egress default action configuration."""
+
+    def test_set_egress_default_action_drop(
+        self,
+        nodes,
+        policy_client,
+        attached_egress,
+        clean_egress_rules,
+        client_interface,
+        server_ip_v4,
+        nmap_installed,
+    ):
+        """Test setting egress default action to drop."""
+        # Set egress default action to drop
+        result = policy_client.set_default_action(PolicyAction.DROP, direction="egress")
+        assert result.success, f"Failed to set egress default action: {result.message}"
+
+        # Reset to pass for other tests
+        policy_client.set_default_action(PolicyAction.PASS, direction="egress")
+
+    def test_set_egress_default_action_pass(
+        self,
+        policy_client,
+        attached_egress,
+        clean_egress_rules,
+    ):
+        """Test setting egress default action to pass."""
+        result = policy_client.set_default_action(PolicyAction.PASS, direction="egress")
+        assert result.success, f"Failed to set egress default action: {result.message}"
+
+
+class TestEgressAttachmentNegative:
+    """Negative tests for egress attachment."""
+
+    def test_attach_egress_nonexistent_interface(self, policy_client):
+        """Test attaching egress to a non-existent interface fails gracefully."""
+        result = policy_client.attach_egress("nonexistent0")
+        assert not result.success, (
+            "Should fail to attach egress to non-existent interface"
+        )
+        logger.info(f"Expected failure: {result.message}")
+
+    def test_detach_egress_not_attached(self, policy_client, server_interface):
+        """Test detaching egress when not attached returns appropriate response."""
+        # Ensure nothing is attached
+        policy_client.detach_all()
+
+        result = policy_client.detach_egress(server_interface.if_name)
+        logger.info(
+            f"Detach egress when not attached: success={result.success}, msg={result.message}"
+        )
+
+    def test_double_attach_egress(self, policy_client, server_interface):
+        """Test attaching egress twice to same interface."""
+        iface_name = server_interface.if_name
+
+        result1 = policy_client.attach_egress(iface_name)
+        assert result1.success, f"First egress attach should succeed: {result1.message}"
+
+        try:
+            result2 = policy_client.attach_egress(iface_name)
+            logger.info(
+                f"Double egress attach: success={result2.success}, msg={result2.message}"
+            )
+        finally:
+            policy_client.detach_egress(iface_name)

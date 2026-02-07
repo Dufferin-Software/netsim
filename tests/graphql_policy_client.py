@@ -20,6 +20,7 @@ from tests.policy_client import (
     GlobalStats,
     InterfaceAttachment,
     InterfaceStats,
+    IngressMode,
     LpmRule,
     OperationResult,
     PolicyAction,
@@ -29,7 +30,6 @@ from tests.policy_client import (
     RuleStatsResponse,
     RuleWithStats,
     ServerStatus,
-    XdpMode,
 )
 
 logger = logging.getLogger(__name__)
@@ -129,22 +129,22 @@ class GraphQLPolicyClient:
     # Attach/Detach commands
     # ========================================================================
 
-    def attach_xdp(
-        self, interface: str, mode: XdpMode = XdpMode.AUTO
+    def attach_ingress(
+        self, interface: str, mode: IngressMode = IngressMode.AUTO
     ) -> OperationResult:
         """
-        Attach XDP program to an interface.
+        Attach ingress program to an interface.
 
         Args:
             interface: Interface name
-            mode: XDP attach mode
+            mode: Ingress attach mode
 
         Returns:
             OperationResult indicating success/failure
         """
         mutation = """
-        mutation AttachXdp($input: AttachXdpInput!) {
-            attachXdp(input: $input) {
+        mutation AttachIngress($input: AttachIngressInput!) {
+            attachIngress(input: $input) {
                 success
                 message
             }
@@ -161,15 +161,15 @@ class GraphQLPolicyClient:
         if "__error__" in data:
             return OperationResult(success=False, message=data["__error__"])
 
-        result = data.get("attachXdp", {})
+        result = data.get("attachIngress", {})
         return OperationResult(
             success=result.get("success", False),
             message=result.get("message", ""),
         )
 
-    def detach_xdp(self, interface: str) -> OperationResult:
+    def detach_ingress(self, interface: str) -> OperationResult:
         """
-        Detach XDP program from an interface.
+        Detach ingress program from an interface.
 
         Args:
             interface: Interface name
@@ -178,8 +178,8 @@ class GraphQLPolicyClient:
             OperationResult indicating success/failure
         """
         mutation = """
-        mutation DetachXdp($input: DetachXdpInput!) {
-            detachXdp(input: $input) {
+        mutation DetachIngress($input: DetachIngressInput!) {
+            detachIngress(input: $input) {
                 success
                 message
             }
@@ -191,7 +191,67 @@ class GraphQLPolicyClient:
         if "__error__" in data:
             return OperationResult(success=False, message=data["__error__"])
 
-        result = data.get("detachXdp", {})
+        result = data.get("detachIngress", {})
+        return OperationResult(
+            success=result.get("success", False),
+            message=result.get("message", ""),
+        )
+
+    def attach_egress(self, interface: str) -> OperationResult:
+        """
+        Attach egress program to an interface.
+
+        Args:
+            interface: Interface name
+
+        Returns:
+            OperationResult indicating success/failure
+        """
+        mutation = """
+        mutation AttachEgress($input: AttachEgressInput!) {
+            attachEgress(input: $input) {
+                success
+                message
+            }
+        }
+        """
+        variables = {"input": {"interface": interface}}
+        data = self._execute_graphql(mutation, variables)
+
+        if "__error__" in data:
+            return OperationResult(success=False, message=data["__error__"])
+
+        result = data.get("attachEgress", {})
+        return OperationResult(
+            success=result.get("success", False),
+            message=result.get("message", ""),
+        )
+
+    def detach_egress(self, interface: str) -> OperationResult:
+        """
+        Detach egress program from an interface.
+
+        Args:
+            interface: Interface name
+
+        Returns:
+            OperationResult indicating success/failure
+        """
+        mutation = """
+        mutation DetachEgress($input: DetachEgressInput!) {
+            detachEgress(input: $input) {
+                success
+                message
+            }
+        }
+        """
+        variables = {"input": {"interface": interface}}
+        data = self._execute_graphql(mutation, variables)
+
+        if "__error__" in data:
+            return OperationResult(success=False, message=data["__error__"])
+
+        result = data.get("detachEgress", {})
         return OperationResult(
             success=result.get("success", False),
             message=result.get("message", ""),
@@ -199,7 +259,7 @@ class GraphQLPolicyClient:
 
     def detach_all(self) -> OperationResult:
         """
-        Detach all XDP programs.
+        Detach all programs (both ingress and egress).
 
         Returns:
             OperationResult indicating success/failure
@@ -227,12 +287,15 @@ class GraphQLPolicyClient:
     # Rule commands
     # ========================================================================
 
-    def add_rule(self, options: AddRuleOptions) -> OperationResult:
+    def add_rule(
+        self, options: AddRuleOptions, direction: str = "ingress"
+    ) -> OperationResult:
         """
         Add a policy rule.
 
         Args:
             options: Rule configuration options
+            direction: Traffic direction ("ingress" or "egress")
 
         Returns:
             OperationResult indicating success/failure
@@ -269,7 +332,11 @@ class GraphQLPolicyClient:
         }
         gql_protocol = proto_map.get(options.protocol.lower(), "any")
 
+        # Map direction string to GraphQL enum
+        gql_direction = "INGRESS" if direction == "ingress" else "EGRESS"
+
         input_data = {
+            "direction": gql_direction,
             "protocol": gql_protocol,
             "sport": options.sport,
             "dport": options.dport,
@@ -296,7 +363,9 @@ class GraphQLPolicyClient:
             message=result.get("message", ""),
         )
 
-    def add_rules_batch(self, rules: List[AddRuleOptions]) -> BatchAddRulesResult:
+    def add_rules_batch(
+        self, rules: List[AddRuleOptions], direction: str = "ingress"
+    ) -> BatchAddRulesResult:
         """
         Add multiple policy rules in a single batch operation.
 
@@ -305,6 +374,7 @@ class GraphQLPolicyClient:
 
         Args:
             rules: List of rule configuration options
+            direction: Traffic direction ("ingress" or "egress")
 
         Returns:
             BatchAddRulesResult with success status and per-rule results
@@ -344,6 +414,9 @@ class GraphQLPolicyClient:
             "icmpv6": "icmp",  # Server auto-converts to icmpv6 for IPv6 rules
         }
 
+        # Map direction string to GraphQL enum
+        gql_direction = "INGRESS" if direction == "ingress" else "EGRESS"
+
         gql_rules = []
         for options in rules:
             # Convert actions to GraphQL format
@@ -355,6 +428,7 @@ class GraphQLPolicyClient:
             gql_protocol = proto_map.get(options.protocol.lower(), "any")
 
             input_data = {
+                "direction": gql_direction,
                 "protocol": gql_protocol,
                 "sport": options.sport,
                 "dport": options.dport,
@@ -387,12 +461,15 @@ class GraphQLPolicyClient:
         result = data.get("addRules", {})
         return BatchAddRulesResult.from_json(result)
 
-    def delete_rules_batch(self, ids: List[int]) -> "BatchDeleteRulesResult":
+    def delete_rules_batch(
+        self, ids: List[int], direction: str = "ingress"
+    ) -> "BatchDeleteRulesResult":
         """
         Delete multiple rules in a single batch operation via GraphQL.
 
         Args:
             ids: List of rule IDs to delete
+            direction: Traffic direction ("ingress" or "egress")
 
         Returns:
             BatchDeleteRulesResult with per-item results
@@ -415,9 +492,12 @@ class GraphQLPolicyClient:
         }
         """
 
+        # Map direction string to GraphQL enum
+        gql_direction = "INGRESS" if direction == "ingress" else "EGRESS"
+
         gql_rules = []
         for i, rid in enumerate(ids):
-            gql_rules.append({"id": rid})
+            gql_rules.append({"id": rid, "direction": gql_direction})
 
         variables = {"rules": gql_rules}
         data = self._execute_graphql(mutation, variables)
@@ -443,6 +523,7 @@ class GraphQLPolicyClient:
         sport: Optional[int] = None,
         dport: Optional[int] = None,
         protocol: Optional[str] = None,
+        direction: str = "ingress",
     ) -> OperationResult:
         """
         Delete a policy rule.
@@ -454,6 +535,7 @@ class GraphQLPolicyClient:
             sport: Source port
             dport: Destination port
             protocol: Protocol
+            direction: Traffic direction ("ingress" or "egress")
 
         Returns:
             OperationResult indicating success/failure
@@ -467,7 +549,10 @@ class GraphQLPolicyClient:
         }
         """
 
-        input_data = {}
+        # Map direction string to GraphQL enum
+        gql_direction = "INGRESS" if direction == "ingress" else "EGRESS"
+
+        input_data = {"direction": gql_direction}
         if rule_id is not None:
             input_data["id"] = rule_id
         if src:
@@ -499,16 +584,21 @@ class GraphQLPolicyClient:
             message=result.get("message", ""),
         )
 
-    def list_rules(self) -> List[LpmRule]:
+    def list_rules(self, direction: str = "ingress") -> List[LpmRule]:
         """
         List all policy rules.
+
+        Args:
+            direction: Traffic direction ("ingress" or "egress")
 
         Returns:
             List of LpmRule objects
         """
+        gql_direction = "INGRESS" if direction == "ingress" else "EGRESS"
+
         query = """
-        query {
-            rules {
+        query ListRules($direction: GqlDirection!) {
+            rules(direction: $direction) {
                 ruleId
                 srcPrefix
                 dstPrefix
@@ -523,7 +613,7 @@ class GraphQLPolicyClient:
             }
         }
         """
-        data = self._execute_graphql(query)
+        data = self._execute_graphql(query, {"direction": gql_direction})
 
         if "__error__" in data:
             return []
@@ -560,22 +650,27 @@ class GraphQLPolicyClient:
             )
         return rules
 
-    def flush_rules(self) -> OperationResult:
+    def flush_rules(self, direction: str = "ingress") -> OperationResult:
         """
         Flush all policy rules.
+
+        Args:
+            direction: Traffic direction ("ingress" or "egress")
 
         Returns:
             OperationResult indicating success/failure
         """
+        gql_direction = "INGRESS" if direction == "ingress" else "EGRESS"
+
         mutation = """
-        mutation {
-            flushRules {
+        mutation FlushRules($direction: GqlDirection!) {
+            flushRules(direction: $direction) {
                 success
                 message
             }
         }
         """
-        data = self._execute_graphql(mutation)
+        data = self._execute_graphql(mutation, {"direction": gql_direction})
 
         if "__error__" in data:
             return OperationResult(success=False, message=data["__error__"])
@@ -603,6 +698,7 @@ class GraphQLPolicyClient:
                 interface
                 ifindex
                 mode
+                direction
             }
         }
         """
@@ -617,23 +713,27 @@ class GraphQLPolicyClient:
                 interface=i.get("interface", ""),
                 ifindex=i.get("ifindex", 0),
                 mode=i.get("mode", ""),
+                direction=i.get("direction", "ingress"),
             )
             for i in ifaces_data
         ]
 
-    def get_stats(self, interface: str) -> InterfaceStats:
+    def get_stats(self, interface: str, direction: str = "ingress") -> InterfaceStats:
         """
         Get statistics for an interface.
 
         Args:
             interface: Interface name
+            direction: Traffic direction ("ingress" or "egress")
 
         Returns:
             InterfaceStats object
         """
+        gql_direction = "INGRESS" if direction == "ingress" else "EGRESS"
+
         query = """
-        query GetStats($interface: String!) {
-            stats(interface: $interface) {
+        query GetStats($interface: String!, $direction: GqlDirection!) {
+            stats(interface: $interface, direction: $direction) {
                 rxPackets
                 rxBytes
                 txPackets
@@ -647,7 +747,7 @@ class GraphQLPolicyClient:
                 bumPackets
                 nonIpUnicast
             }
-            ethertypeStats(interface: $interface) {
+            ethertypeStats(interface: $interface, direction: $direction) {
                 ethertype
                 ethertypeHex
                 name
@@ -658,7 +758,7 @@ class GraphQLPolicyClient:
             }
         }
         """
-        variables = {"interface": interface}
+        variables = {"interface": interface, "direction": gql_direction}
         data = self._execute_graphql(query, variables)
 
         if "__error__" in data:
@@ -719,26 +819,31 @@ class GraphQLPolicyClient:
             ethertype_stats=ethertype_stats,
         )
 
-    def get_rule_stats(self, rule_id: Optional[int] = None) -> RuleStatsResponse:
+    def get_rule_stats(
+        self, rule_id: Optional[int] = None, direction: str = "ingress"
+    ) -> RuleStatsResponse:
         """
         Get rule statistics.
 
         Args:
             rule_id: Optional rule ID (all rules if not specified)
+            direction: Traffic direction ("ingress" or "egress")
 
         Returns:
             RuleStatsResponse object
         """
+        gql_direction = "INGRESS" if direction == "ingress" else "EGRESS"
+
         if rule_id is not None:
             # Get stats for specific rule - note: ruleId is required (not optional)
             query = """
-            query GetRuleStats($ruleId: Int!) {
-                ruleStats(ruleId: $ruleId) {
+            query GetRuleStats($ruleId: Int!, $direction: GqlDirection!) {
+                ruleStats(ruleId: $ruleId, direction: $direction) {
                     packets
                     bytes
                     lastSeenNs
                 }
-                rules {
+                rules(direction: $direction) {
                     ruleId
                     srcPrefix
                     dstPrefix
@@ -756,12 +861,12 @@ class GraphQLPolicyClient:
                 }
             }
             """
-            variables = {"ruleId": rule_id}
+            variables = {"ruleId": rule_id, "direction": gql_direction}
         else:
             # Get all rules with their stats
             query = """
-            query {
-                rules {
+            query GetAllRuleStats($direction: GqlDirection!) {
+                rules(direction: $direction) {
                     ruleId
                     srcPrefix
                     dstPrefix
@@ -779,7 +884,7 @@ class GraphQLPolicyClient:
                 }
             }
             """
-            variables = None
+            variables = {"direction": gql_direction}
 
         data = self._execute_graphql(query, variables)
 
@@ -848,18 +953,22 @@ class GraphQLPolicyClient:
             rules=rules_with_stats,
         )
 
-    def _get_single_rule_stats(self, rule_id: int) -> Optional[dict]:
+    def _get_single_rule_stats(
+        self, rule_id: int, direction: str = "ingress"
+    ) -> Optional[dict]:
         """Get stats for a single rule."""
+        gql_direction = "INGRESS" if direction == "ingress" else "EGRESS"
+
         query = """
-        query GetRuleStats($ruleId: Int!) {
-            ruleStats(ruleId: $ruleId) {
+        query GetRuleStats($ruleId: Int!, $direction: GqlDirection!) {
+            ruleStats(ruleId: $ruleId, direction: $direction) {
                 packets
                 bytes
                 lastSeenNs
             }
         }
         """
-        variables = {"ruleId": rule_id}
+        variables = {"ruleId": rule_id, "direction": gql_direction}
         data = self._execute_graphql(query, variables)
         return data.get("ruleStats")
 
@@ -867,12 +976,15 @@ class GraphQLPolicyClient:
     # Config commands
     # ========================================================================
 
-    def set_default_action(self, action: PolicyAction) -> OperationResult:
+    def set_default_action(
+        self, action: PolicyAction, direction: str = "ingress"
+    ) -> OperationResult:
         """
         Set the default action for unmatched packets.
 
         Args:
             action: Default action
+            direction: Traffic direction ("ingress" or "egress")
 
         Returns:
             OperationResult indicating success/failure
@@ -893,8 +1005,9 @@ class GraphQLPolicyClient:
             PolicyAction.NAT: "NAT",
         }
         gql_action = action_map.get(action, "PASS")
+        gql_direction = "INGRESS" if direction == "ingress" else "EGRESS"
 
-        variables = {"input": {"action": gql_action}}
+        variables = {"input": {"action": gql_action, "direction": gql_direction}}
         data = self._execute_graphql(mutation, variables)
 
         if "__error__" in data:
@@ -906,13 +1019,16 @@ class GraphQLPolicyClient:
             message=result.get("message", ""),
         )
 
-    def register_tail_call(self, slot: int, program: str) -> OperationResult:
+    def register_tail_call(
+        self, slot: int, program: str, direction: str = "ingress"
+    ) -> OperationResult:
         """
         Register a tail call program.
 
         Args:
             slot: Slot number (0-63)
             program: Program name
+            direction: Traffic direction ("ingress" or "egress")
 
         Returns:
             OperationResult indicating success/failure
@@ -925,7 +1041,10 @@ class GraphQLPolicyClient:
             }
         }
         """
-        variables = {"input": {"slot": slot, "program": program}}
+        gql_direction = "INGRESS" if direction == "ingress" else "EGRESS"
+        variables = {
+            "input": {"slot": slot, "program": program, "direction": gql_direction}
+        }
         data = self._execute_graphql(mutation, variables)
 
         if "__error__" in data:
@@ -941,25 +1060,30 @@ class GraphQLPolicyClient:
     # Clear stats commands
     # ========================================================================
 
-    def clear_global_stats(self, interface: str) -> OperationResult:
+    def clear_global_stats(
+        self, interface: str, direction: str = "ingress"
+    ) -> OperationResult:
         """
         Clear global statistics for an interface.
 
         Args:
             interface: Interface name
+            direction: Traffic direction ("ingress" or "egress")
 
         Returns:
             OperationResult indicating success/failure
         """
+        gql_direction = "INGRESS" if direction == "ingress" else "EGRESS"
+
         mutation = """
-        mutation ClearGlobalStats($interface: String!) {
-            clearGlobalStats(interface: $interface) {
+        mutation ClearGlobalStats($interface: String!, $direction: GqlDirection!) {
+            clearGlobalStats(interface: $interface, direction: $direction) {
                 success
                 message
             }
         }
         """
-        variables = {"interface": interface}
+        variables = {"interface": interface, "direction": gql_direction}
         data = self._execute_graphql(mutation, variables)
 
         if "__error__" in data:
@@ -971,25 +1095,30 @@ class GraphQLPolicyClient:
             message=result.get("message", ""),
         )
 
-    def clear_interface_stats(self, interface: str) -> OperationResult:
+    def clear_interface_stats(
+        self, interface: str, direction: str = "ingress"
+    ) -> OperationResult:
         """
         Clear all statistics for an interface (global + ethertype).
 
         Args:
             interface: Interface name
+            direction: Traffic direction ("ingress" or "egress")
 
         Returns:
             OperationResult indicating success/failure
         """
+        gql_direction = "INGRESS" if direction == "ingress" else "EGRESS"
+
         mutation = """
-        mutation ClearInterfaceStats($interface: String!) {
-            clearInterfaceStats(interface: $interface) {
+        mutation ClearInterfaceStats($interface: String!, $direction: GqlDirection!) {
+            clearInterfaceStats(interface: $interface, direction: $direction) {
                 success
                 message
             }
         }
         """
-        variables = {"interface": interface}
+        variables = {"interface": interface, "direction": gql_direction}
         data = self._execute_graphql(mutation, variables)
 
         if "__error__" in data:
@@ -1001,26 +1130,31 @@ class GraphQLPolicyClient:
             message=result.get("message", ""),
         )
 
-    def clear_rule_stats(self, rule_id: Optional[int] = None) -> OperationResult:
+    def clear_rule_stats(
+        self, rule_id: Optional[int] = None, direction: str = "ingress"
+    ) -> OperationResult:
         """
         Clear rule statistics.
 
         Args:
             rule_id: Optional rule ID (clears all rules if not specified)
+            direction: Traffic direction ("ingress" or "egress")
 
         Returns:
             OperationResult indicating success/failure
         """
+        gql_direction = "INGRESS" if direction == "ingress" else "EGRESS"
+
         if rule_id is not None:
             mutation = """
-            mutation ClearRuleStats($ruleId: Int!) {
-                clearRuleStats(ruleId: $ruleId) {
+            mutation ClearRuleStats($ruleId: Int!, $direction: GqlDirection!) {
+                clearRuleStats(ruleId: $ruleId, direction: $direction) {
                     success
                     message
                 }
             }
             """
-            variables = {"ruleId": rule_id}
+            variables = {"ruleId": rule_id, "direction": gql_direction}
             data = self._execute_graphql(mutation, variables)
 
             if "__error__" in data:
@@ -1029,14 +1163,14 @@ class GraphQLPolicyClient:
             result = data.get("clearRuleStats", {})
         else:
             mutation = """
-            mutation {
-                clearAllRuleStats {
+            mutation ClearAllRuleStats($direction: GqlDirection!) {
+                clearAllRuleStats(direction: $direction) {
                     success
                     message
                 }
             }
             """
-            data = self._execute_graphql(mutation)
+            data = self._execute_graphql(mutation, {"direction": gql_direction})
 
             if "__error__" in data:
                 return OperationResult(success=False, message=data["__error__"])
@@ -1048,25 +1182,30 @@ class GraphQLPolicyClient:
             message=result.get("message", ""),
         )
 
-    def clear_ethertype_stats(self, interface: str) -> OperationResult:
+    def clear_ethertype_stats(
+        self, interface: str, direction: str = "ingress"
+    ) -> OperationResult:
         """
         Clear ethertype statistics for an interface.
 
         Args:
             interface: Interface name
+            direction: Traffic direction ("ingress" or "egress")
 
         Returns:
             OperationResult indicating success/failure
         """
+        gql_direction = "INGRESS" if direction == "ingress" else "EGRESS"
+
         mutation = """
-        mutation ClearEthertypeStats($interface: String!) {
-            clearEthertypeStats(interface: $interface) {
+        mutation ClearEthertypeStats($interface: String!, $direction: GqlDirection!) {
+            clearEthertypeStats(interface: $interface, direction: $direction) {
                 success
                 message
             }
         }
         """
-        variables = {"interface": interface}
+        variables = {"interface": interface, "direction": gql_direction}
         data = self._execute_graphql(mutation, variables)
 
         if "__error__" in data:

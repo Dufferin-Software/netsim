@@ -73,13 +73,17 @@ class Protocol(str, Enum):
         raise ValueError(f"Unknown Protocol: {value}")
 
 
-class XdpMode(str, Enum):
-    """XDP attach mode."""
+class IngressMode(str, Enum):
+    """Ingress attach mode."""
 
     AUTO = "auto"
     NATIVE = "native"
     GENERIC = "generic"
     OFFLOAD = "offload"
+
+
+# Backward compatibility alias
+XdpMode = IngressMode
 
 
 # ============================================================================
@@ -190,11 +194,12 @@ class ServerStatus:
 
 @dataclass
 class InterfaceAttachment:
-    """XDP interface attachment info."""
+    """Interface attachment info."""
 
     interface: str
     ifindex: int
     mode: str
+    direction: str
 
     @classmethod
     def from_json(cls, data: dict) -> "InterfaceAttachment":
@@ -202,6 +207,7 @@ class InterfaceAttachment:
             interface=data.get("interface", ""),
             ifindex=data.get("ifindex", 0),
             mode=data.get("mode", ""),
+            direction=data.get("direction", "ingress"),
         )
 
 
@@ -491,27 +497,27 @@ class PolicyClient:
     # Attach/Detach commands
     # ========================================================================
 
-    def attach_xdp(
-        self, interface: str, mode: XdpMode = XdpMode.AUTO
+    def attach_ingress(
+        self, interface: str, mode: IngressMode = IngressMode.AUTO
     ) -> OperationResult:
         """
-        Attach XDP program to an interface.
+        Attach ingress program to an interface.
 
         Args:
             interface: Interface name
-            mode: XDP attach mode
+            mode: Ingress attach mode
 
         Returns:
             OperationResult indicating success/failure
         """
         data = self._run_command_json(
-            ["attach", "xdp", "--interface", interface, "--mode", mode.value]
+            ["attach", "ingress", "--interface", interface, "--mode", mode.value]
         )
         return OperationResult.from_json(data)
 
-    def detach_xdp(self, interface: str) -> OperationResult:
+    def detach_ingress(self, interface: str) -> OperationResult:
         """
-        Detach XDP program from an interface.
+        Detach ingress program from an interface.
 
         Args:
             interface: Interface name
@@ -519,12 +525,38 @@ class PolicyClient:
         Returns:
             OperationResult indicating success/failure
         """
-        data = self._run_command_json(["detach", "xdp", "--interface", interface])
+        data = self._run_command_json(["detach", "ingress", "--interface", interface])
+        return OperationResult.from_json(data)
+
+    def attach_egress(self, interface: str) -> OperationResult:
+        """
+        Attach egress program to an interface.
+
+        Args:
+            interface: Interface name
+
+        Returns:
+            OperationResult indicating success/failure
+        """
+        data = self._run_command_json(["attach", "egress", "--interface", interface])
+        return OperationResult.from_json(data)
+
+    def detach_egress(self, interface: str) -> OperationResult:
+        """
+        Detach egress program from an interface.
+
+        Args:
+            interface: Interface name
+
+        Returns:
+            OperationResult indicating success/failure
+        """
+        data = self._run_command_json(["detach", "egress", "--interface", interface])
         return OperationResult.from_json(data)
 
     def detach_all(self) -> OperationResult:
         """
-        Detach all XDP programs.
+        Detach all programs (both ingress and egress).
 
         Returns:
             OperationResult indicating success/failure
@@ -536,17 +568,20 @@ class PolicyClient:
     # Rule commands
     # ========================================================================
 
-    def add_rule(self, options: AddRuleOptions) -> OperationResult:
+    def add_rule(
+        self, options: AddRuleOptions, direction: str = "ingress"
+    ) -> OperationResult:
         """
         Add a policy rule.
 
         Args:
             options: Rule configuration options
+            direction: Traffic direction ("ingress" or "egress")
 
         Returns:
             OperationResult indicating success/failure
         """
-        args = ["rule", "add"]
+        args = ["rule", "add", "--direction", direction]
 
         if options.src:
             args.extend(["--src", options.src])
@@ -578,6 +613,7 @@ class PolicyClient:
         sport: Optional[int] = None,
         dport: Optional[int] = None,
         protocol: Optional[str] = None,
+        direction: str = "ingress",
     ) -> OperationResult:
         """
         Delete a policy rule.
@@ -589,11 +625,12 @@ class PolicyClient:
             sport: Source port
             dport: Destination port
             protocol: Protocol
+            direction: Traffic direction ("ingress" or "egress")
 
         Returns:
             OperationResult indicating success/failure
         """
-        args = ["rule", "delete"]
+        args = ["rule", "delete", "--direction", direction]
 
         if rule_id is not None:
             args.extend(["--id", str(rule_id)])
@@ -611,26 +648,32 @@ class PolicyClient:
         data = self._run_command_json(args)
         return OperationResult.from_json(data)
 
-    def list_rules(self) -> List[LpmRule]:
+    def list_rules(self, direction: str = "ingress") -> List[LpmRule]:
         """
         List all policy rules.
+
+        Args:
+            direction: Traffic direction ("ingress" or "egress")
 
         Returns:
             List of LpmRule objects
         """
-        data = self._run_command_json(["rule", "list"])
+        data = self._run_command_json(["rule", "list", "--direction", direction])
         if isinstance(data, list):
             return [LpmRule.from_json(r) for r in data]
         return []
 
-    def flush_rules(self) -> OperationResult:
+    def flush_rules(self, direction: str = "ingress") -> OperationResult:
         """
         Flush all policy rules.
+
+        Args:
+            direction: Traffic direction ("ingress" or "egress")
 
         Returns:
             OperationResult indicating success/failure
         """
-        data = self._run_command_json(["rule", "flush"])
+        data = self._run_command_json(["rule", "flush", "--direction", direction])
         return OperationResult.from_json(data)
 
     # ========================================================================
@@ -649,30 +692,36 @@ class PolicyClient:
             return [InterfaceAttachment.from_json(i) for i in data]
         return []
 
-    def get_stats(self, interface: str) -> InterfaceStats:
+    def get_stats(self, interface: str, direction: str = "ingress") -> InterfaceStats:
         """
         Get statistics for an interface.
 
         Args:
             interface: Interface name
+            direction: Traffic direction ("ingress" or "egress")
 
         Returns:
             InterfaceStats object
         """
-        data = self._run_command_json(["show", "stats", "--interface", interface])
+        data = self._run_command_json(
+            ["show", "stats", "--interface", interface, "--direction", direction]
+        )
         return InterfaceStats.from_json(data)
 
-    def get_rule_stats(self, rule_id: Optional[int] = None) -> RuleStatsResponse:
+    def get_rule_stats(
+        self, rule_id: Optional[int] = None, direction: str = "ingress"
+    ) -> RuleStatsResponse:
         """
         Get rule statistics.
 
         Args:
             rule_id: Optional rule ID (all rules if not specified)
+            direction: Traffic direction ("ingress" or "egress")
 
         Returns:
             RuleStatsResponse object
         """
-        args = ["show", "rule-stats"]
+        args = ["show", "rule-stats", "--direction", direction]
         if rule_id is not None:
             args.extend(["--id", str(rule_id)])
         data = self._run_command_json(args)
@@ -682,35 +731,57 @@ class PolicyClient:
     # Config commands
     # ========================================================================
 
-    def set_default_action(self, action: PolicyAction) -> OperationResult:
+    def set_default_action(
+        self, action: PolicyAction, direction: str = "ingress"
+    ) -> OperationResult:
         """
         Set the default action for unmatched packets.
 
         Args:
             action: Default action
+            direction: Traffic direction ("ingress" or "egress")
 
         Returns:
             OperationResult indicating success/failure
         """
         action_str = action.value.lower()
         data = self._run_command_json(
-            ["config", "default-action", "--action", action_str]
+            [
+                "config",
+                "default-action",
+                "--action",
+                action_str,
+                "--direction",
+                direction,
+            ]
         )
         return OperationResult.from_json(data)
 
-    def register_tail_call(self, slot: int, program: str) -> OperationResult:
+    def register_tail_call(
+        self, slot: int, program: str, direction: str = "ingress"
+    ) -> OperationResult:
         """
         Register a tail call program.
 
         Args:
             slot: Slot number (0-63)
             program: Program name
+            direction: Traffic direction ("ingress" or "egress")
 
         Returns:
             OperationResult indicating success/failure
         """
         data = self._run_command_json(
-            ["config", "tail-call", "--slot", str(slot), "--program", program]
+            [
+                "config",
+                "tail-call",
+                "--slot",
+                str(slot),
+                "--program",
+                program,
+                "--direction",
+                direction,
+            ]
         )
         return OperationResult.from_json(data)
 
@@ -718,64 +789,97 @@ class PolicyClient:
     # Clear stats commands
     # ========================================================================
 
-    def clear_global_stats(self, interface: str) -> OperationResult:
+    def clear_global_stats(
+        self, interface: str, direction: str = "ingress"
+    ) -> OperationResult:
         """
         Clear global statistics for an interface.
 
         Args:
             interface: Interface name
+            direction: Traffic direction ("ingress" or "egress")
 
         Returns:
             OperationResult indicating success/failure
         """
         data = self._run_command_json(
-            ["clear-stats", "global", "--interface", interface]
+            [
+                "clear-stats",
+                "global",
+                "--interface",
+                interface,
+                "--direction",
+                direction,
+            ]
         )
         return OperationResult.from_json(data)
 
-    def clear_interface_stats(self, interface: str) -> OperationResult:
+    def clear_interface_stats(
+        self, interface: str, direction: str = "ingress"
+    ) -> OperationResult:
         """
         Clear all statistics for an interface (global + ethertype).
 
         Args:
             interface: Interface name
+            direction: Traffic direction ("ingress" or "egress")
 
         Returns:
             OperationResult indicating success/failure
         """
         data = self._run_command_json(
-            ["clear-stats", "interface", "--interface", interface]
+            [
+                "clear-stats",
+                "interface",
+                "--interface",
+                interface,
+                "--direction",
+                direction,
+            ]
         )
         return OperationResult.from_json(data)
 
-    def clear_rule_stats(self, rule_id: Optional[int] = None) -> OperationResult:
+    def clear_rule_stats(
+        self, rule_id: Optional[int] = None, direction: str = "ingress"
+    ) -> OperationResult:
         """
         Clear rule statistics.
 
         Args:
             rule_id: Optional rule ID (clears all rules if not specified)
+            direction: Traffic direction ("ingress" or "egress")
 
         Returns:
             OperationResult indicating success/failure
         """
-        args = ["clear-stats", "rule"]
+        args = ["clear-stats", "rule", "--direction", direction]
         if rule_id is not None:
             args.extend(["--id", str(rule_id)])
         data = self._run_command_json(args)
         return OperationResult.from_json(data)
 
-    def clear_ethertype_stats(self, interface: str) -> OperationResult:
+    def clear_ethertype_stats(
+        self, interface: str, direction: str = "ingress"
+    ) -> OperationResult:
         """
         Clear ethertype statistics for an interface.
 
         Args:
             interface: Interface name
+            direction: Traffic direction ("ingress" or "egress")
 
         Returns:
             OperationResult indicating success/failure
         """
         data = self._run_command_json(
-            ["clear-stats", "ethertype", "--interface", interface]
+            [
+                "clear-stats",
+                "ethertype",
+                "--interface",
+                interface,
+                "--direction",
+                direction,
+            ]
         )
         return OperationResult.from_json(data)
 
