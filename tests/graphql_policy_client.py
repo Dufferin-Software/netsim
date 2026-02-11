@@ -349,7 +349,7 @@ class GraphQLPolicyClient:
         if options.dst:
             input_data["dst"] = options.dst
         if options.rule_id is not None:
-            input_data["id"] = options.rule_id
+            input_data["id"] = str(options.rule_id)
 
         variables = {"input": input_data}
         data = self._execute_graphql(mutation, variables)
@@ -441,7 +441,7 @@ class GraphQLPolicyClient:
             if options.dst:
                 input_data["dst"] = options.dst
             if options.rule_id is not None:
-                input_data["id"] = options.rule_id
+                input_data["id"] = str(options.rule_id)
 
             gql_rules.append(input_data)
 
@@ -497,7 +497,7 @@ class GraphQLPolicyClient:
 
         gql_rules = []
         for i, rid in enumerate(ids):
-            gql_rules.append({"id": rid, "direction": gql_direction})
+            gql_rules.append({"id": str(rid), "direction": gql_direction})
 
         variables = {"rules": gql_rules}
         data = self._execute_graphql(mutation, variables)
@@ -554,7 +554,7 @@ class GraphQLPolicyClient:
 
         input_data = {"direction": gql_direction}
         if rule_id is not None:
-            input_data["id"] = rule_id
+            input_data["id"] = str(rule_id)
         if src:
             input_data["src"] = src
         if dst:
@@ -636,9 +636,15 @@ class GraphQLPolicyClient:
                     )
                 )
 
+            # Convert ruleId (GraphQL ID scalar) to int for test consumers
+            try:
+                parsed_rule_id = int(r.get("ruleId", 0))
+            except Exception:
+                parsed_rule_id = 0
+
             rules.append(
                 LpmRule(
-                    rule_id=r.get("ruleId", 0),
+                    rule_id=parsed_rule_id,
                     src_prefix=r.get("srcPrefix", "0.0.0.0/0"),
                     dst_prefix=r.get("dstPrefix", "0.0.0.0/0"),
                     sport=r.get("sport", 0),
@@ -837,7 +843,7 @@ class GraphQLPolicyClient:
         if rule_id is not None:
             # Get stats for specific rule - note: ruleId is required (not optional)
             query = """
-            query GetRuleStats($ruleId: Int!, $direction: GqlDirection!) {
+            query GetRuleStats($ruleId: String!, $direction: GqlDirection!) {
                 ruleStats(ruleId: $ruleId, direction: $direction) {
                     packets
                     bytes
@@ -861,7 +867,7 @@ class GraphQLPolicyClient:
                 }
             }
             """
-            variables = {"ruleId": rule_id, "direction": gql_direction}
+            variables = {"ruleId": str(rule_id), "direction": gql_direction}
         else:
             # Get all rules with their stats
             query = """
@@ -896,8 +902,14 @@ class GraphQLPolicyClient:
 
         rules_with_stats = []
         for r in rules_data:
+            # Convert returned ruleId to int for comparisons
+            try:
+                parsed_rid = int(r.get("ruleId"))
+            except Exception:
+                parsed_rid = None
+
             # Skip rules that don't match if we're filtering by rule_id
-            if rule_id is not None and r.get("ruleId") != rule_id:
+            if rule_id is not None and parsed_rid != rule_id:
                 continue
 
             # Convert rule data
@@ -915,7 +927,7 @@ class GraphQLPolicyClient:
                 )
 
             rule = LpmRule(
-                rule_id=r.get("ruleId", 0),
+                rule_id=parsed_rid if parsed_rid is not None else 0,
                 src_prefix=r.get("srcPrefix", "0.0.0.0/0"),
                 dst_prefix=r.get("dstPrefix", "0.0.0.0/0"),
                 sport=r.get("sport", 0),
@@ -960,7 +972,7 @@ class GraphQLPolicyClient:
         gql_direction = "INGRESS" if direction == "ingress" else "EGRESS"
 
         query = """
-        query GetRuleStats($ruleId: Int!, $direction: GqlDirection!) {
+        query GetRuleStats($ruleId: String!, $direction: GqlDirection!) {
             ruleStats(ruleId: $ruleId, direction: $direction) {
                 packets
                 bytes
@@ -968,7 +980,7 @@ class GraphQLPolicyClient:
             }
         }
         """
-        variables = {"ruleId": rule_id, "direction": gql_direction}
+        variables = {"ruleId": str(rule_id), "direction": gql_direction}
         data = self._execute_graphql(query, variables)
         return data.get("ruleStats")
 
@@ -1147,14 +1159,14 @@ class GraphQLPolicyClient:
 
         if rule_id is not None:
             mutation = """
-            mutation ClearRuleStats($ruleId: Int!, $direction: GqlDirection!) {
+            mutation ClearRuleStats($ruleId: String!, $direction: GqlDirection!) {
                 clearRuleStats(ruleId: $ruleId, direction: $direction) {
                     success
                     message
                 }
             }
             """
-            variables = {"ruleId": rule_id, "direction": gql_direction}
+            variables = {"ruleId": str(rule_id), "direction": gql_direction}
             data = self._execute_graphql(mutation, variables)
 
             if "__error__" in data:

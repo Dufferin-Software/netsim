@@ -1010,6 +1010,7 @@ class TestPacketCounting:
 
     def test_rule_stats_increment_v4(
         self,
+        configure_node_interfaces,
         nodes,
         policy_client,
         attached_ingress,
@@ -1078,6 +1079,7 @@ class TestPacketCounting:
     def test_global_stats_increment_v4(
         self,
         nodes,
+        configure_node_interfaces,
         policy_client,
         attached_ingress,
         clean_rules,
@@ -1124,6 +1126,7 @@ class TestPacketCounting:
     def test_global_stats_increment_v6(
         self,
         nodes,
+        configure_node_interfaces,
         policy_client,
         attached_ingress,
         clean_rules,
@@ -1175,6 +1178,7 @@ class TestPrefixLengths:
     def test_host_prefix_32_v4(
         self,
         nodes,
+        configure_node_interfaces,
         policy_client,
         attached_ingress,
         clean_rules,
@@ -1208,6 +1212,7 @@ class TestPrefixLengths:
     def test_host_prefix_128_v6(
         self,
         nodes,
+        configure_node_interfaces,
         policy_client,
         attached_ingress,
         clean_rules,
@@ -1242,6 +1247,7 @@ class TestPrefixLengths:
     def test_network_prefix_24_v4(
         self,
         nodes,
+        configure_node_interfaces,
         policy_client,
         attached_ingress,
         clean_rules,
@@ -1273,6 +1279,7 @@ class TestPrefixLengths:
     def test_network_prefix_64_v6(
         self,
         nodes,
+        configure_node_interfaces,
         policy_client,
         attached_ingress,
         clean_rules,
@@ -1305,6 +1312,7 @@ class TestPrefixLengths:
     def test_wide_prefix_8_v4(
         self,
         nodes,
+        configure_node_interfaces,
         policy_client,
         attached_ingress,
         clean_rules,
@@ -1340,6 +1348,7 @@ class TestPrefixLengths:
     def test_wide_prefix_32_v6(
         self,
         nodes,
+        configure_node_interfaces,
         policy_client,
         attached_ingress,
         clean_rules,
