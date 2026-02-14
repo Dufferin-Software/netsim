@@ -48,6 +48,42 @@ def clean_egress_rules(policy_client):
     policy_client.flush_rules(direction="egress")
 
 
+@pytest.fixture(scope="function")
+def attached_ingress(policy_client, server_interface, configure_node_interfaces):
+    """
+    Fixture that attaches ingress program before test and detaches after.
+
+    Depends on configure_node_interfaces to ensure interfaces have IPs
+    before attaching the XDP program.
+
+    Yields the interface name.
+    """
+    iface_name = server_interface.if_name
+
+    # Attach ingress
+    result = policy_client.attach_ingress(iface_name)
+    if not result.success:
+        pytest.fail(f"Failed to attach ingress: {result.message}")
+
+    logger.info(f"Ingress attached to {iface_name}")
+    yield iface_name
+
+    # Detach ingress
+    try:
+        policy_client.detach_ingress(iface_name)
+        logger.info(f"Ingress detached from {iface_name}")
+    except Exception as e:
+        logger.warning(f"Failed to detach ingress: {e}")
+
+
+@pytest.fixture(scope="function")
+def clean_ingress_rules(policy_client):
+    """Fixture to ensure ingress rules are cleaned up before and after each test."""
+    policy_client.flush_rules(direction="ingress")
+    yield
+    policy_client.flush_rules(direction="ingress")
+
+
 AnyPolicyClient = Union[PolicyClient, GraphQLPolicyClient]
 
 
