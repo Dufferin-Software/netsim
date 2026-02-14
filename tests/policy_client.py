@@ -239,6 +239,7 @@ class LpmRule:
     protocol: Protocol
     priority: int
     actions: List[RuleAction]
+    sni: Optional[str] = None
 
     @classmethod
     def from_json(cls, data: dict) -> "LpmRule":
@@ -253,6 +254,7 @@ class LpmRule:
             protocol=Protocol.from_string(protocol_str),
             priority=data.get("priority", 1000),
             actions=[RuleAction.from_json(a) for a in actions_data],
+            sni=data.get("sni"),
         )
 
     @property
@@ -416,6 +418,7 @@ class AddRuleOptions:
     actions: List[tuple[str, int]] = field(default_factory=list)  # [(action, priority)]
     rule_id: Optional[int] = None
     priority: int = 1000
+    sni: Optional[str] = None
 
 
 class PolicyClient:
@@ -597,6 +600,9 @@ class PolicyClient:
             args.extend(["--id", str(options.rule_id)])
         if options.priority:
             args.extend(["--priority", str(options.priority)])
+
+        if options.sni:
+            args.extend(["--sni", options.sni])
 
         # Add actions
         for action, priority in options.actions:

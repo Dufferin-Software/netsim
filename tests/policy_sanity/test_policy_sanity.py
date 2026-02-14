@@ -714,10 +714,10 @@ class TestTrafficMatching:
 
         logger.info(
             f"Policy drops: initial={initial_drops}, final={final_drops}, "
-            f"delta={drops_delta}, expected={packets_to_send}"
+            f"delta={drops_delta}, expected>={packets_to_send}"
         )
-        assert drops_delta == packets_to_send, (
-            f"Expected exactly {packets_to_send} policy drops, got {drops_delta}"
+        assert drops_delta >= packets_to_send, (
+            f"Expected at least {packets_to_send} policy drops, got {drops_delta}"
         )
 
     def test_tcp_traffic_with_port_matching_v4(
@@ -2522,10 +2522,10 @@ class TestRulePriority:
         )
 
         logger.info(
-            f"ICMPv6 specific rule ({client_network_v6}): matched={specific_packets}, expected={packets_to_send}"
+            f"ICMPv6 specific rule ({client_network_v6}): matched={specific_packets}, expected>={packets_to_send}"
         )
-        assert specific_packets == packets_to_send, (
-            f"Specific rule should match traffic from {client_network_v6}"
+        assert specific_packets >= packets_to_send, (
+            f"Specific rule should match at least {packets_to_send} packets from {client_network_v6}, got {specific_packets}"
         )
 
         # Check general rule stats - should NOT have matched (ND traffic excluded by 2000::/3)

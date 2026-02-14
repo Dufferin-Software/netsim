@@ -10,7 +10,6 @@ Provides:
 - Pause on failure for debugging
 """
 
-from functools import lru_cache
 import subprocess
 import tempfile
 import logging
@@ -222,8 +221,7 @@ def pytest_enter_pdb(config, pdb):
         print("=" * 60 + "\n")
 
 
-@pytest.fixture(scope="module")
-@lru_cache
+@pytest.fixture(scope="package")
 def topology_path(request) -> Path:
     """
     Get discovered topology path for the current test module.
@@ -246,30 +244,29 @@ def topology_path(request) -> Path:
     raise ValueError(f"No topology file found at {topo_path}")
 
 
-@pytest.fixture(scope="module")
-@lru_cache
+@pytest.fixture(scope="package")
 def topology(topology_path: Path):
     """Load topology from YAML."""
     return TopologyParser.load(str(topology_path))
 
 
-@pytest.fixture(scope="module", autouse=True)
+@pytest.fixture(scope="package", autouse=True)
 def running_topology(topology, request):
     """
     Auto-start topology for test module, clean up after.
 
-    Module-scoped with autouse=True to ensure topology runs for all tests in a module.
-    Each test module gets its own topology instance, preventing OOM from multiple
-    topologies accumulating.
+    Package-scoped with autouse=True to ensure topology runs for all tests in a package.
+    Each test package (directory with __init__.py) gets its own topology instance,
+    preventing OOM from multiple topologies accumulating.
 
-    The topology is started once per module and destroyed after that module's tests complete.
-    Tests within the same module share the same running topology instance.
+    The topology is started once per package and destroyed after that package's tests complete.
+    Tests within the same package share the same running topology instance.
     """
     global _current_topology
     _current_topology = topology
 
     logger.info("=" * 60)
-    logger.info(f"Starting topology for test module: {topology.name}")
+    logger.info(f"Starting topology for test package: {topology.name}")
     logger.info(f"Topology fixture ID: {id(topology)}")
     logger.info("=" * 60)
 
@@ -328,7 +325,7 @@ def running_topology(topology, request):
                 gc.collect()
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="package")
 def node_allocations(topology) -> Dict[str, Dict[str, Dict[str, str]]]:
     """
     Get auto-allocated IPv4 and IPv6 addresses for each node.
@@ -410,7 +407,7 @@ def node_allocations(topology) -> Dict[str, Dict[str, Dict[str, str]]]:
     return allocations
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="package")
 def install_packages(nodes):
     """
     Fixture for installing packages on nodes.
@@ -611,7 +608,7 @@ def _apply_netplan_to_node(node_name, ifaces, netplan_yaml, node, mgmt_interface
         raise
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="package")
 def configure_node_interfaces(
     node_interfaces, node_allocations, nodes, install_user_packages
 ):
@@ -686,7 +683,7 @@ def configure_node_interfaces(
     logger.info("=" * 60)
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="package")
 def node_ssh_port(topology) -> callable:
     """
     Get SSH port for a node by name.
@@ -703,7 +700,7 @@ def node_ssh_port(topology) -> callable:
     return _get_port
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="package")
 def nodes(topology) -> Dict[str, Node]:
     """
     Get Node objects for all nodes in the topology.
@@ -722,7 +719,7 @@ def nodes(topology) -> Dict[str, Node]:
     return node_objects
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="package")
 def install_user_packages(nodes, request):
     """
     Install debian packages on all nodes if --install-packages is specified.
@@ -852,7 +849,7 @@ def _map_networks_to_interfaces(node_name, if_names, node_allocations, node):
     return node_ifaces
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="package")
 def node_interfaces(running_topology, topology, node_allocations, nodes):
     """
     Discover interfaces on each node and map to networks.

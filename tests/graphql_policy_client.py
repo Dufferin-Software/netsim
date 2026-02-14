@@ -350,6 +350,8 @@ class GraphQLPolicyClient:
             input_data["dst"] = options.dst
         if options.rule_id is not None:
             input_data["id"] = str(options.rule_id)
+        if options.sni:
+            input_data["sni"] = options.sni
 
         variables = {"input": input_data}
         data = self._execute_graphql(mutation, variables)
@@ -442,6 +444,8 @@ class GraphQLPolicyClient:
                 input_data["dst"] = options.dst
             if options.rule_id is not None:
                 input_data["id"] = str(options.rule_id)
+            if options.sni:
+                input_data["sni"] = options.sni
 
             gql_rules.append(input_data)
 
@@ -610,6 +614,7 @@ class GraphQLPolicyClient:
                     action
                     priority
                 }
+                sni
             }
         }
         """
@@ -652,6 +657,7 @@ class GraphQLPolicyClient:
                     protocol=protocol,
                     priority=r.get("priority", 1000),
                     actions=actions,
+                    sni=r.get("sni"),
                 )
             )
         return rules

@@ -13,9 +13,12 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.fixture(scope="function")
-def attached_egress(policy_client, server_interface):
+def attached_egress(policy_client, server_interface, configure_node_interfaces):
     """
     Fixture that attaches egress program before test and detaches after.
+
+    Depends on configure_node_interfaces to ensure interfaces have IPs
+    before attaching the TC program.
 
     Yields the interface name.
     """
@@ -48,10 +51,10 @@ def clean_egress_rules(policy_client):
 AnyPolicyClient = Union[PolicyClient, GraphQLPolicyClient]
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="package")
 def policy_engine_service(nodes, install_user_packages):
     """
-    Module-level fixture that starts policy-engine on the server node.
+    Package-level fixture that starts policy-engine on the server node.
 
     Starts the service once for all tests in this test package and stops it after.
     Skips tests if the service unit is not installed.
@@ -79,7 +82,7 @@ def policy_engine_service(nodes, install_user_packages):
         logger.warning(f"Failed to stop policy-engine: {e}")
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="package")
 def nmap_installed(nodes, install_packages):
     """Ensure nmap is installed on the client for nping."""
     nodes["client"]
@@ -87,7 +90,7 @@ def nmap_installed(nodes, install_packages):
     yield
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="package")
 def bpftool_installed(nodes, install_packages):
     """Ensure bpftool is installed on the server for BPF operations."""
     nodes["server"]
@@ -97,18 +100,22 @@ def bpftool_installed(nodes, install_packages):
 
 @pytest.fixture(scope="module", params=["cli", "graphql"], ids=["cli", "graphql"])
 def client_type(request):
-    """Parameterized fixture for client type."""
+    """Parameterized fixture for client type.
+
+    Module-scoped (not package) to prevent parameterization from tearing down
+    package-scoped fixtures (topology, policy-engine service) between cli/graphql runs.
+    """
     return request.param
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="package")
 def cli_policy_client(nodes, policy_engine_service):
     """Create a CLI PolicyClient instance for the server."""
     server = nodes["server"]
     return PolicyClient(server)
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="package")
 def graphql_policy_client(nodes, policy_engine_service):
     """Create a GraphQL PolicyClient instance for the server."""
     server = nodes["server"]
@@ -122,6 +129,7 @@ def policy_client(
     """
     Parameterized policy client fixture.
 
+    Module-scoped to match client_type parameterization scope.
     Returns either the CLI client or GraphQL client based on client_type parameter.
     Tests using this fixture will run twice: once with CLI, once with GraphQL.
     """
@@ -131,14 +139,14 @@ def policy_client(
         return graphql_policy_client
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="package")
 def server_interface(node_interfaces):
     """Get the server's interface on net1."""
     server_ifaces = node_interfaces["server"]
     return server_ifaces["net1"]
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="package")
 def client_interface(node_interfaces):
     """Get the client's interface on net1."""
     client_ifaces = node_interfaces["client"]
@@ -148,7 +156,7 @@ def client_interface(node_interfaces):
 # IPv4 fixtures
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="package")
 def client_network_v4(client_interface):
     network = client_interface.get_ipv4_network()
     if network is None:
@@ -156,7 +164,7 @@ def client_network_v4(client_interface):
     return str(network)
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="package")
 def client_ip_v4(client_interface) -> netaddr.IPAddress:
     ip = client_interface.get_ip_address()
     if ip is None:
@@ -164,7 +172,7 @@ def client_ip_v4(client_interface) -> netaddr.IPAddress:
     return ip
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="package")
 def server_ip_v4(server_interface) -> netaddr.IPAddress:
     ip = server_interface.get_ip_address()
     if ip is None:
@@ -175,7 +183,7 @@ def server_ip_v4(server_interface) -> netaddr.IPAddress:
 # IPv6 fixtures
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="package")
 def client_network_v6(client_interface):
     network = client_interface.get_ipv6_network()
     if network is None:
@@ -183,7 +191,7 @@ def client_network_v6(client_interface):
     return str(network)
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="package")
 def client_ip_v6(client_interface) -> netaddr.IPAddress:
     ip = client_interface.get_ipv6_address()
     if ip is None:
@@ -191,9 +199,36 @@ def client_ip_v6(client_interface) -> netaddr.IPAddress:
     return ip
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="package")
 def server_ip_v6(server_interface) -> netaddr.IPAddress:
     ip = server_interface.get_ipv6_address()
     if ip is None:
         pytest.skip("No IPv6 address configured on server interface")
     return ip
+
+
+# Server network fixtures (for egress rules matching server-originated traffic)
+
+
+@pytest.fixture(scope="package")
+def server_network_v4(server_interface):
+    network = server_interface.get_ipv4_network()
+    if network is None:
+        pytest.skip("No IPv4 address configured on server interface")
+    return str(network)
+
+
+@pytest.fixture(scope="package")
+def server_network_v6(server_interface):
+    network = server_interface.get_ipv6_network()
+    if network is None:
+        pytest.skip("No IPv6 address configured on server interface")
+    return str(network)
+
+
+@pytest.fixture(scope="package")
+def nmap_installed_server(nodes, install_packages):
+    """Ensure nmap is installed on the server for nping (egress traffic tests)."""
+    nodes["server"]
+    install_packages("server", ["nmap"])
+    yield
