@@ -22,7 +22,7 @@ class ImageReference:
 
     name: str
     url: str
-    checksum: Optional[str] = None  # SHA256 checksum for validation
+    checksum: Optional[str] = None  # SHA512 checksum for validation
 
 
 class ImageManager:
@@ -147,13 +147,13 @@ class ImageManager:
 
     def _validate_checksum(self, path: Path, expected_checksum: str) -> bool:
         """Validate file checksum."""
-        sha256 = hashlib.sha256()
+        sha512 = hashlib.sha512()
 
         with open(path, "rb") as f:
             for chunk in iter(lambda: f.read(4096), b""):
-                sha256.update(chunk)
+                sha512.update(chunk)
 
-        actual = sha256.hexdigest()
+        actual = sha512.hexdigest()
         valid = actual.lower() == expected_checksum.lower()
 
         if valid:

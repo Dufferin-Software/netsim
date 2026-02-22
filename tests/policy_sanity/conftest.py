@@ -4,8 +4,8 @@ from typing import Union
 import netaddr
 import pytest
 
-from tests.systemd_utils import start_service, stop_service
-from tests.policy_client import PolicyClient
+from tests.systemd_utils import restart_service, stop_service
+from tests.policy_client import PolicyClient, PolicyAction
 from tests.graphql_policy_client import GraphQLPolicyClient
 
 
@@ -42,10 +42,12 @@ def attached_egress(policy_client, server_interface, configure_node_interfaces):
 
 @pytest.fixture(scope="function")
 def clean_egress_rules(policy_client):
-    """Fixture to ensure egress rules are cleaned up before and after each test."""
+    """Fixture to ensure egress rules and default action are cleaned up before and after each test."""
     policy_client.flush_rules(direction="egress")
+    policy_client.set_default_action(PolicyAction.PASS, direction="egress")
     yield
     policy_client.flush_rules(direction="egress")
+    policy_client.set_default_action(PolicyAction.PASS, direction="egress")
 
 
 @pytest.fixture(scope="function")
@@ -78,10 +80,12 @@ def attached_ingress(policy_client, server_interface, configure_node_interfaces)
 
 @pytest.fixture(scope="function")
 def clean_ingress_rules(policy_client):
-    """Fixture to ensure ingress rules are cleaned up before and after each test."""
+    """Fixture to ensure ingress rules and default action are cleaned up before and after each test."""
     policy_client.flush_rules(direction="ingress")
+    policy_client.set_default_action(PolicyAction.PASS, direction="ingress")
     yield
     policy_client.flush_rules(direction="ingress")
+    policy_client.set_default_action(PolicyAction.PASS, direction="ingress")
 
 
 AnyPolicyClient = Union[PolicyClient, GraphQLPolicyClient]
@@ -103,7 +107,7 @@ def policy_engine_service(nodes, install_user_packages):
     if "MISSING" in check_result:
         pytest.skip("policy-engine.service not installed (use --install-packages)")
 
-    status = start_service(server, "policy-engine")
+    status = restart_service(server, "policy-engine")
     if not status.is_healthy:
         pytest.fail(f"Failed to start policy-engine: {status.status_text}")
 

@@ -407,6 +407,27 @@ class RuleStatsResponse:
 
 
 @dataclass
+class SnortImportResult:
+    """Result of a Snort rule import operation."""
+
+    rules_imported: int
+    rules_skipped: int
+    warnings: List[str]
+    errors: List[str]
+    success: bool
+
+    @classmethod
+    def from_json(cls, data: dict) -> "SnortImportResult":
+        return cls(
+            rules_imported=data.get("rulesImported", 0),
+            rules_skipped=data.get("rulesSkipped", 0),
+            warnings=data.get("warnings", []),
+            errors=data.get("errors", []),
+            success=data.get("success", False),
+        )
+
+
+@dataclass
 class AddRuleOptions:
     """Options for adding a rule."""
 
@@ -898,6 +919,22 @@ class PolicyClient:
         """
         data = self._run_command_json(["clear-stats", "all"])
         return OperationResult.from_json(data)
+
+    def snort_import(self, file_path: str, direction: str = "ingress") -> SnortImportResult:
+        """
+        Import Snort rules from a file via the CLI.
+
+        Args:
+            file_path: Path to the Snort rules file on the remote node
+            direction: Traffic direction ("ingress" or "egress")
+
+        Returns:
+            SnortImportResult with import statistics
+        """
+        data = self._run_command_json(
+            ["snort", "import", "--file", file_path, "--direction", direction]
+        )
+        return SnortImportResult.from_json(data)
 
 
 # ============================================================================

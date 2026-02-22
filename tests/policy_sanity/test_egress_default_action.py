@@ -19,12 +19,11 @@ class TestEgressDefaultAction:
         nmap_installed,
     ):
         """Test setting egress default action to drop."""
-        # Set egress default action to drop
         result = policy_client.set_default_action(PolicyAction.DROP, direction="egress")
-        assert result.success, f"Failed to set egress default action: {result.message}"
-
-        # Reset to pass for other tests
-        policy_client.set_default_action(PolicyAction.PASS, direction="egress")
+        try:
+            assert result.success, f"Failed to set egress default action: {result.message}"
+        finally:
+            policy_client.set_default_action(PolicyAction.PASS, direction="egress")
 
     def test_set_egress_default_action_pass(
         self,

@@ -88,8 +88,44 @@ class NetworkManager:
                 ["ip", "link", "set", name, "up"], ignore_exists=True
             )
             NetworkManager._run_cmd(["ip", "link", "set", name, "mtu", str(mtu)])
+            # If br_netfilter is active (loaded by Docker etc.), bridged IP traffic
+            # passes through the iptables FORWARD chain which may have policy drop.
+            # Insert ACCEPT rules so VM-to-VM traffic on this bridge is not blocked.
+            NetworkManager._allow_bridge_forwarding(name)
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"Failed to create bridge {name}: {e.stderr.decode()}")
+
+    @staticmethod
+    def _allow_bridge_forwarding(name: str) -> None:
+        """Insert nftables ACCEPT rules for bridge forwarding if br_netfilter is active."""
+        try:
+            with open("/proc/sys/net/bridge/bridge-nf-call-iptables") as f:
+                if f.read().strip() != "1":
+                    return
+        except OSError:
+            return
+        nft = next(
+            (p for p in ["/usr/sbin/nft", "/sbin/nft", "nft"] if os.path.isfile(p)),
+            None,
+        )
+        if nft is None:
+            return
+        try:
+            # Check if ip filter FORWARD chain exists (created by Docker/libvirt)
+            result = subprocess.run(
+                [nft, "list", "chain", "ip", "filter", "FORWARD"],
+                capture_output=True,
+            )
+            if result.returncode != 0:
+                return
+            for direction in ("iifname", "oifname"):
+                subprocess.run(
+                    [nft, "insert", "rule", "ip", "filter", "FORWARD",
+                     direction, name, "counter", "accept"],
+                    capture_output=True,
+                )
+        except FileNotFoundError:
+            return
 
     @staticmethod
     def delete_bridge(name: str) -> None:

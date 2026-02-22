@@ -1,4 +1,4 @@
-name: "policy-sanity"
+name: "policy-snort"
 version: "1.0"
 
 networks:
@@ -8,7 +8,7 @@ networks:
     mtu: 1500
 
 nodes:
-  # Node 1: connects to net1
+  # Node 1: connects to net1 (runs policy-engine)
   - name: "server"
     image:
       name: "debian-13-genericcloud"
@@ -19,7 +19,7 @@ nodes:
     networks:
       - "net1"
 
-  # Node 2: connects to net1
+  # Node 2: connects to net1 (sends test traffic)
   - name: "client"
     image:
       name: "debian-13-genericcloud"

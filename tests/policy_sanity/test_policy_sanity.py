@@ -25,7 +25,7 @@ import netaddr
 import pytest
 
 from tests.conftest import BaseTopologyTests
-from tests.systemd_utils import get_service_status, start_service, stop_service
+from tests.systemd_utils import get_service_status
 from tests.policy_client import (
     PolicyClient,
     AddRuleOptions,
@@ -49,61 +49,6 @@ AnyPolicyClient = Union[PolicyClient, GraphQLPolicyClient]
 
 # ============================================================================
 # Module-level fixtures
-# ============================================================================
-
-
-@pytest.fixture(scope="module")
-def policy_engine_service(nodes, install_user_packages):
-    """
-    Module-level fixture that starts policy-engine on the server node.
-
-    Starts the service once for all tests in this module and stops it after.
-    Skips all tests if the service is not installed.
-    """
-    server = nodes["server"]
-
-    # Check if the service unit exists (package was installed)
-    check_result = server.ssh_command(
-        "systemctl cat policy-engine.service >/dev/null 2>&1 && echo EXISTS || echo MISSING"
-    )
-    if "MISSING" in check_result:
-        pytest.skip("policy-engine.service not installed (use --install-packages)")
-
-    # Start the service
-    status = start_service(server, "policy-engine")
-    if not status.is_healthy:
-        pytest.fail(f"Failed to start policy-engine: {status.status_text}")
-
-    logger.info(f"policy-engine running with PID {status.main_pid}")
-
-    yield status
-
-    # Cleanup: stop the service
-    logger.info("Stopping policy-engine service...")
-    try:
-        stop_service(server, "policy-engine")
-    except Exception as e:
-        logger.warning(f"Failed to stop policy-engine: {e}")
-
-
-@pytest.fixture(scope="module")
-def nmap_installed(nodes, install_packages):
-    """Ensure nmap is installed on the client for nping."""
-    nodes["client"]
-    install_packages("client", ["nmap"])
-    yield
-
-
-@pytest.fixture(scope="module")
-def bpftool_installed(nodes, install_packages):
-    """Ensure bpftool is installed on the server for BPF operations."""
-    nodes["server"]
-    install_packages("server", ["bpftool"])
-    yield
-
-
-# ============================================================================
-# Client type parameterization
 # ============================================================================
 
 

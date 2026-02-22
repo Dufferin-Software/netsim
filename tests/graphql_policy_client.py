@@ -1262,6 +1262,111 @@ class GraphQLPolicyClient:
         )
 
 
+    def import_snort_rules(
+        self, rules_text: str, direction: str = "ingress", mode: str = "MERGE"
+    ) -> dict:
+        """
+        Import Snort rules via the GraphQL API.
+
+        Args:
+            rules_text: Multi-line Snort rules text
+            direction: Traffic direction ("ingress" or "egress")
+            mode: Import mode — "MERGE" (default) or "OVERWRITE"
+
+        Returns:
+            Dict with keys: rulesImported, rulesUpdated, rulesSkipped, warnings, errors, success
+        """
+        mutation = """
+        mutation ImportSnortRules($input: ImportSnortRulesInput!) {
+            importSnortRules(input: $input) {
+                rulesImported
+                rulesUpdated
+                rulesSkipped
+                warnings
+                errors
+                success
+            }
+        }
+        """
+        gql_direction = "INGRESS" if direction.lower() == "ingress" else "EGRESS"
+        gql_mode = mode.upper() if mode.upper() in ("MERGE", "OVERWRITE") else "MERGE"
+        variables = {
+            "input": {"rules": rules_text, "direction": gql_direction, "mode": gql_mode}
+        }
+        data = self._execute_graphql(mutation, variables)
+
+        if "__error__" in data:
+            return {
+                "rulesImported": 0,
+                "rulesUpdated": 0,
+                "rulesSkipped": 0,
+                "warnings": [],
+                "errors": [data["__error__"]],
+                "success": False,
+            }
+
+        return data.get("importSnortRules", {})
+
+    def list_snort_rules(self, direction: str = "ingress") -> list:
+        """
+        List Snort rules from the server registry.
+
+        Args:
+            direction: Traffic direction ("ingress" or "egress")
+
+        Returns:
+            List of dicts with keys: sid, text, direction
+        """
+        gql_direction = "INGRESS" if direction.lower() == "ingress" else "EGRESS"
+        query = """
+        query ListSnortRules($direction: GqlDirection!) {
+            snortRules(direction: $direction) {
+                sid
+                text
+                direction
+            }
+        }
+        """
+        data = self._execute_graphql(query, {"direction": gql_direction})
+
+        if "__error__" in data:
+            return []
+
+        return data.get("snortRules", [])
+
+    def delete_snort_rule(self, sid: int, direction: str = "ingress") -> OperationResult:
+        """
+        Delete a Snort rule by SID.
+
+        Args:
+            sid: Snort rule SID to delete
+            direction: Traffic direction ("ingress" or "egress")
+
+        Returns:
+            OperationResult indicating success/failure
+        """
+        gql_direction = "INGRESS" if direction.lower() == "ingress" else "EGRESS"
+        mutation = """
+        mutation DeleteSnortRule($input: DeleteSnortRuleInput!) {
+            deleteSnortRule(input: $input) {
+                success
+                message
+            }
+        }
+        """
+        variables = {"input": {"sid": str(sid), "direction": gql_direction}}
+        data = self._execute_graphql(mutation, variables)
+
+        if "__error__" in data:
+            return OperationResult(success=False, message=data["__error__"])
+
+        result = data.get("deleteSnortRule", {})
+        return OperationResult(
+            success=result.get("success", False),
+            message=result.get("message", ""),
+        )
+
+
 def create_graphql_policy_client(node: Node) -> GraphQLPolicyClient:
     """
     Create a GraphQLPolicyClient for a node.
