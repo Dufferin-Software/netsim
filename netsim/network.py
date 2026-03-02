@@ -120,8 +120,18 @@ class NetworkManager:
                 return
             for direction in ("iifname", "oifname"):
                 subprocess.run(
-                    [nft, "insert", "rule", "ip", "filter", "FORWARD",
-                     direction, name, "counter", "accept"],
+                    [
+                        nft,
+                        "insert",
+                        "rule",
+                        "ip",
+                        "filter",
+                        "FORWARD",
+                        direction,
+                        name,
+                        "counter",
+                        "accept",
+                    ],
                     capture_output=True,
                 )
         except FileNotFoundError:
