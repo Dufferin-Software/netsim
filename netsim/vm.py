@@ -74,6 +74,10 @@ class LibvirtVM:
         vcpu_elem.set("placement", "static")
         vcpu_elem.text = str(self.config.vcpus)
 
+        # CPU: pass through host CPU features so guests see the real instruction set
+        # (e.g. SSE4.2, AVX) rather than a generic baseline model.
+        ET.SubElement(domain, "cpu", mode="host-passthrough")
+
         # OS boot
         os_elem = ET.SubElement(domain, "os")
         ET.SubElement(os_elem, "type", arch="x86_64", machine="pc").text = "hvm"
