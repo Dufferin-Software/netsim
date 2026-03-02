@@ -21,7 +21,9 @@ class TestEgressDefaultAction:
         """Test setting egress default action to drop."""
         result = policy_client.set_default_action(PolicyAction.DROP, direction="egress")
         try:
-            assert result.success, f"Failed to set egress default action: {result.message}"
+            assert result.success, (
+                f"Failed to set egress default action: {result.message}"
+            )
         finally:
             policy_client.set_default_action(PolicyAction.PASS, direction="egress")
 

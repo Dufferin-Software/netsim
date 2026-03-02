@@ -32,6 +32,7 @@ class PolicyAction(str, Enum):
     LOG = "Log"
     NAT = "Nat"
     TAIL_CALL = "TailCall"
+    INSPECT = "Inspect"
 
     @classmethod
     def from_string(cls, value: str) -> "PolicyAction":
@@ -44,6 +45,7 @@ class PolicyAction(str, Enum):
             "nat": cls.NAT,
             "tailcall": cls.TAIL_CALL,
             "tail_call": cls.TAIL_CALL,
+            "inspect": cls.INSPECT,
         }
         if value_lower in mapping:
             return mapping[value_lower]
@@ -84,6 +86,27 @@ class IngressMode(str, Enum):
 
 # Backward compatibility alias
 XdpMode = IngressMode
+
+
+class InspectMode(str, Enum):
+    """Inspect/IPS mode enum matching GqlInspectMode."""
+
+    DISABLED = "DISABLED"
+    IPS = "IPS"
+    IDS = "IDS"
+
+    @classmethod
+    def from_string(cls, value: str) -> "InspectMode":
+        """Convert string to InspectMode enum (case-insensitive)."""
+        mapping = {
+            "disabled": cls.DISABLED,
+            "off": cls.DISABLED,
+            "ips": cls.IPS,
+            "ids": cls.IDS,
+        }
+        if value.lower() in mapping:
+            return mapping[value.lower()]
+        raise ValueError(f"Unknown InspectMode: {value}")
 
 
 # ============================================================================
@@ -181,6 +204,8 @@ class ServerStatus:
     version: str
     uptime_secs: int
     program_attached: bool
+    inspect_mode: Optional[str] = None
+    suricata_running: Optional[bool] = None
 
     @classmethod
     def from_json(cls, data: dict) -> "ServerStatus":
@@ -189,6 +214,8 @@ class ServerStatus:
             version=data.get("version", ""),
             uptime_secs=data.get("uptimeSecs", 0),
             program_attached=data.get("programAttached", False),
+            inspect_mode=data.get("inspectMode"),
+            suricata_running=data.get("suricataRunning"),
         )
 
 
@@ -313,6 +340,12 @@ class GlobalStats:
     tail_calls: int
     bum_packets: int
     non_ip_unicast: int
+    inspect_redirects: int = 0
+    fragments: int = 0
+    verdict_pass_packets: int = 0
+    verdict_pass_bytes: int = 0
+    verdict_drop_packets: int = 0
+    verdict_drop_bytes: int = 0
 
     @classmethod
     def from_json(cls, data: dict) -> "GlobalStats":
@@ -329,6 +362,12 @@ class GlobalStats:
             tail_calls=data.get("tailCalls", 0),
             bum_packets=data.get("bumPackets", 0),
             non_ip_unicast=data.get("nonIpUnicast", 0),
+            inspect_redirects=data.get("inspectRedirects", 0),
+            fragments=data.get("fragments", 0),
+            verdict_pass_packets=data.get("verdictPassPackets", 0),
+            verdict_pass_bytes=data.get("verdictPassBytes", 0),
+            verdict_drop_packets=data.get("verdictDropPackets", 0),
+            verdict_drop_bytes=data.get("verdictDropBytes", 0),
         )
 
 
@@ -407,23 +446,42 @@ class RuleStatsResponse:
 
 
 @dataclass
-class SnortImportResult:
-    """Result of a Snort rule import operation."""
+class InspectStatus:
+    """Inspect/IPS status output."""
 
-    rules_imported: int
-    rules_skipped: int
-    warnings: List[str]
-    errors: List[str]
-    success: bool
+    mode: str
+    suricata_running: bool
+    mirror_interface: Optional[str]
+    mirror_ifindex: Optional[int]
+    peer_interface: Optional[str]
+    flow_verdict_count: int
+    suricata_version: Optional[str] = None
+    ruleset_version: Optional[str] = None
 
     @classmethod
-    def from_json(cls, data: dict) -> "SnortImportResult":
+    def from_json(cls, data: dict) -> "InspectStatus":
         return cls(
-            rules_imported=data.get("rulesImported", 0),
-            rules_skipped=data.get("rulesSkipped", 0),
-            warnings=data.get("warnings", []),
-            errors=data.get("errors", []),
-            success=data.get("success", False),
+            mode=data.get("mode", "DISABLED"),
+            suricata_running=data.get("suricataRunning", False),
+            mirror_interface=data.get("mirrorInterface"),
+            mirror_ifindex=data.get("mirrorIfindex"),
+            peer_interface=data.get("peerInterface"),
+            flow_verdict_count=data.get("flowVerdictCount", 0),
+            suricata_version=data.get("suricataVersion"),
+            ruleset_version=data.get("rulesetVersion"),
+        )
+
+
+@dataclass
+class FlowVerdictStats:
+    """Flow verdict statistics."""
+
+    active_verdicts: int
+
+    @classmethod
+    def from_json(cls, data: dict) -> "FlowVerdictStats":
+        return cls(
+            active_verdicts=data.get("activeVerdicts", 0),
         )
 
 
@@ -920,21 +978,123 @@ class PolicyClient:
         data = self._run_command_json(["clear-stats", "all"])
         return OperationResult.from_json(data)
 
-    def snort_import(self, file_path: str, direction: str = "ingress") -> SnortImportResult:
+    # ========================================================================
+    # Inspect/IPS commands
+    # ========================================================================
+
+    def get_inspect_status(self) -> InspectStatus:
         """
-        Import Snort rules from a file via the CLI.
+        Get inspect/IPS mode status.
+
+        Returns:
+            InspectStatus with mode, suricata state, and verdict counts
+        """
+        data = self._run_command_json(["inspect", "status"])
+        return InspectStatus.from_json(data)
+
+    def configure_inspect(self, mode: str) -> OperationResult:
+        """
+        Enable inspect mode (IPS or IDS).
 
         Args:
-            file_path: Path to the Snort rules file on the remote node
+            mode: Inspect mode string ("ips" or "ids")
+
+        Returns:
+            OperationResult indicating success/failure
+        """
+        data = self._run_command_json(["inspect", "enable", "--mode", mode.lower()])
+        return OperationResult.from_json(data)
+
+    def disable_inspect(self) -> OperationResult:
+        """
+        Disable inspect mode.
+
+        Returns:
+            OperationResult indicating success/failure
+        """
+        data = self._run_command_json(["inspect", "disable"])
+        return OperationResult.from_json(data)
+
+    def get_flow_verdicts(self, direction: str = "ingress") -> FlowVerdictStats:
+        """
+        Get flow verdict statistics for a direction.
+
+        Args:
             direction: Traffic direction ("ingress" or "egress")
 
         Returns:
-            SnortImportResult with import statistics
+            FlowVerdictStats with active verdict count
+        """
+        data = self._run_command_json(["inspect", "verdicts", "--direction", direction])
+        return FlowVerdictStats.from_json(data)
+
+    def clear_flow_verdicts(self, direction: str = "ingress") -> OperationResult:
+        """
+        Clear all flow verdicts for a direction.
+
+        Args:
+            direction: Traffic direction ("ingress" or "egress")
+
+        Returns:
+            OperationResult indicating success/failure
         """
         data = self._run_command_json(
-            ["snort", "import", "--file", file_path, "--direction", direction]
+            ["inspect", "clear-verdicts", "--direction", direction]
         )
-        return SnortImportResult.from_json(data)
+        return OperationResult.from_json(data)
+
+    # ========================================================================
+    # Suricata commands
+    # ========================================================================
+
+    def suricata_status(self) -> OperationResult:
+        """
+        Get Suricata service status.
+
+        Returns:
+            OperationResult where success=True means Suricata is running
+        """
+        data = self._run_command_json(["suricata", "status"])
+        return OperationResult.from_json(data)
+
+    def deploy_suricata_rules(
+        self, rules_text: str, filename: str = "custom.rules"
+    ) -> OperationResult:
+        """
+        Deploy Suricata rules to the server.
+
+        Writes rules_text to a temporary file on the remote node, then
+        deploys it via the CLI.
+
+        Args:
+            rules_text: Suricata rules content
+            filename: Target filename in the Suricata rules directory
+
+        Returns:
+            OperationResult indicating success/failure
+        """
+        import time
+
+        tmp_path = f"/tmp/pe_rules_{int(time.time())}.rules"
+        # Write rules to temp file on the remote node
+        self.node.ssh_command_with_stdin(f"cat > {tmp_path}", rules_text, timeout=10)
+        try:
+            data = self._run_command_json(
+                ["suricata", "deploy-rules", "--file", tmp_path, "--name", filename]
+            )
+            return OperationResult.from_json(data)
+        finally:
+            self.node.ssh_command(f"rm -f {tmp_path}", timeout=5)
+
+    def reload_suricata_rules(self) -> OperationResult:
+        """
+        Reload Suricata rules.
+
+        Returns:
+            OperationResult indicating success/failure
+        """
+        data = self._run_command_json(["suricata", "reload"])
+        return OperationResult.from_json(data)
 
 
 # ============================================================================

@@ -17,7 +17,9 @@ from tests.policy_client import (
     BatchAddRulesResult,
     BatchDeleteRulesResult,
     EthertypeStats,
+    FlowVerdictStats,
     GlobalStats,
+    InspectStatus,
     InterfaceAttachment,
     InterfaceStats,
     IngressMode,
@@ -113,6 +115,8 @@ class GraphQLPolicyClient:
                 version
                 uptimeSecs
                 programAttached
+                inspectMode
+                suricataRunning
             }
         }
         """
@@ -123,6 +127,8 @@ class GraphQLPolicyClient:
             version=status_data.get("version", ""),
             uptime_secs=status_data.get("uptimeSecs", 0),
             program_attached=status_data.get("programAttached", False),
+            inspect_mode=status_data.get("inspectMode"),
+            suricata_running=status_data.get("suricataRunning"),
         )
 
     # ========================================================================
@@ -318,6 +324,9 @@ class GraphQLPolicyClient:
                 "drop": "DROP",
                 "log": "LOG",
                 "nat": "NAT",
+                "inspect": "INSPECT",
+                "tail_call": "TAIL_CALL",
+                "tailcall": "TAIL_CALL",
             }
             gql_action = action_map.get(action.lower(), "PASS")
             gql_actions.append({"action": gql_action, "priority": priority})
@@ -405,6 +414,9 @@ class GraphQLPolicyClient:
             "drop": "DROP",
             "log": "LOG",
             "nat": "NAT",
+            "inspect": "INSPECT",
+            "tail_call": "TAIL_CALL",
+            "tailcall": "TAIL_CALL",
         }
 
         # Map protocol string to GraphQL string value (server expects lowercase)
@@ -758,6 +770,12 @@ class GraphQLPolicyClient:
                 tailCalls
                 bumPackets
                 nonIpUnicast
+                inspectRedirects
+                fragments
+                verdictPassPackets
+                verdictPassBytes
+                verdictDropPackets
+                verdictDropBytes
             }
             ethertypeStats(interface: $interface, direction: $direction) {
                 ethertype
@@ -791,6 +809,7 @@ class GraphQLPolicyClient:
                     tail_calls=0,
                     bum_packets=0,
                     non_ip_unicast=0,
+                    inspect_redirects=0,
                 ),
                 ethertype_stats=[],
             )
@@ -812,6 +831,12 @@ class GraphQLPolicyClient:
             tail_calls=stats_data.get("tailCalls", 0),
             bum_packets=stats_data.get("bumPackets", 0),
             non_ip_unicast=stats_data.get("nonIpUnicast", 0),
+            inspect_redirects=stats_data.get("inspectRedirects", 0),
+            fragments=stats_data.get("fragments", 0),
+            verdict_pass_packets=stats_data.get("verdictPassPackets", 0),
+            verdict_pass_bytes=stats_data.get("verdictPassBytes", 0),
+            verdict_drop_packets=stats_data.get("verdictDropPackets", 0),
+            verdict_drop_bytes=stats_data.get("verdictDropBytes", 0),
         )
 
         ethertype_stats = [
@@ -1261,106 +1286,224 @@ class GraphQLPolicyClient:
             message=result.get("message", ""),
         )
 
+    # ========================================================================
+    # Inspect/IPS commands
+    # ========================================================================
 
-    def import_snort_rules(
-        self, rules_text: str, direction: str = "ingress", mode: str = "MERGE"
-    ) -> dict:
-        """
-        Import Snort rules via the GraphQL API.
-
-        Args:
-            rules_text: Multi-line Snort rules text
-            direction: Traffic direction ("ingress" or "egress")
-            mode: Import mode — "MERGE" (default) or "OVERWRITE"
-
-        Returns:
-            Dict with keys: rulesImported, rulesUpdated, rulesSkipped, warnings, errors, success
-        """
-        mutation = """
-        mutation ImportSnortRules($input: ImportSnortRulesInput!) {
-            importSnortRules(input: $input) {
-                rulesImported
-                rulesUpdated
-                rulesSkipped
-                warnings
-                errors
-                success
-            }
-        }
-        """
-        gql_direction = "INGRESS" if direction.lower() == "ingress" else "EGRESS"
-        gql_mode = mode.upper() if mode.upper() in ("MERGE", "OVERWRITE") else "MERGE"
-        variables = {
-            "input": {"rules": rules_text, "direction": gql_direction, "mode": gql_mode}
-        }
-        data = self._execute_graphql(mutation, variables)
-
-        if "__error__" in data:
-            return {
-                "rulesImported": 0,
-                "rulesUpdated": 0,
-                "rulesSkipped": 0,
-                "warnings": [],
-                "errors": [data["__error__"]],
-                "success": False,
-            }
-
-        return data.get("importSnortRules", {})
-
-    def list_snort_rules(self, direction: str = "ingress") -> list:
-        """
-        List Snort rules from the server registry.
-
-        Args:
-            direction: Traffic direction ("ingress" or "egress")
-
-        Returns:
-            List of dicts with keys: sid, text, direction
-        """
-        gql_direction = "INGRESS" if direction.lower() == "ingress" else "EGRESS"
+    def get_inspect_status(self) -> InspectStatus:
+        """Get inspect/IPS mode status."""
         query = """
-        query ListSnortRules($direction: GqlDirection!) {
-            snortRules(direction: $direction) {
-                sid
-                text
-                direction
+        query {
+            inspectStatus {
+                mode
+                suricataRunning
+                mirrorInterface
+                mirrorIfindex
+                peerInterface
+                flowVerdictCount
+                suricataVersion
+                rulesetVersion
             }
         }
         """
-        data = self._execute_graphql(query, {"direction": gql_direction})
+        data = self._execute_graphql(query)
 
         if "__error__" in data:
-            return []
+            return InspectStatus(
+                mode="DISABLED",
+                suricata_running=False,
+                mirror_interface=None,
+                mirror_ifindex=None,
+                peer_interface=None,
+                flow_verdict_count=0,
+            )
 
-        return data.get("snortRules", [])
+        d = data.get("inspectStatus", {})
+        return InspectStatus(
+            mode=d.get("mode", "DISABLED"),
+            suricata_running=d.get("suricataRunning", False),
+            mirror_interface=d.get("mirrorInterface"),
+            mirror_ifindex=d.get("mirrorIfindex"),
+            peer_interface=d.get("peerInterface"),
+            flow_verdict_count=d.get("flowVerdictCount", 0),
+            suricata_version=d.get("suricataVersion"),
+            ruleset_version=d.get("rulesetVersion"),
+        )
 
-    def delete_snort_rule(self, sid: int, direction: str = "ingress") -> OperationResult:
+    def configure_inspect(self, mode: str) -> OperationResult:
         """
-        Delete a Snort rule by SID.
+        Enable inspect mode (IPS or IDS).
 
         Args:
-            sid: Snort rule SID to delete
-            direction: Traffic direction ("ingress" or "egress")
-
-        Returns:
-            OperationResult indicating success/failure
+            mode: Inspect mode string ("ips" or "ids")
         """
-        gql_direction = "INGRESS" if direction.lower() == "ingress" else "EGRESS"
+        gql_mode = mode.upper()
         mutation = """
-        mutation DeleteSnortRule($input: DeleteSnortRuleInput!) {
-            deleteSnortRule(input: $input) {
+        mutation ConfigureInspect($input: ConfigureInspectInput!) {
+            configureInspect(input: $input) {
                 success
                 message
             }
         }
         """
-        variables = {"input": {"sid": str(sid), "direction": gql_direction}}
+        variables = {"input": {"mode": gql_mode}}
         data = self._execute_graphql(mutation, variables)
 
         if "__error__" in data:
             return OperationResult(success=False, message=data["__error__"])
 
-        result = data.get("deleteSnortRule", {})
+        result = data.get("configureInspect", {})
+        return OperationResult(
+            success=result.get("success", False),
+            message=result.get("message", ""),
+        )
+
+    def disable_inspect(self) -> OperationResult:
+        """Disable inspect mode."""
+        mutation = """
+        mutation {
+            disableInspect {
+                success
+                message
+            }
+        }
+        """
+        data = self._execute_graphql(mutation)
+
+        if "__error__" in data:
+            return OperationResult(success=False, message=data["__error__"])
+
+        result = data.get("disableInspect", {})
+        return OperationResult(
+            success=result.get("success", False),
+            message=result.get("message", ""),
+        )
+
+    def get_flow_verdicts(self, direction: str = "ingress") -> FlowVerdictStats:
+        """
+        Get flow verdict statistics for a direction.
+
+        Args:
+            direction: Traffic direction ("ingress" or "egress")
+        """
+        gql_direction = "INGRESS" if direction.lower() == "ingress" else "EGRESS"
+        query = """
+        query FlowVerdicts($direction: GqlDirection!) {
+            flowVerdicts(direction: $direction) {
+                activeVerdicts
+            }
+        }
+        """
+        variables = {"direction": gql_direction}
+        data = self._execute_graphql(query, variables)
+
+        if "__error__" in data:
+            return FlowVerdictStats(active_verdicts=0)
+
+        d = data.get("flowVerdicts", {})
+        return FlowVerdictStats(
+            active_verdicts=d.get("activeVerdicts", 0),
+        )
+
+    def clear_flow_verdicts(self, direction: str = "ingress") -> OperationResult:
+        """
+        Clear all flow verdicts for a direction.
+
+        Args:
+            direction: Traffic direction ("ingress" or "egress")
+        """
+        gql_direction = "INGRESS" if direction.lower() == "ingress" else "EGRESS"
+        mutation = """
+        mutation ClearFlowVerdicts($direction: GqlDirection!) {
+            clearFlowVerdicts(direction: $direction) {
+                success
+                message
+            }
+        }
+        """
+        variables = {"direction": gql_direction}
+        data = self._execute_graphql(mutation, variables)
+
+        if "__error__" in data:
+            return OperationResult(success=False, message=data["__error__"])
+
+        result = data.get("clearFlowVerdicts", {})
+        return OperationResult(
+            success=result.get("success", False),
+            message=result.get("message", ""),
+        )
+
+    # ========================================================================
+    # Suricata commands
+    # ========================================================================
+
+    def suricata_status(self) -> OperationResult:
+        """Get Suricata service status. success=True means Suricata is running."""
+        query = """
+        query {
+            suricataStatus {
+                success
+                message
+            }
+        }
+        """
+        data = self._execute_graphql(query)
+
+        if "__error__" in data:
+            return OperationResult(success=False, message=data["__error__"])
+
+        result = data.get("suricataStatus", {})
+        return OperationResult(
+            success=result.get("success", False),
+            message=result.get("message", ""),
+        )
+
+    def deploy_suricata_rules(
+        self, rules_text: str, filename: str = "custom.rules"
+    ) -> OperationResult:
+        """
+        Deploy Suricata rules to the server via GraphQL.
+
+        Args:
+            rules_text: Suricata rules content
+            filename: Target filename in the Suricata rules directory
+        """
+        mutation = """
+        mutation DeploySuricataRules($input: DeploySuricataRulesInput!) {
+            deploySuricataRules(input: $input) {
+                success
+                message
+            }
+        }
+        """
+        variables = {"input": {"rules": rules_text, "filename": filename}}
+        data = self._execute_graphql(mutation, variables)
+
+        if "__error__" in data:
+            return OperationResult(success=False, message=data["__error__"])
+
+        result = data.get("deploySuricataRules", {})
+        return OperationResult(
+            success=result.get("success", False),
+            message=result.get("message", ""),
+        )
+
+    def reload_suricata_rules(self) -> OperationResult:
+        """Reload Suricata rules."""
+        mutation = """
+        mutation {
+            reloadSuricataRules {
+                success
+                message
+            }
+        }
+        """
+        data = self._execute_graphql(mutation)
+
+        if "__error__" in data:
+            return OperationResult(success=False, message=data["__error__"])
+
+        result = data.get("reloadSuricataRules", {})
         return OperationResult(
             success=result.get("success", False),
             message=result.get("message", ""),
