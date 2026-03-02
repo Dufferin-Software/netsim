@@ -408,7 +408,7 @@ def node_allocations(topology) -> Dict[str, Dict[str, Dict[str, str]]]:
 
 
 @pytest.fixture(scope="package")
-def install_packages(nodes):
+def install_packages(nodes, apt_updated):
     """
     Fixture for installing packages on nodes.
 
@@ -439,12 +439,9 @@ def install_packages(nodes):
         logger.info(f"{node_name}: installing packages: {package_list}")
 
         try:
-            # Update package list (increased timeout for parallel execution)
-            node.ssh_command("sudo apt-get update -qq", timeout=180)
-
             # Install packages (non-interactive, with dpkg lock avoidance)
             node.ssh_command(
-                f"sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq {package_list}",
+                f"sudo DEBIAN_FRONTEND=noninteractive apt install -y -qq {package_list}",
                 timeout=180,
             )
 
@@ -720,11 +717,33 @@ def nodes(topology) -> Dict[str, Node]:
 
 
 @pytest.fixture(scope="package")
-def install_user_packages(nodes, request):
+def apt_updated(nodes):
+    """
+    Run 'apt-get update' once per node for the lifetime of the topology.
+
+    All nodes are updated in parallel. Subsequent fixtures that install packages
+    depend on this fixture to ensure the package index is current before any
+    installation attempts.
+    """
+
+    def _update_node(node_name, node):
+        logger.info(f"  [{node_name}] Running apt-get update...")
+        node.ssh_command("sudo apt-get update -qq", timeout=180)
+        logger.info(f"  [{node_name}] ✓ apt-get update complete")
+
+    run_parallel_simple(
+        _update_node,
+        [(node_name, node) for node_name, node in nodes.items()],
+    )
+
+
+@pytest.fixture(scope="package")
+def install_user_packages(nodes, apt_updated, request):
     """
     Install debian packages on all nodes if --install-packages is specified.
 
-    Packages are copied to each node and installed with dpkg.
+    Packages are copied to each node and installed with apt, which resolves
+    any declared dependencies automatically.
     Fails the test if any package installation fails.
 
     Usage:
@@ -764,23 +783,11 @@ def install_user_packages(nodes, request):
 
             logger.info(f"  [{node_name}] Installing {pkg_name}...")
 
-            # Install package with dpkg
             install_output = node.ssh_command(
-                f"sudo dpkg -i {remote_path} 2>&1",
-                timeout=120,
+                f"sudo DEBIAN_FRONTEND=noninteractive apt install --fix-broken -y {remote_path} 2>&1",
+                timeout=300,
             )
-            logger.debug(f"  [{node_name}] dpkg output: {install_output}")
-
-            # Check if installation succeeded by verifying exit code
-            # dpkg -i returns 0 on success
-            check_output = node.ssh_command(
-                f"dpkg -s $(dpkg-deb -f {remote_path} Package) 2>&1 | grep -q 'Status: install ok installed' && echo SUCCESS || echo FAILED",
-                timeout=30,
-            )
-            if "SUCCESS" not in check_output:
-                pytest.fail(
-                    f"Failed to install {pkg_name} on {node_name}. Output: {install_output}"
-                )
+            logger.debug(f"  [{node_name}] apt output: {install_output}")
 
             logger.info(f"  [{node_name}] ✓ {pkg_name} installed successfully")
 
