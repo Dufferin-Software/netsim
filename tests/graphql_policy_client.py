@@ -214,8 +214,8 @@ class GraphQLPolicyClient:
             OperationResult indicating success/failure
         """
         mutation = """
-        mutation AttachEgress($input: AttachEgressInput!) {
-            attachEgress(input: $input) {
+        mutation AttachEgress($input: AttachTcInput!) {
+            attachTc(input: $input) {
                 success
                 message
             }
@@ -227,7 +227,7 @@ class GraphQLPolicyClient:
         if "__error__" in data:
             return OperationResult(success=False, message=data["__error__"])
 
-        result = data.get("attachEgress", {})
+        result = data.get("attachTc", {})
         return OperationResult(
             success=result.get("success", False),
             message=result.get("message", ""),
@@ -244,8 +244,8 @@ class GraphQLPolicyClient:
             OperationResult indicating success/failure
         """
         mutation = """
-        mutation DetachEgress($input: DetachEgressInput!) {
-            detachEgress(input: $input) {
+        mutation DetachEgress($input: DetachTcInput!) {
+            detachTc(input: $input) {
                 success
                 message
             }
@@ -257,7 +257,7 @@ class GraphQLPolicyClient:
         if "__error__" in data:
             return OperationResult(success=False, message=data["__error__"])
 
-        result = data.get("detachEgress", {})
+        result = data.get("detachTc", {})
         return OperationResult(
             success=result.get("success", False),
             message=result.get("message", ""),
