@@ -315,9 +315,11 @@ class GraphQLPolicyClient:
         }
         """
 
-        # Convert actions to GraphQL format
+        # Convert actions to GraphQL format (support 2-tuple or 3-tuple with param_ms)
         gql_actions = []
-        for action, priority in options.actions:
+        for entry in options.actions:
+            action, priority = entry[0], entry[1]
+            param_ms = entry[2] if len(entry) >= 3 else 0
             # Map action string to GraphQL enum value
             action_map = {
                 "pass": "PASS",
@@ -329,7 +331,7 @@ class GraphQLPolicyClient:
                 "tailcall": "TAIL_CALL",
             }
             gql_action = action_map.get(action.lower(), "PASS")
-            gql_actions.append({"action": gql_action, "priority": priority})
+            gql_actions.append({"action": gql_action, "priority": priority, "param": param_ms})
 
         # Map protocol string to GraphQL string value (server expects lowercase)
         proto_map = {
@@ -433,11 +435,13 @@ class GraphQLPolicyClient:
 
         gql_rules = []
         for options in rules:
-            # Convert actions to GraphQL format
+            # Convert actions to GraphQL format (support 2-tuple or 3-tuple with param_ms)
             gql_actions = []
-            for action, priority in options.actions:
+            for entry in options.actions:
+                action, priority = entry[0], entry[1]
+                param_ms = entry[2] if len(entry) >= 3 else 0
                 gql_action = action_map.get(action.lower(), "PASS")
-                gql_actions.append({"action": gql_action, "priority": priority})
+                gql_actions.append({"action": gql_action, "priority": priority, "param": param_ms})
 
             gql_protocol = proto_map.get(options.protocol.lower(), "any")
 
@@ -625,6 +629,7 @@ class GraphQLPolicyClient:
                 actions {
                     action
                     priority
+                    param
                 }
                 sni
             }
@@ -650,6 +655,7 @@ class GraphQLPolicyClient:
                     RuleAction(
                         action=PolicyAction.from_string(action_str),
                         priority=a.get("priority", 0),
+                        param=a.get("param", 0),
                     )
                 )
 

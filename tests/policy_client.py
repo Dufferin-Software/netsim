@@ -240,10 +240,11 @@ class InterfaceAttachment:
 
 @dataclass
 class RuleAction:
-    """Rule action with priority."""
+    """Rule action with priority and optional parameter."""
 
     action: PolicyAction
     priority: int
+    param: int = 0  # Action-specific param: for LOG, rate-limit interval in ms (0=no limit)
 
     @classmethod
     def from_json(cls, data: dict) -> "RuleAction":
@@ -251,6 +252,7 @@ class RuleAction:
         return cls(
             action=PolicyAction.from_string(action_str),
             priority=data.get("priority", 0),
+            param=data.get("param", 0),
         )
 
 
@@ -494,7 +496,7 @@ class AddRuleOptions:
     sport: int = 0
     dport: int = 0
     protocol: str = "any"
-    actions: List[tuple[str, int]] = field(default_factory=list)  # [(action, priority)]
+    actions: List[tuple] = field(default_factory=list)  # [(action, priority)] or [(action, priority, param_ms)]
     rule_id: Optional[int] = None
     priority: int = 1000
     sni: Optional[str] = None
@@ -683,9 +685,14 @@ class PolicyClient:
         if options.sni:
             args.extend(["--sni", options.sni])
 
-        # Add actions
-        for action, priority in options.actions:
-            args.extend(["--action", f"{action}:{priority}"])
+        # Add actions (support 2-tuple (action, priority) or 3-tuple (action, priority, param_ms))
+        for entry in options.actions:
+            action, priority = entry[0], entry[1]
+            param_ms = entry[2] if len(entry) >= 3 else 0
+            if param_ms:
+                args.extend(["--action", f"{action}:{priority}:{param_ms}"])
+            else:
+                args.extend(["--action", f"{action}:{priority}"])
 
         data = self._run_command_json(args)
         return OperationResult.from_json(data)

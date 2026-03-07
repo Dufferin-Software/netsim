@@ -131,6 +131,14 @@ def nmap_installed(nodes, install_packages):
 
 
 @pytest.fixture(scope="package")
+def websocket_installed(nodes, install_packages):
+    """Ensure python3-websocket is installed on the server for WS event tests."""
+    nodes["server"]
+    install_packages("server", ["python3-websocket"])
+    yield
+
+
+@pytest.fixture(scope="package")
 def bpftool_installed(nodes, install_packages):
     """Ensure bpftool is installed on the server for BPF operations."""
     nodes["server"]
