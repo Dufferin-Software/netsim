@@ -1117,6 +1117,126 @@ class TestPacketCounting:
         )
 
 
+    def test_l4_port_rule_isolation_v4(
+        self,
+        configure_node_interfaces,
+        nodes,
+        policy_client,
+        attached_ingress,
+        clean_rules,
+        client_interface,
+        server_ip_v4,
+        nmap_installed,
+    ):
+        """Test that two rules differing only by dport each count independently (IPv4).
+
+        Rule 1: src=any, dst=any, tcp dport=80, drop, rule_id=10080
+        Rule 2: src=any, dst=any, tcp dport=22, drop, rule_id=10022
+
+        Send 5 packets to port 80 and 7 packets to port 22.  Verify:
+          - rule 10080 counts exactly 5 packets
+          - rule 10022 counts exactly 7 packets
+          - global policy_drops == 12
+        """
+        client = nodes["client"]
+
+        port80_rule_id = 10080
+        port22_rule_id = 10022
+
+        # Add rule for TCP port 80
+        result = policy_client.add_rule(
+            AddRuleOptions(
+                src="0.0.0.0/0",
+                dst="0.0.0.0/0",
+                protocol="tcp",
+                dport=80,
+                actions=[("drop", 0)],
+                rule_id=port80_rule_id,
+            )
+        )
+        assert result.success, f"Failed to add port-80 rule: {result.message}"
+
+        # Add rule for TCP port 22
+        result = policy_client.add_rule(
+            AddRuleOptions(
+                src="0.0.0.0/0",
+                dst="0.0.0.0/0",
+                protocol="tcp",
+                dport=22,
+                actions=[("drop", 0)],
+                rule_id=port22_rule_id,
+            )
+        )
+        assert result.success, f"Failed to add port-22 rule: {result.message}"
+
+        # Clear per-rule stats so counts start from zero
+        policy_client.clear_rule_stats(port80_rule_id)
+        policy_client.clear_rule_stats(port22_rule_id)
+
+        # Baseline global drops
+        initial_stats = policy_client.get_stats(attached_ingress)
+        initial_drops = initial_stats.global_stats.policy_drops
+
+        packets_to_port80 = 5
+        packets_to_port22 = 7
+
+        # Send traffic to port 80
+        send_tcp_syn(
+            client,
+            server_ip_v4,
+            dest_port=80,
+            count=packets_to_port80,
+            interface=client_interface.if_name,
+        )
+
+        # Send traffic to port 22
+        send_tcp_syn(
+            client,
+            server_ip_v4,
+            dest_port=22,
+            count=packets_to_port22,
+            interface=client_interface.if_name,
+        )
+
+        # Check per-rule stats
+        rule_stats = policy_client.get_rule_stats()
+        stats_by_id = {
+            rws.rule.rule_id: rws.stats
+            for rws in rule_stats.rules
+            if rws.rule.rule_id in (port80_rule_id, port22_rule_id)
+        }
+
+        packets_80 = stats_by_id.get(port80_rule_id)
+        packets_22 = stats_by_id.get(port22_rule_id)
+
+        count_80 = packets_80.packets if packets_80 else 0
+        count_22 = packets_22.packets if packets_22 else 0
+
+        logger.info(
+            f"L4 port isolation: port80 rule counted {count_80} (expected {packets_to_port80}), "
+            f"port22 rule counted {count_22} (expected {packets_to_port22})"
+        )
+
+        assert count_80 == packets_to_port80, (
+            f"Rule {port80_rule_id} (dport=80) expected {packets_to_port80} packets, got {count_80}"
+        )
+        assert count_22 == packets_to_port22, (
+            f"Rule {port22_rule_id} (dport=22) expected {packets_to_port22} packets, got {count_22}"
+        )
+
+        # Verify global drops match the sum
+        final_stats = policy_client.get_stats(attached_ingress)
+        drops_delta = final_stats.global_stats.policy_drops - initial_drops
+        expected_total = packets_to_port80 + packets_to_port22
+
+        logger.info(
+            f"Global drops delta: {drops_delta} (expected {expected_total})"
+        )
+        assert drops_delta == expected_total, (
+            f"Expected {expected_total} total policy drops, got {drops_delta}"
+        )
+
+
 class TestPrefixLengths:
     """Tests for various IP prefix lengths."""
 
