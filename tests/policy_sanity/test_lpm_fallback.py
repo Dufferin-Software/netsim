@@ -35,8 +35,8 @@ from tests.policy_client import AddRuleOptions
 logger = logging.getLogger(__name__)
 
 # Well-known ports used in the tests.
-PORT_SSH = 22    # matches Rule B → PASS
-PORT_HTTP = 80   # does not match Rule B; should fall back to Rule A → DROP
+PORT_SSH = 22  # matches Rule B → PASS
+PORT_HTTP = 80  # does not match Rule B; should fall back to Rule A → DROP
 PACKETS = 5
 
 
@@ -70,7 +70,9 @@ class TestLpmFallback:
             ),
             direction="ingress",
         )
-        assert result.success, f"Failed to add covering-prefix DROP rule: {result.message}"
+        assert result.success, (
+            f"Failed to add covering-prefix DROP rule: {result.message}"
+        )
 
         # Rule B: narrow PASS for TCP/22 at the /24 level
         result = policy_client.add_rule(
@@ -83,7 +85,9 @@ class TestLpmFallback:
             ),
             direction="ingress",
         )
-        assert result.success, f"Failed to add specific-prefix PASS rule: {result.message}"
+        assert result.success, (
+            f"Failed to add specific-prefix PASS rule: {result.message}"
+        )
 
         logger.info(
             f"Rules installed: covering={covering} → DROP, "
@@ -197,7 +201,9 @@ class TestLpmFallback:
         covering = self._install_rules(policy_client, client_network_v4)
 
         # Ensure default is PASS (clean_ingress_rules already does this, but be explicit)
-        result = policy_client.set_default_action(PolicyAction.PASS, direction="ingress")
+        result = policy_client.set_default_action(
+            PolicyAction.PASS, direction="ingress"
+        )
         assert result.success, "Failed to set default action to PASS"
 
         initial_stats = policy_client.get_stats(attached_ingress, direction="ingress")

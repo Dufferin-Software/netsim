@@ -270,9 +270,7 @@ def _poll_for_file(server_node, filepath: str, timeout: float):
         except Exception:
             pass
         time.sleep(0.3)
-    raise TimeoutError(
-        f"File {filepath} did not appear within {timeout}s"
-    )
+    raise TimeoutError(f"File {filepath} did not appear within {timeout}s")
 
 
 def wait_for_ws_ready(server_node, ready_file: str, timeout: float = 10.0):
@@ -300,7 +298,9 @@ def wait_for_event_pipeline(
         # Send a single probe ping.
         try:
             send_ping(
-                client_node, server_ip, count=1,
+                client_node,
+                server_ip,
+                count=1,
                 interface=client_interface.if_name,
             )
         except Exception:
@@ -559,7 +559,11 @@ class TestLogRateLimitBehavior:
         )
         wait_for_ws_ready(server, ready_file)
         wait_for_event_pipeline(
-            server, client, server_ip_v4, client_interface, primed_file,
+            server,
+            client,
+            server_ip_v4,
+            client_interface,
+            primed_file,
         )
 
         # Let the rate-limit window from warmup probes expire.
@@ -567,6 +571,10 @@ class TestLogRateLimitBehavior:
 
         # Signal the listener to start the measurement window.
         server.ssh_command(f"touch {shlex.quote(trigger_file)}", timeout=5)
+        # Give the listener time to detect the trigger file and enter Phase 4
+        # before sending test traffic.  The Phase 3 drain loop polls every ~0.15 s,
+        # so 0.3 s guarantees Python is in the measurement window before pings arrive.
+        time.sleep(0.3)
 
         # Send 5 packets within ~500 ms — well inside the 3 s rate-limit window
         send_ping(client, server_ip_v4, count=5, interface=client_interface.if_name)
@@ -617,11 +625,17 @@ class TestLogRateLimitBehavior:
         )
         wait_for_ws_ready(server, ready_file)
         wait_for_event_pipeline(
-            server, client, server_ip_v4, client_interface, primed_file,
+            server,
+            client,
+            server_ip_v4,
+            client_interface,
+            primed_file,
         )
 
         # No rate limit — trigger measurement immediately.
         server.ssh_command(f"touch {shlex.quote(trigger_file)}", timeout=5)
+        # Allow Python to detect the trigger and enter Phase 4 before pings arrive.
+        time.sleep(0.3)
 
         send_ping(
             client, server_ip_v4, count=packet_count, interface=client_interface.if_name
@@ -674,7 +688,11 @@ class TestLogRateLimitBehavior:
         )
         wait_for_ws_ready(server, ready_file)
         wait_for_event_pipeline(
-            server, client, server_ip_v4, client_interface, primed_file,
+            server,
+            client,
+            server_ip_v4,
+            client_interface,
+            primed_file,
         )
 
         # Let the rate-limit window from warmup probes expire.
@@ -682,10 +700,14 @@ class TestLogRateLimitBehavior:
 
         # Signal the listener to start the measurement window.
         server.ssh_command(f"touch {shlex.quote(trigger_file)}", timeout=5)
+        # Allow Python to detect the trigger and enter Phase 4 before pings arrive.
+        time.sleep(0.3)
 
         # Burst 1 — produces 1 event, starts the rate-limit clock
         send_ping(client, server_ip_v4, count=3, interface=client_interface.if_name)
-        logger.info(f"Burst 1 sent; sleeping {RATE_LIMIT_MS}ms for rate limit to expire")
+        logger.info(
+            f"Burst 1 sent; sleeping {RATE_LIMIT_MS}ms for rate limit to expire"
+        )
 
         # Wait for the rate-limit window to expire (with a small margin)
         time.sleep(RATE_LIMIT_MS / 1000)

@@ -307,7 +307,6 @@ class TestRuleManagement:
             dst="0.0.0.0/0",
             protocol="any",
             actions=[("drop", 0)],
-            priority=100,
         )
         result = policy_client.add_rule(options)
         assert result.success, f"Failed to add rule: {result.message}"
@@ -325,7 +324,6 @@ class TestRuleManagement:
             dst="::/0",
             protocol="any",
             actions=[("drop", 0)],
-            priority=100,
         )
         result = policy_client.add_rule(options)
         assert result.success, f"Failed to add IPv6 rule: {result.message}"
@@ -379,7 +377,6 @@ class TestRuleManagement:
                 src="10.0.0.0/8",
                 protocol="any",
                 actions=[("pass", 0)],
-                priority=100,
             )
         )
 
@@ -390,7 +387,6 @@ class TestRuleManagement:
                 protocol="tcp",
                 dport=22,
                 actions=[("drop", 0)],
-                priority=50,
             )
         )
 
@@ -400,7 +396,6 @@ class TestRuleManagement:
                 src="172.16.0.0/12",
                 protocol="udp",
                 actions=[("log", 0)],
-                priority=200,
             )
         )
 
@@ -1116,7 +1111,6 @@ class TestPacketCounting:
             f"Expected at least {packets_to_send} rx_packets, got {packets_received}"
         )
 
-
     def test_l4_port_rule_isolation_v4(
         self,
         configure_node_interfaces,
@@ -1229,9 +1223,7 @@ class TestPacketCounting:
         drops_delta = final_stats.global_stats.policy_drops - initial_drops
         expected_total = packets_to_port80 + packets_to_port22
 
-        logger.info(
-            f"Global drops delta: {drops_delta} (expected {expected_total})"
-        )
+        logger.info(f"Global drops delta: {drops_delta} (expected {expected_total})")
         assert drops_delta == expected_total, (
             f"Expected {expected_total} total policy drops, got {drops_delta}"
         )

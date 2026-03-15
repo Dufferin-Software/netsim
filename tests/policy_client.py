@@ -244,7 +244,9 @@ class RuleAction:
 
     action: PolicyAction
     priority: int
-    param: int = 0  # Action-specific param: for LOG, rate-limit interval in ms (0=no limit)
+    param: int = (
+        0  # Action-specific param: for LOG, rate-limit interval in ms (0=no limit)
+    )
 
     @classmethod
     def from_json(cls, data: dict) -> "RuleAction":
@@ -266,7 +268,6 @@ class LpmRule:
     sport: int
     dport: int
     protocol: Protocol
-    priority: int
     actions: List[RuleAction]
     sni: Optional[str] = None
 
@@ -281,7 +282,6 @@ class LpmRule:
             sport=data.get("sport", 0),
             dport=data.get("dport", 0),
             protocol=Protocol.from_string(protocol_str),
-            priority=data.get("priority", 1000),
             actions=[RuleAction.from_json(a) for a in actions_data],
             sni=data.get("sni"),
         )
@@ -496,9 +496,10 @@ class AddRuleOptions:
     sport: int = 0
     dport: int = 0
     protocol: str = "any"
-    actions: List[tuple] = field(default_factory=list)  # [(action, priority)] or [(action, priority, param_ms)]
+    actions: List[tuple] = field(
+        default_factory=list
+    )  # [(action, priority)] or [(action, priority, param_ms)]
     rule_id: Optional[int] = None
-    priority: int = 1000
     sni: Optional[str] = None
 
 
@@ -679,8 +680,6 @@ class PolicyClient:
             args.extend(["--proto", options.protocol])
         if options.rule_id is not None:
             args.extend(["--id", str(options.rule_id)])
-        if options.priority:
-            args.extend(["--priority", str(options.priority)])
 
         if options.sni:
             args.extend(["--sni", options.sni])

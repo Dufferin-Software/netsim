@@ -331,7 +331,9 @@ class GraphQLPolicyClient:
                 "tailcall": "TAIL_CALL",
             }
             gql_action = action_map.get(action.lower(), "PASS")
-            gql_actions.append({"action": gql_action, "priority": priority, "param": param_ms})
+            gql_actions.append(
+                {"action": gql_action, "priority": priority, "param": param_ms}
+            )
 
         # Map protocol string to GraphQL string value (server expects lowercase)
         proto_map = {
@@ -351,7 +353,6 @@ class GraphQLPolicyClient:
             "protocol": gql_protocol,
             "sport": options.sport,
             "dport": options.dport,
-            "priority": options.priority,
             "actions": gql_actions,
         }
 
@@ -441,7 +442,9 @@ class GraphQLPolicyClient:
                 action, priority = entry[0], entry[1]
                 param_ms = entry[2] if len(entry) >= 3 else 0
                 gql_action = action_map.get(action.lower(), "PASS")
-                gql_actions.append({"action": gql_action, "priority": priority, "param": param_ms})
+                gql_actions.append(
+                    {"action": gql_action, "priority": priority, "param": param_ms}
+                )
 
             gql_protocol = proto_map.get(options.protocol.lower(), "any")
 
@@ -450,7 +453,6 @@ class GraphQLPolicyClient:
                 "protocol": gql_protocol,
                 "sport": options.sport,
                 "dport": options.dport,
-                "priority": options.priority,
                 "actions": gql_actions,
             }
 
@@ -625,7 +627,6 @@ class GraphQLPolicyClient:
                 sport
                 dport
                 protocol
-                priority
                 actions {
                     action
                     priority
@@ -673,7 +674,6 @@ class GraphQLPolicyClient:
                     sport=r.get("sport", 0),
                     dport=r.get("dport", 0),
                     protocol=protocol,
-                    priority=r.get("priority", 1000),
                     actions=actions,
                     sni=r.get("sni"),
                 )
@@ -893,7 +893,6 @@ class GraphQLPolicyClient:
                     sport
                     dport
                     protocol
-                    priority
                     actions {
                         action
                         priority
@@ -916,7 +915,6 @@ class GraphQLPolicyClient:
                     sport
                     dport
                     protocol
-                    priority
                     actions {
                         action
                         priority
@@ -970,7 +968,6 @@ class GraphQLPolicyClient:
                 sport=r.get("sport", 0),
                 dport=r.get("dport", 0),
                 protocol=protocol,
-                priority=r.get("priority", 1000),
                 actions=actions,
             )
 

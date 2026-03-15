@@ -17,7 +17,6 @@ class TestEgressRuleManagement:
             dst="0.0.0.0/0",
             protocol="any",
             actions=[("drop", 0)],
-            priority=100,
         )
         result = policy_client.add_rule(options, direction="egress")
         assert result.success, f"Failed to add egress rule: {result.message}"
@@ -37,7 +36,6 @@ class TestEgressRuleManagement:
             dst="::/0",
             protocol="any",
             actions=[("drop", 0)],
-            priority=100,
         )
         result = policy_client.add_rule(options, direction="egress")
         assert result.success, f"Failed to add IPv6 egress rule: {result.message}"
