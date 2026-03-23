@@ -205,7 +205,6 @@ class ServerStatus:
     uptime_secs: int
     program_attached: bool
     inspect_mode: Optional[str] = None
-    suricata_running: Optional[bool] = None
 
     @classmethod
     def from_json(cls, data: dict) -> "ServerStatus":
@@ -215,8 +214,18 @@ class ServerStatus:
             uptime_secs=data.get("uptimeSecs", 0),
             program_attached=data.get("programAttached", False),
             inspect_mode=data.get("inspectMode"),
-            suricata_running=data.get("suricataRunning"),
         )
+
+
+@dataclass
+class ServerFeatures:
+    """Server compile-time feature flags."""
+
+    suricata: bool
+
+    @classmethod
+    def from_json(cls, data: dict) -> "ServerFeatures":
+        return cls(suricata=data.get("suricata", False))
 
 
 @dataclass
@@ -270,6 +279,7 @@ class LpmRule:
     protocol: Protocol
     actions: List[RuleAction]
     sni: Optional[str] = None
+    quic_version: Optional[str] = None
 
     @classmethod
     def from_json(cls, data: dict) -> "LpmRule":
@@ -284,6 +294,7 @@ class LpmRule:
             protocol=Protocol.from_string(protocol_str),
             actions=[RuleAction.from_json(a) for a in actions_data],
             sni=data.get("sni"),
+            quic_version=data.get("quicVersion"),
         )
 
     @property
@@ -501,6 +512,7 @@ class AddRuleOptions:
     )  # [(action, priority)] or [(action, priority, param_ms)]
     rule_id: Optional[int] = None
     sni: Optional[str] = None
+    quic_version: Optional[str] = None
 
 
 class PolicyClient:
@@ -577,6 +589,11 @@ class PolicyClient:
         """Get server status."""
         data = self._run_command_json(["status"])
         return ServerStatus.from_json(data)
+
+    def server_features(self) -> ServerFeatures:
+        """Get server compile-time feature flags."""
+        data = self._run_command_json(["show", "features"])
+        return ServerFeatures.from_json(data)
 
     # ========================================================================
     # Attach/Detach commands
@@ -683,6 +700,9 @@ class PolicyClient:
 
         if options.sni:
             args.extend(["--sni", options.sni])
+
+        if options.quic_version:
+            args.extend(["--quic-version", options.quic_version])
 
         # Add actions (support 2-tuple (action, priority) or 3-tuple (action, priority, param_ms))
         for entry in options.actions:

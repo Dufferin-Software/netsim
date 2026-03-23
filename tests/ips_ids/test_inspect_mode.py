@@ -46,23 +46,15 @@ class TestInspectModeDefault:
             f"Expected no mirror interface when disabled, got {status.mirror_interface}"
         )
 
-    def test_server_status_inspect_mode_field(
-        self, policy_client, policy_engine_service
+    def test_server_features_suricata(
+        self, policy_client, policy_engine_service, suricata_available
     ):
-        """Server status should include inspect_mode and suricata_running fields."""
-        server_status = policy_client.status()
-        # These fields are optional (may be None when disabled)
-        # but the dataclass should have them
-        assert hasattr(server_status, "inspect_mode"), (
-            "ServerStatus should have inspect_mode field"
+        """Server features should report suricata=True on an IPS/IDS server."""
+        features = policy_client.server_features()
+        assert features.suricata, (
+            "serverFeatures.suricata should be True on an IPS/IDS server"
         )
-        assert hasattr(server_status, "suricata_running"), (
-            "ServerStatus should have suricata_running field"
-        )
-        logger.info(
-            f"Server status: inspect_mode={server_status.inspect_mode}, "
-            f"suricata_running={server_status.suricata_running}"
-        )
+        logger.info(f"Server features: suricata={features.suricata}")
 
     def test_flow_verdicts_empty_when_disabled(
         self, policy_client, policy_engine_service

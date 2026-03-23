@@ -728,7 +728,7 @@ def apt_updated(nodes):
 
     def _update_node(node_name, node):
         logger.info(f"  [{node_name}] Running apt-get update...")
-        node.ssh_command("sudo apt-get update -qq", timeout=180)
+        node.ssh_command("sudo apt-get update -qq", timeout=600)
         logger.info(f"  [{node_name}] ✓ apt-get update complete")
 
     run_parallel_simple(
@@ -783,9 +783,48 @@ def install_user_packages(nodes, apt_updated, request):
 
             logger.info(f"  [{node_name}] Installing {pkg_name}...")
 
+            # Diagnostics: show anything holding the dpkg lock and any
+            # stale apt/dpkg processes left over from a previous run.
+            try:
+                lock_info = node.ssh_command(
+                    "sudo lsof /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock "
+                    "/var/cache/apt/archives/lock 2>/dev/null || true",
+                    timeout=15,
+                )
+                if lock_info.strip():
+                    logger.warning(f"  [{node_name}] dpkg locks held:\n{lock_info}")
+                apt_procs = node.ssh_command(
+                    "ps -eo pid,comm,args | grep -E '(apt|dpkg)' | grep -v grep || true",
+                    timeout=15,
+                )
+                if apt_procs.strip():
+                    logger.warning(
+                        f"  [{node_name}] running apt/dpkg processes:\n{apt_procs}"
+                    )
+            except Exception as e:
+                logger.debug(f"  [{node_name}] diagnostics failed: {e}")
+
+            # Kill any stale apt/dpkg processes so they cannot hold the lock.
+            try:
+                node.ssh_command(
+                    "sudo pkill -9 -x apt apt-get dpkg 2>/dev/null || true",
+                    timeout=10,
+                )
+            except Exception:
+                pass
+
+            # Repair any interrupted dpkg state before installing.
+            try:
+                node.ssh_command(
+                    "sudo DEBIAN_FRONTEND=noninteractive dpkg --configure -a 2>&1 || true",
+                    timeout=120,
+                )
+            except Exception as e:
+                logger.debug(f"  [{node_name}] dpkg --configure -a: {e}")
+
             install_output = node.ssh_command(
                 f"sudo DEBIAN_FRONTEND=noninteractive apt install --fix-broken -y {remote_path} 2>&1",
-                timeout=300,
+                timeout=600,
             )
             logger.debug(f"  [{node_name}] apt output: {install_output}")
 

@@ -1,4 +1,5 @@
 import logging
+import time
 from typing import Union
 
 import netaddr
@@ -10,6 +11,36 @@ from tests.graphql_policy_client import GraphQLPolicyClient
 
 
 logger = logging.getLogger(__name__)
+
+_POLICY_ENGINE_URL = "http://127.0.0.1:8080/graphql"
+_HTTP_READY_TIMEOUT = 30  # seconds
+_HTTP_READY_INTERVAL = 0.5  # seconds between retries
+
+
+def _wait_for_policy_engine_http(server, timeout: int = _HTTP_READY_TIMEOUT) -> None:
+    """
+    Block until the policy-engine HTTP server is accepting connections on port 8080.
+
+    systemd can report the service as "active (running)" before the HTTP socket
+    is bound, so we poll until the endpoint responds.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            out = server.ssh_command(
+                f"curl -s -o /dev/null -w '%{{http_code}}' "
+                f"--max-time 2 {_POLICY_ENGINE_URL} 2>/dev/null || true",
+                timeout=10,
+            )
+            if (
+                out.strip() and out.strip() != "000"
+            ):  # actual HTTP response (000 = connection refused)
+                logger.info("policy-engine HTTP server is ready")
+                return
+        except Exception:
+            pass
+        time.sleep(_HTTP_READY_INTERVAL)
+    pytest.fail(f"policy-engine HTTP server did not become ready within {timeout}s")
 
 
 @pytest.fixture(scope="function")
@@ -107,11 +138,28 @@ def policy_engine_service(nodes, install_user_packages):
     if "MISSING" in check_result:
         pytest.skip("policy-engine.service not installed (use --install-packages)")
 
+    # Suricata must not be running during tests — it crash-loops when
+    # unconfigured and saturates the VM.  Stop and disable it here so that
+    # packages installed from an older image (before the postinst fix) are
+    # also covered.
+    try:
+        server.ssh_command(
+            "sudo systemctl stop suricata 2>/dev/null || true && "
+            "sudo systemctl disable suricata 2>/dev/null || true",
+            timeout=15,
+        )
+    except Exception:
+        pass
+
     status = restart_service(server, "policy-engine")
     if not status.is_healthy:
         pytest.fail(f"Failed to start policy-engine: {status.status_text}")
 
     logger.info(f"policy-engine running with PID {status.main_pid}")
+
+    # Wait for the HTTP server to bind to port 8080 — systemd reports "active"
+    # before the socket is ready.
+    _wait_for_policy_engine_http(server)
 
     yield status
 

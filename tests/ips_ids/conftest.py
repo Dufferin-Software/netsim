@@ -23,6 +23,36 @@ logger = logging.getLogger(__name__)
 
 AnyPolicyClient = Union[PolicyClient, GraphQLPolicyClient]
 
+_POLICY_ENGINE_URL = "http://127.0.0.1:8080/graphql"
+_HTTP_READY_TIMEOUT = 30  # seconds
+_HTTP_READY_INTERVAL = 0.5  # seconds between retries
+
+
+def _wait_for_policy_engine_http(server, timeout: int = _HTTP_READY_TIMEOUT) -> None:
+    """
+    Block until the policy-engine HTTP server is accepting connections on port 8080.
+
+    systemd can report the service as "active (running)" before the HTTP socket
+    is bound, so we poll until the endpoint responds.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            out = server.ssh_command(
+                f"curl -s -o /dev/null -w '%{{http_code}}' "
+                f"--max-time 2 {_POLICY_ENGINE_URL} 2>/dev/null || true",
+                timeout=10,
+            )
+            if (
+                out.strip() and out.strip() != "000"
+            ):  # actual HTTP response (000 = connection refused)
+                logger.info("policy-engine HTTP server is ready")
+                return
+        except Exception:
+            pass
+        time.sleep(_HTTP_READY_INTERVAL)
+    pytest.fail(f"policy-engine HTTP server did not become ready within {timeout}s")
+
 
 # ============================================================================
 # Service fixtures
@@ -51,6 +81,10 @@ def policy_engine_service(nodes, install_user_packages):
 
     logger.info(f"policy-engine running with PID {status.main_pid}")
 
+    # Wait for the HTTP server to bind to port 8080 — systemd reports "active"
+    # before the socket is ready.
+    _wait_for_policy_engine_http(server)
+
     yield status
 
     logger.info("Stopping policy-engine service...")
@@ -61,26 +95,19 @@ def policy_engine_service(nodes, install_user_packages):
 
 
 @pytest.fixture(scope="package")
-def suricata_available(nodes, policy_engine_service):
+def suricata_available(nodes, policy_engine_service, graphql_policy_client):
     """
-    Check that Suricata is installed and can be managed by policy-engine.
+    Assert that the running policy-engine server was compiled with IPS/IDS support.
 
-    Skips if Suricata is not installed on the server.
+    Uses the serverFeatures GraphQL query — the authoritative source for whether
+    the server supports Suricata IPS/IDS. Skips the test if it does not.
     """
-    server = nodes["server"]
-
-    check = server.ssh_command(
-        "which suricata >/dev/null 2>&1 && echo FOUND || echo MISSING"
-    )
-    if "MISSING" in check:
-        pytest.skip("suricata not installed on server node")
-
-    # Check the systemd unit exists
-    unit_check = server.ssh_command(
-        "systemctl cat suricata.service >/dev/null 2>&1 && echo EXISTS || echo MISSING"
-    )
-    if "MISSING" in unit_check:
-        pytest.skip("suricata.service not installed on server node")
+    features = graphql_policy_client.server_features()
+    if not features.suricata:
+        pytest.skip(
+            "policy-engine server does not support IPS/IDS "
+            "(compiled without --features suricata; install policy-engine-ips)"
+        )
 
     yield
 

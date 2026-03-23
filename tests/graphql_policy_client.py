@@ -31,6 +31,7 @@ from tests.policy_client import (
     RuleStats,
     RuleStatsResponse,
     RuleWithStats,
+    ServerFeatures,
     ServerStatus,
 )
 
@@ -107,7 +108,7 @@ class GraphQLPolicyClient:
     # ========================================================================
 
     def status(self) -> ServerStatus:
-        """Get server status."""
+        """Get server status (base fields only)."""
         query = """
         query {
             status {
@@ -116,7 +117,6 @@ class GraphQLPolicyClient:
                 uptimeSecs
                 programAttached
                 inspectMode
-                suricataRunning
             }
         }
         """
@@ -128,8 +128,20 @@ class GraphQLPolicyClient:
             uptime_secs=status_data.get("uptimeSecs", 0),
             program_attached=status_data.get("programAttached", False),
             inspect_mode=status_data.get("inspectMode"),
-            suricata_running=status_data.get("suricataRunning"),
         )
+
+    def server_features(self) -> ServerFeatures:
+        """Get server compile-time feature flags."""
+        query = """
+        query {
+            serverFeatures {
+                suricata
+            }
+        }
+        """
+        data = self._execute_graphql(query)
+        features_data = data.get("serverFeatures", {})
+        return ServerFeatures(suricata=features_data.get("suricata", False))
 
     # ========================================================================
     # Attach/Detach commands
@@ -364,6 +376,8 @@ class GraphQLPolicyClient:
             input_data["id"] = str(options.rule_id)
         if options.sni:
             input_data["sni"] = options.sni
+        if options.quic_version:
+            input_data["quicVersion"] = options.quic_version
 
         variables = {"input": input_data}
         data = self._execute_graphql(mutation, variables)
@@ -464,6 +478,8 @@ class GraphQLPolicyClient:
                 input_data["id"] = str(options.rule_id)
             if options.sni:
                 input_data["sni"] = options.sni
+            if options.quic_version:
+                input_data["quicVersion"] = options.quic_version
 
             gql_rules.append(input_data)
 
@@ -633,6 +649,7 @@ class GraphQLPolicyClient:
                     param
                 }
                 sni
+                quicVersion
             }
         }
         """
@@ -676,6 +693,7 @@ class GraphQLPolicyClient:
                     protocol=protocol,
                     actions=actions,
                     sni=r.get("sni"),
+                    quic_version=r.get("quicVersion"),
                 )
             )
         return rules
