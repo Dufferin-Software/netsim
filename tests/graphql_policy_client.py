@@ -800,6 +800,9 @@ class GraphQLPolicyClient:
                 verdictPassBytes
                 verdictDropPackets
                 verdictDropBytes
+                fibForwardedPackets
+                fibForwardedBytes
+                fibFallbackPackets
             }
             ethertypeStats(interface: $interface, direction: $direction) {
                 ethertype
@@ -861,6 +864,9 @@ class GraphQLPolicyClient:
             verdict_pass_bytes=stats_data.get("verdictPassBytes", 0),
             verdict_drop_packets=stats_data.get("verdictDropPackets", 0),
             verdict_drop_bytes=stats_data.get("verdictDropBytes", 0),
+            fib_forwarded_packets=stats_data.get("fibForwardedPackets", 0),
+            fib_forwarded_bytes=stats_data.get("fibForwardedBytes", 0),
+            fib_fallback_packets=stats_data.get("fibFallbackPackets", 0),
         )
 
         ethertype_stats = [
@@ -1453,6 +1459,56 @@ class GraphQLPolicyClient:
             success=result.get("success", False),
             message=result.get("message", ""),
         )
+
+    # ========================================================================
+    # FIB forwarding
+    # ========================================================================
+
+    def set_fib_forwarding(self, enabled: bool) -> OperationResult:
+        """
+        Enable or disable XDP FIB forwarding (line-rate packet forwarding).
+
+        Args:
+            enabled: True to enable FIB forwarding, False to disable
+        """
+        mutation = """
+        mutation SetFibForwarding($input: SetFibForwardingInput!) {
+            setFibForwarding(input: $input) {
+                success
+                message
+            }
+        }
+        """
+        variables = {"input": {"enabled": enabled}}
+        data = self._execute_graphql(mutation, variables)
+
+        if "__error__" in data:
+            return OperationResult(success=False, message=data["__error__"])
+
+        result = data.get("setFibForwarding", {})
+        return OperationResult(
+            success=result.get("success", False),
+            message=result.get("message", ""),
+        )
+
+    def get_fib_forwarding(self) -> bool:
+        """
+        Query whether XDP FIB forwarding is currently enabled.
+
+        Returns:
+            True if FIB forwarding is enabled, False otherwise
+        """
+        query = """
+        query {
+            fibForwarding
+        }
+        """
+        data = self._execute_graphql(query)
+
+        if "__error__" in data:
+            return False
+
+        return data.get("fibForwarding", False)
 
     # ========================================================================
     # Suricata commands

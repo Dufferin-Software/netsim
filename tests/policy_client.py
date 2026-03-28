@@ -359,6 +359,9 @@ class GlobalStats:
     verdict_pass_bytes: int = 0
     verdict_drop_packets: int = 0
     verdict_drop_bytes: int = 0
+    fib_forwarded_packets: int = 0
+    fib_forwarded_bytes: int = 0
+    fib_fallback_packets: int = 0
 
     @classmethod
     def from_json(cls, data: dict) -> "GlobalStats":
@@ -381,6 +384,9 @@ class GlobalStats:
             verdict_pass_bytes=data.get("verdictPassBytes", 0),
             verdict_drop_packets=data.get("verdictDropPackets", 0),
             verdict_drop_bytes=data.get("verdictDropBytes", 0),
+            fib_forwarded_packets=data.get("fibForwardedPackets", 0),
+            fib_forwarded_bytes=data.get("fibForwardedBytes", 0),
+            fib_fallback_packets=data.get("fibFallbackPackets", 0),
         )
 
 
