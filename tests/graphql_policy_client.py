@@ -17,6 +17,7 @@ from tests.policy_client import (
     BatchAddRulesResult,
     BatchDeleteRulesResult,
     EthertypeStats,
+    FlowExportStatus,
     FlowVerdictStats,
     GlobalStats,
     InspectStatus,
@@ -136,12 +137,16 @@ class GraphQLPolicyClient:
         query {
             serverFeatures {
                 suricata
+                ipfix
             }
         }
         """
         data = self._execute_graphql(query)
         features_data = data.get("serverFeatures", {})
-        return ServerFeatures(suricata=features_data.get("suricata", False))
+        return ServerFeatures(
+            suricata=features_data.get("suricata", False),
+            ipfix=features_data.get("ipfix", False),
+        )
 
     # ========================================================================
     # Attach/Detach commands
@@ -1585,6 +1590,78 @@ class GraphQLPolicyClient:
             success=result.get("success", False),
             message=result.get("message", ""),
         )
+
+    # ========================================================================
+    # IPFIX flow export commands
+    # ========================================================================
+
+    def configure_flow_export(
+        self,
+        enabled: bool,
+        collector_host: str = "127.0.0.1",
+        collector_port: int = 4739,
+        idle_timeout_s: int = 15,
+        active_timeout_s: int = 60,
+    ) -> OperationResult:
+        """Configure IPFIX flow export."""
+        mutation = """
+        mutation ConfigureFlowExport($input: ConfigureFlowExportInput!) {
+            configureFlowExport(input: $input) {
+                success
+                message
+            }
+        }
+        """
+        variables = {
+            "input": {
+                "enabled": enabled,
+                "collectorHost": collector_host,
+                "collectorPort": collector_port,
+                "idleTimeoutS": idle_timeout_s,
+                "activeTimeoutS": active_timeout_s,
+            }
+        }
+        data = self._execute_graphql(mutation, variables)
+
+        if "__error__" in data:
+            return OperationResult(success=False, message=data["__error__"])
+
+        result = data.get("configureFlowExport", {})
+        return OperationResult(
+            success=result.get("success", False),
+            message=result.get("message", ""),
+        )
+
+    def get_flow_export_status(self) -> FlowExportStatus:
+        """Get current IPFIX flow export status and configuration."""
+        query = """
+        query {
+            flowExportStatus {
+                enabled
+                collectorHost
+                collectorPort
+                idleTimeoutS
+                activeTimeoutS
+                flowsExportedTotal
+                activeFlowCount
+            }
+        }
+        """
+        data = self._execute_graphql(query)
+
+        if "__error__" in data:
+            return FlowExportStatus(
+                enabled=False,
+                collector_host="",
+                collector_port=0,
+                idle_timeout_s=0,
+                active_timeout_s=0,
+                flows_exported_total=0,
+                active_flow_count=0,
+            )
+
+        d = data.get("flowExportStatus", {})
+        return FlowExportStatus.from_json(d)
 
 
 def create_graphql_policy_client(node: Node) -> GraphQLPolicyClient:

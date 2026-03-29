@@ -222,10 +222,39 @@ class ServerFeatures:
     """Server compile-time feature flags."""
 
     suricata: bool
+    ipfix: bool = False
 
     @classmethod
     def from_json(cls, data: dict) -> "ServerFeatures":
-        return cls(suricata=data.get("suricata", False))
+        return cls(
+            suricata=data.get("suricata", False),
+            ipfix=data.get("ipfix", False),
+        )
+
+
+@dataclass
+class FlowExportStatus:
+    """IPFIX flow export status and configuration."""
+
+    enabled: bool
+    collector_host: str
+    collector_port: int
+    idle_timeout_s: int
+    active_timeout_s: int
+    flows_exported_total: int
+    active_flow_count: int
+
+    @classmethod
+    def from_json(cls, data: dict) -> "FlowExportStatus":
+        return cls(
+            enabled=data.get("enabled", False),
+            collector_host=data.get("collectorHost", ""),
+            collector_port=data.get("collectorPort", 0),
+            idle_timeout_s=data.get("idleTimeoutS", 0),
+            active_timeout_s=data.get("activeTimeoutS", 0),
+            flows_exported_total=data.get("flowsExportedTotal", 0),
+            active_flow_count=data.get("activeFlowCount", 0),
+        )
 
 
 @dataclass
