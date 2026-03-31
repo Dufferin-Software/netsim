@@ -557,16 +557,26 @@ class PolicyClient:
     Executes policy-client commands on a remote node via SSH and parses JSON output.
     """
 
-    def __init__(self, node: Node, server_url: str = "http://127.0.0.1:8080/graphql"):
+    def __init__(
+        self,
+        node: Node,
+        server_url: str = "http://127.0.0.1:8080/graphql",
+        tls_ca_cert: Optional[str] = None,
+        tls_insecure: bool = False,
+    ):
         """
         Initialize the policy client wrapper.
 
         Args:
             node: Node where policy-engine is running
             server_url: URL of the policy-engine GraphQL server
+            tls_ca_cert: Path (on the remote node) to a PEM CA cert to trust
+            tls_insecure: Skip TLS certificate verification (dev only)
         """
         self.node = node
         self.server_url = server_url
+        self.tls_ca_cert = tls_ca_cert
+        self.tls_insecure = tls_insecure
 
     def _run_command(self, args: List[str], timeout: int = 30) -> str:
         """
@@ -582,7 +592,12 @@ class PolicyClient:
         Raises:
             subprocess.CalledProcessError: If command fails without JSON output
         """
-        cmd_parts = ["policy-client", "--json", f"--server={self.server_url}"] + args
+        cmd_parts = ["policy-client", "--json", f"--server={self.server_url}"]
+        if self.tls_ca_cert:
+            cmd_parts += [f"--tls-ca-cert={self.tls_ca_cert}"]
+        if self.tls_insecure:
+            cmd_parts += ["--tls-insecure"]
+        cmd_parts += args
         cmd = " ".join(cmd_parts)
         logger.debug(f"[{self.node.name}] Running: {cmd}")
 
@@ -743,10 +758,13 @@ class PolicyClient:
         for entry in options.actions:
             action, priority = entry[0], entry[1]
             param_ms = entry[2] if len(entry) >= 3 else 0
+            action_str = (
+                action.value if isinstance(action, PolicyAction) else str(action)
+            )
             if param_ms:
-                args.extend(["--action", f"{action}:{priority}:{param_ms}"])
+                args.extend(["--action", f"{action_str}:{priority}:{param_ms}"])
             else:
-                args.extend(["--action", f"{action}:{priority}"])
+                args.extend(["--action", f"{action_str}:{priority}"])
 
         data = self._run_command_json(args)
         return OperationResult.from_json(data)

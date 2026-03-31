@@ -47,16 +47,26 @@ class GraphQLPolicyClient:
     Implements the same interface as PolicyClient for test compatibility.
     """
 
-    def __init__(self, node: Node, server_url: str = "http://127.0.0.1:8080/graphql"):
+    def __init__(
+        self,
+        node: Node,
+        server_url: str = "http://127.0.0.1:8080/graphql",
+        tls_ca_cert: Optional[str] = None,
+        tls_insecure: bool = False,
+    ):
         """
         Initialize the GraphQL policy client wrapper.
 
         Args:
             node: Node where policy-engine is running
             server_url: URL of the policy-engine GraphQL server
+            tls_ca_cert: Path (on the remote node) to a PEM CA cert to trust
+            tls_insecure: Skip TLS certificate verification (dev only)
         """
         self.node = node
         self.server_url = server_url
+        self.tls_ca_cert = tls_ca_cert
+        self.tls_insecure = tls_insecure
 
     def _execute_graphql(self, query: str, variables: Optional[dict] = None) -> dict:
         """
@@ -79,15 +89,21 @@ class GraphQLPolicyClient:
         payload_json = json.dumps(payload)
         logger.debug(f"[{self.node.name}] GraphQL: {query[:100]}...")
 
+        tls_flags = ""
+        if self.tls_ca_cert:
+            tls_flags = f"--cacert {self.tls_ca_cert}"
+        elif self.tls_insecure:
+            tls_flags = "-k"
+
         # Use stdin for large payloads to avoid command-line length limits
         if len(payload_json) > 10000:
             # Use curl with stdin (-d @-)
-            cmd = f"curl -s -X POST -H 'Content-Type: application/json' -d @- {self.server_url}"
+            cmd = f"curl -s {tls_flags} -X POST -H 'Content-Type: application/json' -d @- {self.server_url}"
             output = self.node.ssh_command_with_stdin(cmd, payload_json, timeout=30)
         else:
             # For small payloads, use command line (simpler)
             payload_escaped = payload_json.replace("'", "'\\''")  # Escape single quotes
-            cmd = f"curl -s -X POST -H 'Content-Type: application/json' -d '{payload_escaped}' {self.server_url}"
+            cmd = f"curl -s {tls_flags} -X POST -H 'Content-Type: application/json' -d '{payload_escaped}' {self.server_url}"
             output = self.node.ssh_command(cmd, timeout=30)
 
         try:
