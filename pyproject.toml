@@ -31,6 +31,9 @@ addopts = [
 ]
 # Disable pytest cache to reduce memory
 cache_dir = "/tmp/pytest_cache"
+markers = [
+    "slow: marks tests as slow (scheduler waits, 45+ s); exclude with -m 'not slow'",
+]
 
 [tool.mypy]
 # libvirt-python ships no type stubs and has no py.typed marker

@@ -25,6 +25,7 @@ from tests.policy_client import (
     InterfaceStats,
     IngressMode,
     LpmRule,
+    ManagedRule,
     OperationResult,
     PolicyAction,
     Protocol,
@@ -399,6 +400,13 @@ class GraphQLPolicyClient:
             input_data["sni"] = options.sni
         if options.quic_version:
             input_data["quicVersion"] = options.quic_version
+        if options.expires_after_secs is not None:
+            input_data["expiresAfterSecs"] = options.expires_after_secs
+        if options.schedule_windows:
+            input_data["schedule"] = {
+                "timezone": options.schedule_tz or "UTC",
+                "windows": [w.to_graphql() for w in options.schedule_windows],
+            }
 
         variables = {"input": input_data}
         data = self._execute_graphql(mutation, variables)
@@ -411,6 +419,40 @@ class GraphQLPolicyClient:
             success=result.get("success", False),
             message=result.get("message", ""),
         )
+
+    def managed_rules(self, direction: str = "ingress") -> List[ManagedRule]:
+        """
+        List rules with a TTL or schedule.
+
+        Args:
+            direction: Traffic direction ("ingress" or "egress")
+
+        Returns:
+            List of ManagedRule objects
+        """
+        query = """
+        query ManagedRules($direction: GqlDirection!) {
+            managedRules(direction: $direction) {
+                ruleId
+                direction
+                ruleState
+                expiresAtMs
+                schedule {
+                    windows {
+                        start { dayOfWeek hour minute }
+                        end   { dayOfWeek hour minute }
+                    }
+                    timezone
+                }
+            }
+        }
+        """
+        gql_direction = "INGRESS" if direction == "ingress" else "EGRESS"
+        data = self._execute_graphql(query, {"direction": gql_direction})
+        if "__error__" in data:
+            return []
+        raw = data.get("managedRules", [])
+        return [ManagedRule.from_json(r) for r in raw]
 
     def add_rules_batch(
         self, rules: List[AddRuleOptions], direction: str = "ingress"

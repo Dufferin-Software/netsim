@@ -354,9 +354,10 @@ def run_nping(node: Node, options: NpingOptions, timeout: int = 60) -> NpingResu
 
 def send_ping(
     node: Node,
-    target: netaddr.IPAddress,
+    target,
     count: int = 5,
     interface: Optional[str] = None,
+    timeout: int = 60,
 ) -> NpingResult:
     """
     Send ICMP echo request packets (simple ping).
@@ -368,13 +369,16 @@ def send_ping(
 
     Args:
         node: Node to send from
-        target: Target IP address (netaddr.IPAddress)
+        target: Target IP address (netaddr.IPAddress or str)
         count: Number of packets to send
         interface: Source interface
+        timeout: Command timeout in seconds
 
     Returns:
         NpingResult
     """
+    if not isinstance(target, netaddr.IPAddress):
+        target = netaddr.IPAddress(target)
     ipv6 = target.version == 6
 
     if ipv6:
@@ -389,7 +393,7 @@ def send_ping(
             interface=interface,
             ipv6=False,
         )
-        return run_nping(node, options)
+        return run_nping(node, options, timeout=timeout)
 
 
 def _run_ping6(

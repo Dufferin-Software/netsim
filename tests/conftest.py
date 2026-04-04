@@ -200,6 +200,7 @@ def pytest_configure(config):
         raise pytest.UsageError("\n".join(errors))
 
 
+
 def pytest_runtest_makereport(item, call):
     """Track test failures."""
     global _test_failed

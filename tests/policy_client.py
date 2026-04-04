@@ -534,6 +534,87 @@ class FlowVerdictStats:
 
 
 @dataclass
+class WeeklyWindow:
+    """A half-open weekly time window [start, end).
+
+    day_of_week: 0=Sunday … 6=Saturday
+    """
+
+    start_day: int
+    start_hour: int
+    start_minute: int
+    end_day: int
+    end_hour: int
+    end_minute: int
+
+    def to_cli_spec(self) -> str:
+        """Format as CLI --schedule-window argument: 'D:HH:MM-D:HH:MM'."""
+        return (
+            f"{self.start_day}:{self.start_hour:02d}:{self.start_minute:02d}"
+            f"-{self.end_day}:{self.end_hour:02d}:{self.end_minute:02d}"
+        )
+
+    def to_graphql(self) -> dict:
+        """Format as GraphQL WeeklyWindowInput."""
+        return {
+            "start": {
+                "dayOfWeek": self.start_day,
+                "hour": self.start_hour,
+                "minute": self.start_minute,
+            },
+            "end": {
+                "dayOfWeek": self.end_day,
+                "hour": self.end_hour,
+                "minute": self.end_minute,
+            },
+        }
+
+
+@dataclass
+class ManagedRule:
+    """A rule with a TTL or recurring schedule."""
+
+    rule_id: int
+    direction: str
+    rule_state: str  # "active" | "inactive"
+    expires_at_ms: Optional[int]  # epoch-ms, None for scheduled/permanent
+    schedule_windows: Optional[List[WeeklyWindow]]
+    schedule_timezone: Optional[str]
+
+    @classmethod
+    def from_json(cls, data: dict) -> "ManagedRule":
+        windows = None
+        tz = None
+        sched = data.get("schedule")
+        if sched:
+            tz = sched.get("timezone")
+            raw_windows = sched.get("windows", [])
+            windows = []
+            for w in raw_windows:
+                s = w.get("start", {})
+                e = w.get("end", {})
+                windows.append(
+                    WeeklyWindow(
+                        start_day=s.get("dayOfWeek", 0),
+                        start_hour=s.get("hour", 0),
+                        start_minute=s.get("minute", 0),
+                        end_day=e.get("dayOfWeek", 0),
+                        end_hour=e.get("hour", 0),
+                        end_minute=e.get("minute", 0),
+                    )
+                )
+        raw_expires = data.get("expiresAtMs")
+        return cls(
+            rule_id=int(data.get("ruleId", 0)),
+            direction=data.get("direction", "INGRESS"),
+            rule_state=data.get("ruleState", "active"),
+            expires_at_ms=int(raw_expires) if raw_expires is not None else None,
+            schedule_windows=windows,
+            schedule_timezone=tz,
+        )
+
+
+@dataclass
 class AddRuleOptions:
     """Options for adding a rule."""
 
@@ -548,6 +629,10 @@ class AddRuleOptions:
     rule_id: Optional[int] = None
     sni: Optional[str] = None
     quic_version: Optional[str] = None
+    # Lifecycle fields (mutually exclusive)
+    expires_after_secs: Optional[int] = None
+    schedule_tz: Optional[str] = None
+    schedule_windows: List[WeeklyWindow] = field(default_factory=list)
 
 
 class PolicyClient:
@@ -754,6 +839,15 @@ class PolicyClient:
         if options.quic_version:
             args.extend(["--quic-version", options.quic_version])
 
+        if options.expires_after_secs is not None:
+            args.extend(["--expires-after-secs", str(options.expires_after_secs)])
+
+        if options.schedule_windows:
+            if options.schedule_tz:
+                args.extend(["--schedule-tz", options.schedule_tz])
+            for window in options.schedule_windows:
+                args.extend(["--schedule-window", window.to_cli_spec()])
+
         # Add actions (support 2-tuple (action, priority) or 3-tuple (action, priority, param_ms))
         for entry in options.actions:
             action, priority = entry[0], entry[1]
@@ -839,6 +933,23 @@ class PolicyClient:
         """
         data = self._run_command_json(["rule", "flush", "--direction", direction])
         return OperationResult.from_json(data)
+
+    def managed_rules(self, direction: str = "ingress") -> List[ManagedRule]:
+        """
+        List rules with a TTL or schedule (managed rules).
+
+        Args:
+            direction: Traffic direction ("ingress" or "egress")
+
+        Returns:
+            List of ManagedRule objects
+        """
+        data = self._run_command_json(
+            ["rule", "managed-rules", "--direction", direction]
+        )
+        if isinstance(data, list):
+            return [ManagedRule.from_json(r) for r in data]
+        return []
 
     # ========================================================================
     # Show commands
