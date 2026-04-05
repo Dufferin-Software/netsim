@@ -400,6 +400,10 @@ class GraphQLPolicyClient:
             input_data["sni"] = options.sni
         if options.quic_version:
             input_data["quicVersion"] = options.quic_version
+        if options.src_mac:
+            input_data["srcMac"] = options.src_mac
+        if options.dst_mac:
+            input_data["dstMac"] = options.dst_mac
         if options.expires_after_secs is not None:
             input_data["expiresAfterSecs"] = options.expires_after_secs
         if options.schedule_windows:
@@ -543,6 +547,10 @@ class GraphQLPolicyClient:
                 input_data["sni"] = options.sni
             if options.quic_version:
                 input_data["quicVersion"] = options.quic_version
+            if options.src_mac:
+                input_data["srcMac"] = options.src_mac
+            if options.dst_mac:
+                input_data["dstMac"] = options.dst_mac
 
             gql_rules.append(input_data)
 
@@ -713,6 +721,8 @@ class GraphQLPolicyClient:
                 }
                 sni
                 quicVersion
+                srcMac
+                dstMac
             }
         }
         """
@@ -757,6 +767,8 @@ class GraphQLPolicyClient:
                     actions=actions,
                     sni=r.get("sni"),
                     quic_version=r.get("quicVersion"),
+                    src_mac=r.get("srcMac"),
+                    dst_mac=r.get("dstMac"),
                 )
             )
         return rules

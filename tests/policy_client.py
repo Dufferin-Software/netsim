@@ -309,6 +309,8 @@ class LpmRule:
     actions: List[RuleAction]
     sni: Optional[str] = None
     quic_version: Optional[str] = None
+    src_mac: Optional[str] = None
+    dst_mac: Optional[str] = None
 
     @classmethod
     def from_json(cls, data: dict) -> "LpmRule":
@@ -324,6 +326,8 @@ class LpmRule:
             actions=[RuleAction.from_json(a) for a in actions_data],
             sni=data.get("sni"),
             quic_version=data.get("quicVersion"),
+            src_mac=data.get("srcMac"),
+            dst_mac=data.get("dstMac"),
         )
 
     @property
@@ -629,6 +633,8 @@ class AddRuleOptions:
     rule_id: Optional[int] = None
     sni: Optional[str] = None
     quic_version: Optional[str] = None
+    src_mac: Optional[str] = None  # "aa:bb:cc:dd:ee:ff" or None for any
+    dst_mac: Optional[str] = None  # "aa:bb:cc:dd:ee:ff" or None for any
     # Lifecycle fields (mutually exclusive)
     expires_after_secs: Optional[int] = None
     schedule_tz: Optional[str] = None
@@ -838,6 +844,12 @@ class PolicyClient:
 
         if options.quic_version:
             args.extend(["--quic-version", options.quic_version])
+
+        if options.src_mac:
+            args.extend(["--src-mac", options.src_mac])
+
+        if options.dst_mac:
+            args.extend(["--dst-mac", options.dst_mac])
 
         if options.expires_after_secs is not None:
             args.extend(["--expires-after-secs", str(options.expires_after_secs)])
