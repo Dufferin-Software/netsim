@@ -257,6 +257,10 @@ class TestIngressAttachment:
         status = policy_client.status()
         assert status.program_attached, "program_attached should be True"
 
+        # Check that show stats reports program_attached correctly
+        stats = policy_client.get_stats(iface_name, direction="ingress")
+        assert stats.program_attached, "get_stats should report program_attached=True after attach"
+
         # Cleanup
         policy_client.detach_ingress(iface_name)
 
