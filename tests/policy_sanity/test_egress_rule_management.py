@@ -1,6 +1,10 @@
 import logging
 
-from tests.policy_client import AddRuleOptions, PolicyAction, IngressMode
+from lib.policy_engine.engine.cli.client import (
+    AddRuleOptions,
+    PolicyAction,
+    IngressMode,
+)
 
 logger = logging.getLogger(__name__)
 

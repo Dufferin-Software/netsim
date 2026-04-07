@@ -812,7 +812,7 @@ class PolicyClient:
     # ========================================================================
 
     def add_rule(
-        self, options: AddRuleOptions, direction: str = "ingress"
+        self, options: AddRuleOptions, direction: str = "ingress", timeout: int = 10
     ) -> OperationResult:
         """
         Add a policy rule.
@@ -872,7 +872,7 @@ class PolicyClient:
             else:
                 args.extend(["--action", f"{action_str}:{priority}"])
 
-        data = self._run_command_json(args)
+        data = self._run_command_json(args, timeout=timeout)
         return OperationResult.from_json(data)
 
     def delete_rule(

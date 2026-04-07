@@ -12,7 +12,7 @@ Tests:
 
 import logging
 
-from tests.policy_client import AddRuleOptions
+from lib.policy_engine.engine.cli.client import AddRuleOptions
 
 logger = logging.getLogger(__name__)
 

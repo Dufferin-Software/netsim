@@ -12,7 +12,7 @@ import logging
 from typing import List, Optional
 
 from tests.node import Node
-from tests.policy_client import (
+from lib.policy_engine.engine.cli.client import (
     AddRuleOptions,
     BatchAddRulesResult,
     BatchDeleteRulesResult,
@@ -881,7 +881,6 @@ class GraphQLPolicyClient:
             }
             ethertypeStats(interface: $interface, direction: $direction) {
                 ethertype
-                ethertypeHex
                 name
                 packets
             }
@@ -947,7 +946,7 @@ class GraphQLPolicyClient:
         ethertype_stats = [
             EthertypeStats(
                 ethertype=e.get("ethertype", 0),
-                ethertype_hex=e.get("ethertypeHex", ""),
+                ethertype_hex="",
                 name=e.get("name", ""),
                 packets=e.get("packets", 0),
             )

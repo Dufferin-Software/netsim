@@ -18,8 +18,8 @@ import time
 
 import pytest
 
-from tests.policy_client import AddRuleOptions, WeeklyWindow
-from tests.graphql_policy_client import GraphQLPolicyClient
+from lib.policy_engine.engine.cli.client import AddRuleOptions, WeeklyWindow
+from lib.policy_engine.engine.graphql.client import GraphQLPolicyClient
 from tests.nping_utils import send_ping
 
 logger = logging.getLogger(__name__)
@@ -33,7 +33,10 @@ _SCHEDULER_WAIT = 45
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _drop_rule(src: str = "0.0.0.0/0", dst: str = "0.0.0.0/0", rule_id: int = 9001, **kw) -> AddRuleOptions:
+
+def _drop_rule(
+    src: str = "0.0.0.0/0", dst: str = "0.0.0.0/0", rule_id: int = 9001, **kw
+) -> AddRuleOptions:
     return AddRuleOptions(
         src=src,
         dst=dst,
@@ -113,7 +116,10 @@ class TestTTLRuleRegistry:
         )
         result = graphql_client.add_rule(opts, direction="ingress")
         assert not result.success, "Both TTL and schedule should be mutually exclusive"
-        assert "exclusive" in result.message.lower() or "mutually" in result.message.lower()
+        assert (
+            "exclusive" in result.message.lower()
+            or "mutually" in result.message.lower()
+        )
 
     def test_delete_ttl_rule_removes_from_managed_rules(
         self, graphql_client: GraphQLPolicyClient, attached_ingress, clean_ingress_rules
@@ -128,8 +134,9 @@ class TestTTLRuleRegistry:
         graphql_client.delete_rule(rule_id=9005, direction="ingress")
 
         managed_after = graphql_client.managed_rules(direction="ingress")
-        assert not any(r.rule_id == 9005 for r in managed_after), \
+        assert not any(r.rule_id == 9005 for r in managed_after), (
             "Deleted TTL rule should be removed from managedRules"
+        )
 
     def test_expires_at_ms_is_in_the_future(
         self, graphql_client: GraphQLPolicyClient, attached_ingress, clean_ingress_rules
@@ -142,8 +149,9 @@ class TestTTLRuleRegistry:
         mr = next((r for r in managed if r.rule_id == 9006), None)
         assert mr is not None
         now_ms = int(time.time() * 1000)
-        assert mr.expires_at_ms > now_ms, \
+        assert mr.expires_at_ms > now_ms, (
             f"expiresAtMs {mr.expires_at_ms} is not in the future (now={now_ms})"
+        )
 
     def test_cli_ttl_rule_appears_in_managed_rules(
         self, cli_client, attached_ingress, clean_ingress_rules
@@ -180,15 +188,17 @@ class TestTTLRuleExpiry:
 
         # Confirm it is active immediately
         rules_before = graphql_client.list_rules(direction="ingress")
-        assert any(r.rule_id == 9010 for r in rules_before), \
+        assert any(r.rule_id == 9010 for r in rules_before), (
             "Rule should be active in BPF immediately after add"
+        )
 
         logger.info(f"Waiting {_SCHEDULER_WAIT}s for TTL expiry + scheduler tick...")
         time.sleep(_SCHEDULER_WAIT)
 
         rules_after = graphql_client.list_rules(direction="ingress")
-        assert not any(r.rule_id == 9010 for r in rules_after), \
+        assert not any(r.rule_id == 9010 for r in rules_after), (
             "Rule 9010 should have been removed from BPF after TTL expiry"
+        )
 
     def test_ttl_rule_removed_from_managed_rules_after_expiry(
         self, graphql_client: GraphQLPolicyClient, attached_ingress, clean_ingress_rules
@@ -201,8 +211,9 @@ class TestTTLRuleExpiry:
         time.sleep(_SCHEDULER_WAIT)
 
         managed = graphql_client.managed_rules(direction="ingress")
-        assert not any(r.rule_id == 9011 for r in managed), \
+        assert not any(r.rule_id == 9011 for r in managed), (
             "Expired TTL rule should be removed from managedRules"
+        )
 
     def test_ttl_rule_drop_then_allow_after_expiry(
         self,
@@ -222,7 +233,9 @@ class TestTTLRuleExpiry:
 
         # Baseline: traffic should pass before adding any DROP rule
         pre_result = send_ping(client, str(server_ip_v4), count=3)
-        assert pre_result.packets_received > 0, "Baseline: ICMP should pass before DROP rule"
+        assert pre_result.packets_received > 0, (
+            "Baseline: ICMP should pass before DROP rule"
+        )
 
         # Add a short-TTL DROP rule
         opts = AddRuleOptions(
@@ -238,8 +251,9 @@ class TestTTLRuleExpiry:
 
         # Traffic should be blocked
         drop_result = send_ping(client, str(server_ip_v4), count=3, timeout=5)
-        assert drop_result.packets_received == 0, \
+        assert drop_result.packets_received == 0, (
             "ICMP should be blocked by active TTL DROP rule"
+        )
 
         # Wait for expiry
         logger.info(f"Waiting {_SCHEDULER_WAIT}s for TTL expiry...")
@@ -247,5 +261,6 @@ class TestTTLRuleExpiry:
 
         # Traffic should flow again
         post_result = send_ping(client, str(server_ip_v4), count=3)
-        assert post_result.packets_received > 0, \
+        assert post_result.packets_received > 0, (
             "ICMP should pass after TTL DROP rule has expired"
+        )

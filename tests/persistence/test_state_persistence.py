@@ -14,7 +14,10 @@ pinned BPF map mechanism and does not require testing here.
 import logging
 
 from tests.nping_utils import send_ping
-from tests.persistence.conftest import reboot_node_and_wait, _wait_for_policy_engine_http
+from tests.persistence.conftest import (
+    reboot_node_and_wait,
+    _wait_for_policy_engine_http,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,9 +41,7 @@ def _assert_traffic_dropped(client_node, server_ip, description: str) -> None:
 def _assert_traffic_passes(client_node, server_ip, description: str) -> None:
     """Assert that ICMP traffic from client to server passes."""
     result = send_ping(client_node, str(server_ip), count=3, timeout=5)
-    assert result.success, (
-        f"{description}: expected traffic to PASS but ping failed"
-    )
+    assert result.success, f"{description}: expected traffic to PASS but ping failed"
     logger.info(f"{description}: traffic correctly passes")
 
 
@@ -83,7 +84,11 @@ class TestStatePersistenceAfterReboot:
 
         # ── Setup ──────────────────────────────────────────────────────────────
 
-        from tests.policy_client import AddRuleOptions, PolicyAction, Protocol
+        from lib.policy_engine.engine.cli.client import (
+            AddRuleOptions,
+            PolicyAction,
+            Protocol,
+        )
 
         # Ensure clean state
         policy_client.flush_rules(direction="ingress")
@@ -95,7 +100,9 @@ class TestStatePersistenceAfterReboot:
 
         # Attach ingress
         attach_result = policy_client.attach_ingress(iface_name)
-        assert attach_result.success, f"Failed to attach ingress: {attach_result.message}"
+        assert attach_result.success, (
+            f"Failed to attach ingress: {attach_result.message}"
+        )
         logger.info(f"Attached ingress to {iface_name}")
 
         # Add DROP rule for client → server ICMP
@@ -176,7 +183,7 @@ class TestStatePersistenceAfterReboot:
 
         # ── Setup ──────────────────────────────────────────────────────────────
 
-        from tests.policy_client import PolicyAction
+        from lib.policy_engine.engine.cli.client import PolicyAction
 
         policy_client.flush_rules(direction="ingress")
         try:
@@ -224,7 +231,11 @@ class TestStatePersistenceAfterReboot:
         policy_client = graphql_policy_client
         iface_name = server_interface.if_name
 
-        from tests.policy_client import AddRuleOptions, PolicyAction, Protocol
+        from lib.policy_engine.engine.cli.client import (
+            AddRuleOptions,
+            PolicyAction,
+            Protocol,
+        )
 
         # Attach and add a rule
         attach_result = policy_client.attach_ingress(iface_name)
@@ -243,11 +254,15 @@ class TestStatePersistenceAfterReboot:
         # Verify the state file exists and is valid JSON
         output = server.ssh_command(
             f"cat {_STATE_FILE} | python3 -c 'import sys,json; d=json.load(sys.stdin); "
-            f"print(len(d[\"rules\"]))' 2>&1 || echo MISSING"
+            f'print(len(d["rules"]))\' 2>&1 || echo MISSING'
         )
-        assert "MISSING" not in output, f"State file missing or not valid JSON: {output}"
+        assert "MISSING" not in output, (
+            f"State file missing or not valid JSON: {output}"
+        )
         rule_count = int(output.strip())
-        assert rule_count >= 1, f"Expected at least 1 rule in state file, got {rule_count}"
+        assert rule_count >= 1, (
+            f"Expected at least 1 rule in state file, got {rule_count}"
+        )
         logger.info(f"State file contains {rule_count} rule(s)")
 
         # Cleanup

@@ -22,8 +22,8 @@ from typing import List
 
 import pytest
 
-from tests.policy_client import AddRuleOptions, WeeklyWindow
-from tests.graphql_policy_client import GraphQLPolicyClient
+from lib.policy_engine.engine.cli.client import AddRuleOptions, WeeklyWindow
+from lib.policy_engine.engine.graphql.client import GraphQLPolicyClient
 
 
 logger = logging.getLogger(__name__)
@@ -176,8 +176,9 @@ class TestLifecycleEventStream:
         events = _collect_ws_events(server, duration=5, action_fn=_add)
 
         matching = [e for e in events if e.get("rule_id") == rule_id]
-        assert any(e["event_type"] == "activated" for e in matching), \
+        assert any(e["event_type"] == "activated" for e in matching), (
             f"Expected 'activated' event for rule {rule_id}; got: {events}"
+        )
 
     def test_rule_delete_emits_deleted_event(
         self,
@@ -206,8 +207,9 @@ class TestLifecycleEventStream:
         events = _collect_ws_events(server, duration=5, action_fn=_delete)
 
         matching = [e for e in events if e.get("rule_id") == rule_id]
-        assert any(e["event_type"] == "deleted" for e in matching), \
+        assert any(e["event_type"] == "deleted" for e in matching), (
             f"Expected 'deleted' event for rule {rule_id}; got: {events}"
+        )
 
     def test_activated_event_contains_direction(
         self,
@@ -233,12 +235,14 @@ class TestLifecycleEventStream:
         events = _collect_ws_events(server, duration=5, action_fn=_add)
 
         matching = [
-            e for e in events
+            e
+            for e in events
             if e.get("rule_id") == rule_id and e.get("event_type") == "activated"
         ]
         assert matching, f"No 'activated' event for rule {rule_id}"
-        assert matching[0].get("direction") == "INGRESS", \
+        assert matching[0].get("direction") == "INGRESS", (
             f"Expected direction=INGRESS, got {matching[0].get('direction')}"
+        )
 
     def test_delete_inactive_managed_rule_emits_deleted_event(
         self,
@@ -275,8 +279,9 @@ class TestLifecycleEventStream:
         events = _collect_ws_events(server, duration=5, action_fn=_delete)
 
         matching = [e for e in events if e.get("rule_id") == rule_id]
-        assert any(e["event_type"] == "deleted" for e in matching), \
+        assert any(e["event_type"] == "deleted" for e in matching), (
             f"Expected 'deleted' event for inactive managed rule; got: {events}"
+        )
 
     def test_multiple_clients_receive_same_events(
         self,
@@ -294,14 +299,10 @@ class TestLifecycleEventStream:
         results_b: List[dict] = []
 
         def _run_a():
-            results_a.extend(
-                _collect_ws_events(server, duration=6, action_delay=99999)
-            )
+            results_a.extend(_collect_ws_events(server, duration=6, action_delay=99999))
 
         def _run_b():
-            results_b.extend(
-                _collect_ws_events(server, duration=6, action_delay=99999)
-            )
+            results_b.extend(_collect_ws_events(server, duration=6, action_delay=99999))
 
         # Both listeners start, then the main thread adds the rule
         t_a = threading.Thread(target=_run_a, daemon=True)
@@ -328,10 +329,12 @@ class TestLifecycleEventStream:
                 for e in events
             )
 
-        assert _has_activated(results_a), \
+        assert _has_activated(results_a), (
             f"Client A did not receive 'activated' for rule {rule_id}"
-        assert _has_activated(results_b), \
+        )
+        assert _has_activated(results_b), (
             f"Client B did not receive 'activated' for rule {rule_id}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -376,10 +379,12 @@ class TestLifecycleEventTTLExpiry:
         matching = [e for e in events if e.get("rule_id") == rule_id]
         event_types = [e["event_type"] for e in matching]
 
-        assert "activated" in event_types, \
+        assert "activated" in event_types, (
             f"Expected 'activated' event; got event_types={event_types}"
-        assert "expired" in event_types, \
+        )
+        assert "expired" in event_types, (
             f"Expected 'expired' event after TTL elapses; got event_types={event_types}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -444,8 +449,9 @@ class TestLifecycleEventSchedulerTransitions:
         matching = [e for e in events if e.get("rule_id") == rule_id]
         event_types = [e["event_type"] for e in matching]
 
-        assert "deactivated" in event_types, \
+        assert "deactivated" in event_types, (
             f"Expected 'deactivated' event; got event_types={event_types}"
+        )
 
 
 # ---------------------------------------------------------------------------

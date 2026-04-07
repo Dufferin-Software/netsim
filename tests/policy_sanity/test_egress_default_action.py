@@ -1,6 +1,6 @@
 import logging
 
-from tests.policy_client import PolicyAction
+from lib.policy_engine.engine.cli.client import PolicyAction
 
 logger = logging.getLogger(__name__)
 

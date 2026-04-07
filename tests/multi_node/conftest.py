@@ -1,0 +1,330 @@
+# Copyright (c) Dufferin Software
+
+"""
+Fixtures for multi-node controller integration tests.
+
+Topology: 1 controller VM + 3 node VMs, all on a shared management network.
+
+Fixture hierarchy (all package-scoped unless noted):
+  running_topology → nodes → install_user_packages
+    controller_service  — starts policy-controller on controller VM
+    node_services       — starts policy-engine + policy-node-agent on node1/2/3
+    enrolled_nodes      — waits for all nodes to appear as Pending, approves them,
+                          waits for Active status
+    controller_client   — ControllerClient bound to the controller VM
+"""
+
+import ipaddress
+import logging
+import time
+from typing import Dict, List
+
+import pytest
+
+from tests.node import Node
+from tests.systemd_utils import restart_service, stop_service
+from lib.policy_engine.controller.graphql.client import ControllerClient
+
+logger = logging.getLogger(__name__)
+
+_CONTROLLER_HTTP_TIMEOUT = 60  # seconds to wait for HTTP API
+_ENROLLMENT_TIMEOUT = 120  # seconds to wait for nodes to enroll
+_ACTIVE_TIMEOUT = 60  # seconds to wait for nodes to become Active
+_POLL_INTERVAL = 2  # seconds between status polls
+
+# Nodes that run policy-engine + policy-node-agent
+_MANAGED_NODES = ["node1", "node2", "node3"]
+
+
+# ── Internal helpers ──────────────────────────────────────────────────────────
+
+
+def _wait_for_controller_http(
+    controller: Node, timeout: int = _CONTROLLER_HTTP_TIMEOUT
+) -> None:
+    """Block until the controller HTTP API is responding on port 8443."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            out = controller.ssh_command(
+                "curl -s -o /dev/null -w '%{http_code}' "
+                "--max-time 2 http://127.0.0.1:8443/health 2>/dev/null || true",
+                timeout=10,
+            )
+            if out.strip() == "200":
+                logger.info("policy-controller HTTP API is ready")
+                return
+        except Exception:
+            pass
+        time.sleep(_POLL_INTERVAL)
+    pytest.fail(f"policy-controller HTTP API did not become ready within {timeout}s")
+
+
+def _wait_for_pending_enrollments(
+    client: ControllerClient,
+    expected_count: int,
+    timeout: int = _ENROLLMENT_TIMEOUT,
+) -> List[str]:
+    """
+    Wait until at least `expected_count` pending enrollments appear.
+    Returns the list of pending node IDs.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            pending = client.pending_enrollments()
+            if len(pending) >= expected_count:
+                ids = [n.id for n in pending]
+                logger.info(f"Found {len(pending)} pending enrollments: {ids}")
+                return ids
+        except Exception as e:
+            logger.debug(f"Error polling enrollments: {e}")
+        time.sleep(_POLL_INTERVAL)
+    pytest.fail(
+        f"Expected {expected_count} pending enrollments but timed out after {timeout}s"
+    )
+
+
+def _wait_for_active_nodes(
+    client: ControllerClient,
+    node_ids: List[str],
+    timeout: int = _ACTIVE_TIMEOUT,
+) -> None:
+    """Wait until all given node IDs reach 'active' status."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            active = {n.id for n in client.list_nodes(status="active")}
+            if all(nid in active for nid in node_ids):
+                logger.info(f"All nodes active: {node_ids}")
+                return
+            pending_ids = [nid for nid in node_ids if nid not in active]
+            logger.debug(f"Still waiting for nodes to become active: {pending_ids}")
+        except Exception as e:
+            logger.debug(f"Error polling node status: {e}")
+        time.sleep(_POLL_INTERVAL)
+    pytest.fail(f"Nodes {node_ids} did not reach Active status within {timeout}s")
+
+
+def _write_agent_config(node: Node) -> None:
+    """
+    Write /etc/policy-node-agent/config.toml on the managed node.
+
+    Writes both enrollment_url (port 7776, TLS-only) and controller_url
+    (port 7777, mTLS management stream). The agent CA cert must be pre-seeded
+    separately via _write_ca_cert_on_node().
+
+    The agent identity key is auto-generated on first run if absent.
+
+    Note: This uses the DNS name "policy-controller" which must be configured
+    in /etc/hosts (see _write_hosts_entry).
+    """
+    config = (
+        "# Written by netsim multi-node conftest\n"
+        'enrollment_url = "https://policy-controller:7776"\n'
+        'controller_url = "https://policy-controller:7777"\n'
+        'local_server_url = "http://127.0.0.1:8080/graphql"\n'
+    )
+    node.ssh_command("sudo mkdir -p /etc/policy-node-agent", timeout=10)
+    # Write via printf to avoid shell escaping issues with double-quotes
+    node.ssh_command(
+        f"printf '%s' '{config}' | sudo tee /etc/policy-node-agent/config.toml > /dev/null",
+        timeout=10,
+    )
+
+
+def _write_hosts_entry(node: Node, controller_ip: str) -> None:
+    """
+    Add an entry to /etc/hosts mapping 'policy-controller' to the controller IP.
+
+    This allows the agent to connect using the DNS name that matches the
+    certificate, rather than using the IP address directly.
+    """
+    # First, remove any existing controller entries to avoid duplicates
+    node.ssh_command("sudo sed -i '/\\bpolicy-controller\\b/d' /etc/hosts", timeout=10)
+    # Then append the new entry
+    node.ssh_command(
+        f"echo '{controller_ip} policy-controller' | sudo tee -a /etc/hosts > /dev/null",
+        timeout=10,
+    )
+
+
+def _write_ca_cert_on_node(node: Node, ca_pem: str) -> None:
+    """Write the controller CA certificate to the expected path on the node."""
+    node.ssh_command("sudo mkdir -p /etc/policy-node-agent", timeout=10)
+    # Use heredoc via tee to avoid length/escaping issues with PEM data
+    cmd = f"sudo tee /etc/policy-node-agent/controller-ca.crt > /dev/null << 'CAPEM'\n{ca_pem}\nCAPEM"
+    node.ssh_command(cmd, timeout=10)
+
+
+def _get_mgmt_ip(node: Node, topology) -> str:
+    """
+    Return the node's IPv4 address on the management network.
+
+    Derives the management subnet from the topology (first network listed for
+    the node).
+    """
+    topo_node = topology.get_node(node.name)
+    if not topo_node or not topo_node.networks:
+        pytest.fail(f"Node {node.name} has no networks defined in topology")
+
+    mgmt_net_name = topo_node.networks[0]
+    mgmt_network = topology.get_network(mgmt_net_name)
+    if not mgmt_network:
+        pytest.fail(f"Management network '{mgmt_net_name}' not found in topology")
+
+    net = ipaddress.IPv4Network(mgmt_network.subnet, strict=False)
+    out = node.ssh_command(
+        "ip -4 addr show | awk '/inet / {print $2}' | cut -d/ -f1",
+        timeout=10,
+    ).strip()
+    for addr_str in out.splitlines():
+        try:
+            addr = ipaddress.IPv4Address(addr_str.strip())
+            if addr in net:
+                return str(addr)
+        except ValueError:
+            continue
+
+    pytest.fail(
+        f"Could not determine management IP for node {node.name} "
+        f"on network '{mgmt_net_name}' ({mgmt_network.subnet})"
+    )
+
+
+# ── Package-scoped fixtures ───────────────────────────────────────────────────
+
+
+@pytest.fixture(scope="package")
+def controller_service(nodes, install_user_packages):
+    """
+    Start the policy-controller daemon on the controller VM.
+
+    Skips the entire test package if the policy-controller package is not installed.
+    """
+    controller = nodes["controller"]
+
+    check = controller.ssh_command(
+        "systemctl cat policy-controller.service >/dev/null 2>&1 && echo EXISTS || echo MISSING"
+    )
+    if "MISSING" in check:
+        pytest.skip("policy-controller.service not installed (use --install-packages)")
+
+    status = restart_service(controller, "policy-controller")
+    if not status.is_healthy:
+        pytest.fail(f"Failed to start policy-controller: {status.status_text}")
+
+    logger.info(f"policy-controller running with PID {status.main_pid}")
+    _wait_for_controller_http(controller)
+
+    yield status
+
+    try:
+        stop_service(controller, "policy-controller")
+    except Exception as e:
+        logger.warning(f"Failed to stop policy-controller: {e}")
+
+
+@pytest.fixture(scope="package")
+def controller_client(nodes, controller_service) -> ControllerClient:
+    """ControllerClient bound to the controller VM."""
+    return ControllerClient(nodes["controller"])
+
+
+@pytest.fixture(scope="package")
+def node_services(
+    nodes, topology, controller_client, install_user_packages, configure_node_interfaces
+):
+    """
+    Configure and start policy-engine + policy-node-agent on node1, node2, node3.
+
+    Writes an agent config pointing at the controller before starting the agent.
+    Skips if either service is not installed on any managed node.
+
+    Depends on configure_node_interfaces so the management interface has a
+    DHCP address before we attempt to read it.
+    """
+    controller_ip = _get_mgmt_ip(nodes["controller"], topology)
+    logger.info(f"Controller management IP: {controller_ip}")
+
+    # Fetch the controller CA certificate so agents can verify the server cert
+    ca_pem = controller_client.ca_cert_pem()
+    logger.info("Retrieved controller CA certificate")
+
+    for node_name in _MANAGED_NODES:
+        node = nodes[node_name]
+
+        # Check that both services exist
+        for svc in ("policy-engine", "policy-node-agent"):
+            check = node.ssh_command(
+                f"systemctl cat {svc}.service >/dev/null 2>&1 && echo EXISTS || echo MISSING"
+            )
+            if "MISSING" in check:
+                pytest.skip(
+                    f"{svc}.service not installed on {node_name} (use --install-packages)"
+                )
+
+        # Distribute CA cert, configure /etc/hosts, and write agent config before starting
+        _write_ca_cert_on_node(node, ca_pem)
+        _write_hosts_entry(node, controller_ip)
+        _write_agent_config(node)
+
+        # Start policy-engine first (agent depends on it for local GraphQL)
+        pe_status = restart_service(node, "policy-engine")
+        if not pe_status.is_healthy:
+            pytest.fail(
+                f"Failed to start policy-engine on {node_name}: {pe_status.status_text}"
+            )
+
+        # Start the node agent
+        agent_status = restart_service(node, "policy-node-agent")
+        if not agent_status.is_healthy:
+            pytest.fail(
+                f"Failed to start policy-node-agent on {node_name}: {agent_status.status_text}"
+            )
+
+        logger.info(
+            f"{node_name}: policy-engine PID={pe_status.main_pid}, "
+            f"policy-node-agent PID={agent_status.main_pid}"
+        )
+
+    yield
+
+    # Stop agents then engines in reverse order
+    for node_name in reversed(_MANAGED_NODES):
+        node = nodes[node_name]
+        for svc in ("policy-node-agent", "policy-engine"):
+            try:
+                stop_service(node, svc)
+            except Exception as e:
+                logger.warning(f"Failed to stop {svc} on {node_name}: {e}")
+
+
+@pytest.fixture(scope="package")
+def enrolled_nodes(nodes, controller_client, node_services) -> Dict[str, str]:
+    """
+    Wait for all managed nodes to submit enrollment requests, approve them all,
+    then wait for them to reach Active status.
+
+    Returns a dict mapping node VM name (node1/node2/node3) to controller node ID.
+    Because agents send their ID in the enrollment CSR we can only map by order
+    of appearance (nodes all appear in pending at roughly the same time).
+    """
+    # Wait for 3 pending enrollments
+    pending_ids = _wait_for_pending_enrollments(controller_client, expected_count=3)
+
+    # Approve all of them with labels matching their position
+    approved: Dict[str, str] = {}
+    for i, node_id in enumerate(pending_ids):
+        node_name = _MANAGED_NODES[i]
+        result = controller_client.approve_enrollment(node_id, label=node_name)
+        assert result.status in ("active", "pending"), (
+            f"Unexpected status after approval: {result.status}"
+        )
+        approved[node_name] = node_id
+        logger.info(f"Approved {node_name} → controller ID {node_id}")
+
+    # Wait for all to reach Active
+    _wait_for_active_nodes(controller_client, list(approved.values()))
+
+    return approved

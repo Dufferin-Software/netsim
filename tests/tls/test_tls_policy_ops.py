@@ -15,7 +15,11 @@ when the transport is HTTPS rather than plain HTTP.
 import logging
 
 
-from tests.policy_client import AddRuleOptions, IngressMode, PolicyAction
+from lib.policy_engine.engine.cli.client import (
+    AddRuleOptions,
+    IngressMode,
+    PolicyAction,
+)
 
 logger = logging.getLogger(__name__)
 

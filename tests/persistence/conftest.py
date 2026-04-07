@@ -15,9 +15,9 @@ from typing import Union
 import netaddr
 import pytest
 
-from tests.systemd_utils import restart_service, stop_service, get_service_status
-from tests.policy_client import PolicyClient, PolicyAction
-from tests.graphql_policy_client import GraphQLPolicyClient
+from tests.systemd_utils import restart_service, stop_service
+from lib.policy_engine.engine.cli.client import PolicyClient
+from lib.policy_engine.engine.graphql.client import GraphQLPolicyClient
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +68,7 @@ def reboot_node_and_wait(node, ssh_reconnect_timeout: int = 120) -> None:
 
     # Invalidate the cached SSH connection so the next call establishes a new one
     import tests.node as node_module
+
     with node_module.Node._ssh_lock:
         node_module.Node._ssh_connections.pop(node._connection_key, None)
 

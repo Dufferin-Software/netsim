@@ -13,7 +13,7 @@ import time
 import netaddr
 import pytest
 
-from tests.graphql_policy_client import GraphQLPolicyClient
+from lib.policy_engine.engine.graphql.client import GraphQLPolicyClient
 from tests.network_helpers import enable_ip_forwarding, add_route
 from tests.systemd_utils import restart_service, stop_service
 

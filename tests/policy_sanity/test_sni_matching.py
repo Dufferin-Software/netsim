@@ -15,7 +15,7 @@ import time
 import netaddr
 
 from tests.nping_utils import send_tcp_packets, send_tcp_syn
-from tests.policy_client import AddRuleOptions
+from lib.policy_engine.engine.cli.client import AddRuleOptions
 
 logger = logging.getLogger(__name__)
 

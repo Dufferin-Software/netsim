@@ -31,7 +31,7 @@ import logging
 import time
 
 from tests.nping_utils import send_tcp_syn
-from tests.policy_client import AddRuleOptions
+from lib.policy_engine.engine.cli.client import AddRuleOptions
 
 logger = logging.getLogger(__name__)
 
@@ -193,8 +193,7 @@ class TestIngressMacMatching:
         drops_delta = final_stats.global_stats.policy_drops - initial_drops
 
         logger.info(
-            f"Ingress src_mac DROP: sent={packets_to_send}, "
-            f"policy_drops={drops_delta}"
+            f"Ingress src_mac DROP: sent={packets_to_send}, policy_drops={drops_delta}"
         )
         assert drops_delta >= packets_to_send, (
             f"Expected at least {packets_to_send} drops for matching src_mac rule, "
@@ -248,8 +247,7 @@ class TestIngressMacMatching:
         drops_delta = final_stats.global_stats.policy_drops - initial_drops
 
         logger.info(
-            f"Ingress wrong src_mac: sent={packets_to_send}, "
-            f"policy_drops={drops_delta}"
+            f"Ingress wrong src_mac: sent={packets_to_send}, policy_drops={drops_delta}"
         )
         assert drops_delta == 0, (
             f"Expected 0 drops for wrong src_mac, got {drops_delta}"
@@ -302,8 +300,7 @@ class TestIngressMacMatching:
         drops_delta = final_stats.global_stats.policy_drops - initial_drops
 
         logger.info(
-            f"Ingress dst_mac DROP: sent={packets_to_send}, "
-            f"policy_drops={drops_delta}"
+            f"Ingress dst_mac DROP: sent={packets_to_send}, policy_drops={drops_delta}"
         )
         assert drops_delta >= packets_to_send, (
             f"Expected at least {packets_to_send} drops for matching dst_mac rule, "
@@ -337,7 +334,9 @@ class TestEgressMacMatching:
             src_mac=server_mac,
         )
         result = policy_client.add_rule(options, direction="egress")
-        assert result.success, f"Failed to add egress src_mac DROP rule: {result.message}"
+        assert result.success, (
+            f"Failed to add egress src_mac DROP rule: {result.message}"
+        )
 
         policy_client.clear_rule_stats(rule_id=rule_id, direction="egress")
         initial_stats = policy_client.get_stats(
@@ -362,8 +361,7 @@ class TestEgressMacMatching:
         drops_delta = final_stats.global_stats.policy_drops - initial_drops
 
         logger.info(
-            f"Egress src_mac DROP: sent={packets_to_send}, "
-            f"policy_drops={drops_delta}"
+            f"Egress src_mac DROP: sent={packets_to_send}, policy_drops={drops_delta}"
         )
         assert drops_delta >= packets_to_send, (
             f"Expected at least {packets_to_send} drops for matching egress src_mac rule, "
@@ -418,8 +416,7 @@ class TestEgressMacMatching:
         drops_delta = final_stats.global_stats.policy_drops - initial_drops
 
         logger.info(
-            f"Egress wrong src_mac: sent={packets_to_send}, "
-            f"policy_drops={drops_delta}"
+            f"Egress wrong src_mac: sent={packets_to_send}, policy_drops={drops_delta}"
         )
         assert drops_delta == 0, (
             f"Expected 0 drops for wrong egress src_mac, got {drops_delta}"
@@ -448,7 +445,9 @@ class TestEgressMacMatching:
             dst_mac=client_mac,
         )
         result = policy_client.add_rule(options, direction="egress")
-        assert result.success, f"Failed to add egress dst_mac DROP rule: {result.message}"
+        assert result.success, (
+            f"Failed to add egress dst_mac DROP rule: {result.message}"
+        )
 
         policy_client.clear_rule_stats(rule_id=rule_id, direction="egress")
         initial_stats = policy_client.get_stats(
@@ -473,8 +472,7 @@ class TestEgressMacMatching:
         drops_delta = final_stats.global_stats.policy_drops - initial_drops
 
         logger.info(
-            f"Egress dst_mac DROP: sent={packets_to_send}, "
-            f"policy_drops={drops_delta}"
+            f"Egress dst_mac DROP: sent={packets_to_send}, policy_drops={drops_delta}"
         )
         assert drops_delta >= packets_to_send, (
             f"Expected at least {packets_to_send} drops for matching egress dst_mac rule, "
@@ -681,7 +679,9 @@ class TestMacRuleStats:
             src_mac=wrong_mac,
         )
         result = policy_client.add_rule(options, direction="ingress")
-        assert result.success, f"Failed to add non-matching MAC LOG rule: {result.message}"
+        assert result.success, (
+            f"Failed to add non-matching MAC LOG rule: {result.message}"
+        )
 
         policy_client.clear_rule_stats(rule_id=rule_id, direction="ingress")
 
@@ -697,9 +697,7 @@ class TestMacRuleStats:
 
         stats = policy_client.get_rule_stats(rule_id=rule_id, direction="ingress")
         packet_count = (
-            stats.rules[0].stats.packets
-            if stats.rules and stats.rules[0].stats
-            else 0
+            stats.rules[0].stats.packets if stats.rules and stats.rules[0].stats else 0
         )
 
         logger.info(

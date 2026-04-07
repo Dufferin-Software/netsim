@@ -26,14 +26,14 @@ import pytest
 
 from tests.conftest import BaseTopologyTests
 from tests.systemd_utils import get_service_status
-from tests.policy_client import (
+from lib.policy_engine.engine.cli.client import (
     PolicyClient,
     AddRuleOptions,
     IngressMode,
     PolicyAction,
     Protocol,
 )
-from tests.graphql_policy_client import GraphQLPolicyClient
+from lib.policy_engine.engine.graphql.client import GraphQLPolicyClient
 from tests.nping_utils import (
     send_icmp_with_type,
     send_ping,
@@ -259,7 +259,9 @@ class TestIngressAttachment:
 
         # Check that show stats reports program_attached correctly
         stats = policy_client.get_stats(iface_name, direction="ingress")
-        assert stats.program_attached, "get_stats should report program_attached=True after attach"
+        assert stats.program_attached, (
+            "get_stats should report program_attached=True after attach"
+        )
 
         # Cleanup
         policy_client.detach_ingress(iface_name)
@@ -2726,7 +2728,7 @@ class TestRuleInstallationPerformance:
             )
 
             rule_start = time.perf_counter()
-            result = policy_client.add_rule(options)
+            result = policy_client.add_rule(options, timeout=60)
             rule_elapsed = time.perf_counter() - rule_start
             install_times.append(rule_elapsed)
 
@@ -2827,7 +2829,7 @@ class TestRuleInstallationPerformance:
             )
 
             rule_start = time.perf_counter()
-            result = policy_client.add_rule(options)
+            result = policy_client.add_rule(options, timeout=60)
             rule_elapsed = time.perf_counter() - rule_start
             install_times.append(rule_elapsed)
 
@@ -2942,7 +2944,7 @@ class TestRuleInstallationPerformance:
                 )
 
             rule_start = time.perf_counter()
-            result = policy_client.add_rule(options)
+            result = policy_client.add_rule(options, timeout=60)
             rule_elapsed = time.perf_counter() - rule_start
 
             if is_ipv6:
@@ -3148,7 +3150,7 @@ class TestRuleInstallationPerformance:
         This test uses the batch API which installs all rules in a single request,
         compared to the individual installation tests that make one request per rule.
         """
-        from tests.graphql_policy_client import GraphQLPolicyClient
+        from lib.policy_engine.engine.graphql.client import GraphQLPolicyClient
 
         # This test specifically requires the GraphQL client for batch support
         if not isinstance(graphql_policy_client, GraphQLPolicyClient):
@@ -3235,7 +3237,7 @@ class TestRuleInstallationPerformance:
         """
         Add a small batch of rules, then delete them using the deleteRules batch mutation.
         """
-        from tests.graphql_policy_client import GraphQLPolicyClient
+        from lib.policy_engine.engine.graphql.client import GraphQLPolicyClient
 
         if not isinstance(graphql_policy_client, GraphQLPolicyClient):
             pytest.skip("Batch API requires GraphQL client")

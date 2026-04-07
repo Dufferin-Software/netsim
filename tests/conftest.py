@@ -54,7 +54,6 @@ def _cleanup_leftover_vms(topology):
 
 def _wait_for_vms_running(simulator, timeout=30):
     """Wait for all VMs to be running."""
-    import time
 
     start_time = time.time()
     while True:
@@ -71,7 +70,6 @@ def _wait_for_vms_running(simulator, timeout=30):
 
 def _wait_for_ssh_availability(topology, timeout_per_node=60):
     """Wait for SSH to be available on all nodes in parallel."""
-    import time
 
     def _wait_for_node_ssh(node_name, ssh_port):
         """Wait for SSH on a single node."""
@@ -198,7 +196,6 @@ def pytest_configure(config):
 
     if errors:
         raise pytest.UsageError("\n".join(errors))
-
 
 
 def pytest_runtest_makereport(item, call):
@@ -540,52 +537,110 @@ def _apply_netplan_to_node(node_name, ifaces, netplan_yaml, node, mgmt_interface
 
         logger.info(f"✓ {node_name}: netplan configuration applied")
 
-        # Wait for network interfaces to settle, especially IPv6
-        time.sleep(1)
+        # Wait for every interface to have its expected addresses.
+        #
+        # Three cases handled:
+        #   1. Static IPv4 on data interfaces — should appear quickly but
+        #      confirm rather than sleep-and-hope.
+        #   2. Static IPv6 on data interfaces — DAD can take 1-2 seconds.
+        #   3. DHCP IPv4 on the management interface — dhclient runs
+        #      asynchronously after netplan apply returns.
 
-        # Wait for IPv6 global addresses to be ready (not just link-local)
-        # IPv6 DAD (Duplicate Address Detection) can take 1-2 seconds
-        for net_name, iface in ifaces.items():
-            expected_ipv6 = iface.ipv6_addr
-            if not expected_ipv6:
-                continue
+        class AddressNotReady(Exception):
+            pass
 
-            # Extract the address part without prefix length for matching
-            expected_ipv6_addr = expected_ipv6.split("/")[0]
+        def _wait_for_static_ipv4(if_name: str, expected_addr: str) -> None:
+            addr = expected_addr.split("/")[0]
 
-            class IPv6NotReady(Exception):
-                """Raised when IPv6 address is not yet ready."""
+            @retry(
+                stop=stop_after_attempt(15),
+                wait=wait_fixed(1),
+                retry=retry_if_exception_type(AddressNotReady),
+                reraise=True,
+            )
+            def _check():
+                out = node.ssh_command(
+                    f"ip -4 addr show dev {if_name} 2>/dev/null"
+                    f" | awk '/inet / {{print $2}}' | cut -d/ -f1",
+                    timeout=5,
+                ).strip()
+                if addr in out.splitlines():
+                    logger.debug(f"{node_name} {if_name}: IPv4 {addr} ready")
+                    return
+                raise AddressNotReady(f"{addr} not on {if_name} yet")
 
-                pass
+            try:
+                _check()
+            except AddressNotReady:
+                logger.warning(
+                    f"{node_name} {if_name}: IPv4 {addr} not ready after retries"
+                )
+
+        def _wait_for_static_ipv6(if_name: str, expected_addr: str) -> None:
+            addr = expected_addr.split("/")[0]
 
             @retry(
                 stop=stop_after_attempt(15),
                 wait=wait_fixed(0.5),
-                retry=retry_if_exception_type(IPv6NotReady),
+                retry=retry_if_exception_type(AddressNotReady),
                 reraise=True,
             )
-            def wait_for_ipv6_ready():
-                ipv6_output = node.ssh_command(
-                    f"ip -6 addr show {iface.if_name} | grep 'inet6' | grep -v 'fe80'",
+            def _check():
+                out = node.ssh_command(
+                    f"ip -6 addr show dev {if_name} | grep 'inet6' | grep -v 'fe80'",
                     timeout=5,
                 )
-                if not ipv6_output or expected_ipv6_addr not in ipv6_output:
-                    raise IPv6NotReady("Address not assigned yet")
-                if "tentative" in ipv6_output:
-                    logger.debug(
-                        f"{node_name} {iface.if_name}: IPv6 {expected_ipv6_addr} tentative (DAD in progress)"
-                    )
-                    raise IPv6NotReady("Address is tentative")
-                logger.debug(
-                    f"{node_name} {iface.if_name}: IPv6 {expected_ipv6_addr} ready"
-                )
+                if not out or addr not in out:
+                    raise AddressNotReady(f"{addr} not on {if_name} yet")
+                if "tentative" in out:
+                    logger.debug(f"{node_name} {if_name}: IPv6 {addr} tentative (DAD)")
+                    raise AddressNotReady(f"{addr} tentative on {if_name}")
+                logger.debug(f"{node_name} {if_name}: IPv6 {addr} ready")
 
             try:
-                wait_for_ipv6_ready()
-            except IPv6NotReady:
+                _check()
+            except AddressNotReady:
                 logger.warning(
-                    f"{node_name} {iface.if_name}: IPv6 {expected_ipv6_addr} not ready after retries"
+                    f"{node_name} {if_name}: IPv6 {addr} not ready after retries"
                 )
+
+        def _wait_for_dhcp_ipv4(if_name: str) -> None:
+            @retry(
+                stop=stop_after_attempt(15),
+                wait=wait_fixed(2),
+                retry=retry_if_exception_type(AddressNotReady),
+                reraise=True,
+            )
+            def _check():
+                out = node.ssh_command(
+                    f"ip -4 addr show dev {if_name} 2>/dev/null"
+                    f" | awk '/inet / {{print $2}}' | cut -d/ -f1",
+                    timeout=5,
+                ).strip()
+                for addr_str in out.splitlines():
+                    if addr_str and not addr_str.startswith("169.254."):
+                        logger.debug(
+                            f"{node_name} {if_name}: DHCP address {addr_str} ready"
+                        )
+                        return
+                raise AddressNotReady(f"No DHCP address on {if_name} yet")
+
+            try:
+                _check()
+            except AddressNotReady:
+                logger.warning(
+                    f"{node_name} {if_name}: DHCP address not ready after retries"
+                )
+
+        # Data interfaces: wait for static IPv4 and IPv6
+        for net_name, iface in ifaces.items():
+            if iface.ipv4_addr:
+                _wait_for_static_ipv4(iface.if_name, iface.ipv4_addr)
+            if iface.ipv6_addr:
+                _wait_for_static_ipv6(iface.if_name, iface.ipv6_addr)
+
+        # Management interface: wait for DHCP
+        _wait_for_dhcp_ipv4(mgmt_interface)
 
         # Clean up temp file
         Path(temp_path).unlink()
@@ -672,7 +727,6 @@ def configure_node_interfaces(
 
     # Brief settling time after parallel configuration to ensure all
     # interfaces are fully ready across all nodes (IPv6 DAD, neighbor discovery, etc.)
-    import time
 
     time.sleep(2)
 

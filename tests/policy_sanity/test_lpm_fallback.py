@@ -30,7 +30,7 @@ import logging
 import netaddr
 
 from tests.nping_utils import send_tcp_syn
-from tests.policy_client import AddRuleOptions
+from lib.policy_engine.engine.cli.client import AddRuleOptions
 
 logger = logging.getLogger(__name__)
 
@@ -195,7 +195,7 @@ class TestLpmFallback:
         the default would allow the traffic, the /8 ancestor entry is consulted first
         and its DROP takes effect.
         """
-        from tests.policy_client import PolicyAction
+        from lib.policy_engine.engine.cli.client import PolicyAction
 
         client = nodes["client"]
         covering = self._install_rules(policy_client, client_network_v4)

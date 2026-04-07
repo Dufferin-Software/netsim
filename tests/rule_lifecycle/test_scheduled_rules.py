@@ -18,19 +18,20 @@ import time
 
 import pytest
 
-from tests.policy_client import AddRuleOptions, WeeklyWindow
-from tests.graphql_policy_client import GraphQLPolicyClient
+from lib.policy_engine.engine.cli.client import AddRuleOptions, WeeklyWindow
+from lib.policy_engine.engine.graphql.client import GraphQLPolicyClient
 from tests.nping_utils import send_ping
 
 
 logger = logging.getLogger(__name__)
 
-_SCHEDULER_WAIT = 45   # seconds to wait for a scheduler tick
+_SCHEDULER_WAIT = 45  # seconds to wait for a scheduler tick
 
 
 # ---------------------------------------------------------------------------
 # Helper windows
 # ---------------------------------------------------------------------------
+
 
 def _all_week() -> list:
     """A single window that covers the entire week (Sun 00:00 → Sat 23:59)."""
@@ -79,8 +80,9 @@ class TestScheduledRuleRegistry:
 
         # Must also be in the live BPF map
         rules = graphql_client.list_rules(direction="ingress")
-        assert any(r.rule_id == 8001 for r in rules), \
+        assert any(r.rule_id == 8001 for r in rules), (
             "Active scheduled rule should be in list_rules"
+        )
 
     def test_inactive_window_rule_not_in_bpf(
         self,
@@ -102,8 +104,9 @@ class TestScheduledRuleRegistry:
         assert result.success, result.message
 
         rules = graphql_client.list_rules(direction="ingress")
-        assert not any(r.rule_id == 8002 for r in rules), \
+        assert not any(r.rule_id == 8002 for r in rules), (
             "Inactive scheduled rule must NOT be in BPF map"
+        )
 
     def test_inactive_window_rule_in_managed_rules(
         self,
@@ -346,8 +349,9 @@ class TestScheduledRuleTraffic:
         assert result.success, result.message
 
         blocked = send_ping(client, str(server_ip_v4), count=3, timeout=5)
-        assert blocked.packets_received == 0, \
+        assert blocked.packets_received == 0, (
             "ICMP should be blocked by active scheduled DROP rule"
+        )
 
     def test_inactive_scheduled_rule_allows_traffic(
         self,
@@ -376,8 +380,9 @@ class TestScheduledRuleTraffic:
 
         # Rule is inactive — traffic should still pass
         ping = send_ping(client, str(server_ip_v4), count=3)
-        assert ping.packets_received > 0, \
+        assert ping.packets_received > 0, (
             "ICMP should pass when scheduled rule is outside its window"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -437,21 +442,29 @@ class TestScheduledRuleSchedulerTransitions:
         managed = graphql_client.managed_rules(direction="ingress")
         mr = next((r for r in managed if r.rule_id == 8020), None)
         if mr is None or mr.rule_state != "active":
-            pytest.skip("Window boundary arithmetic did not produce an active rule — skipping")
+            pytest.skip(
+                "Window boundary arithmetic did not produce an active rule — skipping"
+            )
 
-        logger.info(f"Waiting {_SCHEDULER_WAIT}s for window to close + scheduler tick...")
+        logger.info(
+            f"Waiting {_SCHEDULER_WAIT}s for window to close + scheduler tick..."
+        )
         time.sleep(_SCHEDULER_WAIT + 70)  # window is 1 min wide; wait a full min + tick
 
         managed_after = graphql_client.managed_rules(direction="ingress")
         mr_after = next((r for r in managed_after if r.rule_id == 8020), None)
-        assert mr_after is not None, "Rule should still be in managedRules (just inactive)"
-        assert mr_after.rule_state == "inactive", \
+        assert mr_after is not None, (
+            "Rule should still be in managedRules (just inactive)"
+        )
+        assert mr_after.rule_state == "inactive", (
             f"Expected inactive after window ended, got {mr_after.rule_state}"
+        )
 
         # And not in BPF
         rules = graphql_client.list_rules(direction="ingress")
-        assert not any(r.rule_id == 8020 for r in rules), \
+        assert not any(r.rule_id == 8020 for r in rules), (
             "Deactivated rule must not be in BPF map"
+        )
 
 
 # ---------------------------------------------------------------------------

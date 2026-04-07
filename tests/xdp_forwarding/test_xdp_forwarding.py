@@ -19,7 +19,7 @@ import time
 import logging
 import pytest
 
-from tests.graphql_policy_client import AddRuleOptions
+from lib.policy_engine.engine.graphql.client import AddRuleOptions
 
 logger = logging.getLogger(__name__)
 

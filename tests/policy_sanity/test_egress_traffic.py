@@ -18,7 +18,7 @@ import time
 
 
 from tests.nping_utils import send_ping, send_tcp_syn, send_udp_packets
-from tests.policy_client import AddRuleOptions
+from lib.policy_engine.engine.cli.client import AddRuleOptions
 
 logger = logging.getLogger(__name__)
 
@@ -400,7 +400,7 @@ class TestEgressTrafficMatching:
         nmap_installed_server,
     ):
         """Test that default action DROP blocks all egress traffic."""
-        from tests.policy_client import PolicyAction
+        from lib.policy_engine.engine.cli.client import PolicyAction
 
         server = nodes["server"]
 

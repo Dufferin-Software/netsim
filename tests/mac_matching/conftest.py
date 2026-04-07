@@ -16,8 +16,8 @@ import netaddr
 import pytest
 
 from tests.systemd_utils import restart_service, stop_service
-from tests.policy_client import PolicyClient, PolicyAction
-from tests.graphql_policy_client import GraphQLPolicyClient
+from lib.policy_engine.engine.cli.client import PolicyClient, PolicyAction
+from lib.policy_engine.engine.graphql.client import GraphQLPolicyClient
 
 
 logger = logging.getLogger(__name__)

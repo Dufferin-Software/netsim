@@ -24,8 +24,8 @@ from typing import Union
 import pytest
 
 from tests.systemd_utils import restart_service, stop_service
-from tests.policy_client import PolicyClient
-from tests.graphql_policy_client import GraphQLPolicyClient
+from lib.policy_engine.engine.cli.client import PolicyClient
+from lib.policy_engine.engine.graphql.client import GraphQLPolicyClient
 
 logger = logging.getLogger(__name__)
 
