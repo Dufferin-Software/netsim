@@ -331,7 +331,7 @@ class GraphQLPolicyClient:
     # ========================================================================
 
     def add_rule(
-        self, options: AddRuleOptions, direction: str = "ingress"
+        self, options: AddRuleOptions, direction: str = "ingress", timeout: int = 10
     ) -> OperationResult:
         """
         Add a policy rule.
@@ -339,6 +339,7 @@ class GraphQLPolicyClient:
         Args:
             options: Rule configuration options
             direction: Traffic direction ("ingress" or "egress")
+            timeout: Request timeout in seconds (default: 10)
 
         Returns:
             OperationResult indicating success/failure
