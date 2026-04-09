@@ -10,14 +10,14 @@ help:
 	@echo "  make clean       - Remove build artifacts"
 
 lint:
-	ruff check netsim/ tests/
+	poetry run ruff check netsim/ tests/
 
 format:
-	ruff format netsim/ tests/
-	ruff check --unsafe-fixes --fix netsim/ tests/
+	poetry run ruff format netsim/ tests/
+	poetry run ruff check --unsafe-fixes --fix netsim/ tests/
 
 type-check:
-	mypy netsim/
+	poetry run mypy .
 
 lint-all: lint type-check
 

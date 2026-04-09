@@ -4,8 +4,10 @@
 Image management and caching.
 """
 
+from _hashlib import HASH
 import hashlib
 import logging
+from os import stat_result
 from pathlib import Path
 from typing import Optional, Dict, Any
 from dataclasses import dataclass
@@ -13,7 +15,7 @@ import urllib.request
 import urllib.error
 from datetime import datetime
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -28,15 +30,16 @@ class ImageReference:
 class ImageManager:
     """Manage VM image caching and downloading."""
 
-    DEFAULT_CACHE_DIR = Path.home() / ".netsim" / "images"
+    DEFAULT_CACHE_DIR: Path = Path.home() / ".netsim" / "images"
 
-    def __init__(self, cache_dir: Optional[str] = None):
+    def __init__(self, cache_dir: Optional[str] = None) -> None:
         """
         Initialize image manager.
 
         Args:
             cache_dir: Directory for caching images. Defaults to ~/.netsim/images
         """
+        self.cache_dir: Path
         if cache_dir:
             self.cache_dir = Path(cache_dir)
         else:
@@ -86,7 +89,7 @@ class ImageManager:
 
     def _resolve_image_reference(self, ref: ImageReference) -> str:
         """Resolve an image reference, downloading if necessary."""
-        cached_path = self.cache_dir / ref.name
+        cached_path: Path = self.cache_dir / ref.name
 
         # If cached, validate and return
         if cached_path.exists():
@@ -135,7 +138,7 @@ class ImageManager:
                         downloaded += len(chunk)
 
                         if total_size:
-                            percent = (downloaded / total_size) * 100
+                            percent: float = (downloaded / total_size) * 100
                             logger.debug(
                                 f"Downloaded {percent:.1f}% ({downloaded}/{total_size} bytes)"
                             )
@@ -147,14 +150,14 @@ class ImageManager:
 
     def _validate_checksum(self, path: Path, expected_checksum: str) -> bool:
         """Validate file checksum."""
-        sha512 = hashlib.sha512()
+        sha512: HASH = hashlib.sha512()
 
         with open(path, "rb") as f:
             for chunk in iter(lambda: f.read(4096), b""):
                 sha512.update(chunk)
 
-        actual = sha512.hexdigest()
-        valid = actual.lower() == expected_checksum.lower()
+        actual: str = sha512.hexdigest()
+        valid: bool = actual.lower() == expected_checksum.lower()
 
         if valid:
             logger.debug(f"Checksum valid for {path.name}: {actual}")
@@ -176,7 +179,7 @@ class ImageManager:
 
         for image_file in self.cache_dir.iterdir():
             if image_file.is_file():
-                stat = image_file.stat()
+                stat: stat_result = image_file.stat()
                 images[image_file.name] = {
                     "path": str(image_file),
                     "size_mb": stat.st_size / (1024 * 1024),
@@ -187,7 +190,7 @@ class ImageManager:
 
     def remove_cached_image(self, name: str) -> bool:
         """Remove an image from cache."""
-        image_path = self.cache_dir / name
+        image_path: Path = self.cache_dir / name
 
         if not image_path.exists():
             logger.warning(f"Image not found in cache: {name}")

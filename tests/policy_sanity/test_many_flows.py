@@ -25,18 +25,29 @@ import shlex
 import threading
 import time
 from dataclasses import dataclass
-from typing import List, Optional, Union
+from typing import TYPE_CHECKING, List, Optional, Union
 
 import netaddr
 
+if TYPE_CHECKING:
+    from tests.node import Node
+
 from lib.policy_engine.engine.graphql.client import GraphQLPolicyClient
-from tests.nping_utils import send_ping, send_tcp_packets, send_udp_packets
+from tests.nping_utils import (
+    send_ping,
+    send_tcp_packets,
+    send_udp_packets,
+)
 from lib.policy_engine.engine.cli.client import (
     AddRuleOptions,
+    InterfaceStats,
+    OperationResult,
     PolicyClient,
+    RuleStatsResponse,
+    RuleWithStats,
 )
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 AnyPolicyClient = Union[PolicyClient, GraphQLPolicyClient]
 
@@ -86,7 +97,7 @@ class _FlowTask:
     """Describes a single flow to send in a background thread."""
 
     thread_idx: int
-    node: object  # Node (typed loosely to avoid circular import)
+    node: "Node"  # Forward reference to avoid circular import
     target: netaddr.IPAddress
     dst_port: int
     src_port: int
@@ -313,9 +324,9 @@ def _start_multi_rule_listener(
 
         {"per_rule": {"<rule_id>": count, ...}, "total": int, "total_msgs": int}
     """
-    ready_file = f"/tmp/ws_mf_ready_{listener_id}"
-    primed_file = f"/tmp/ws_mf_primed_{listener_id}"
-    trigger_file = f"/tmp/ws_mf_trigger_{listener_id}"
+    ready_file: str = f"/tmp/ws_mf_ready_{listener_id}"
+    primed_file: str = f"/tmp/ws_mf_primed_{listener_id}"
+    trigger_file: str = f"/tmp/ws_mf_trigger_{listener_id}"
     result: list = [{"per_rule": {}, "total": 0, "total_msgs": 0, "errors": []}]
 
     for fpath in [ready_file, primed_file, trigger_file]:
@@ -324,8 +335,8 @@ def _start_multi_rule_listener(
         except Exception:
             pass
 
-    def _run():
-        script = _WS_MULTI_RULE_LISTENER.format(
+    def _run() -> None:
+        script: str = _WS_MULTI_RULE_LISTENER.format(
             rule_ids=list(rule_ids),
             duration=duration_secs,
             ready_file=ready_file,
@@ -333,7 +344,7 @@ def _start_multi_rule_listener(
             trigger_file=trigger_file,
         )
         try:
-            ssh_timeout = 30 + 30 + int(duration_secs) + 15
+            ssh_timeout: int = 30 + 30 + int(duration_secs) + 15
             output = server_node.ssh_command_with_stdin(
                 "python3 -",
                 script,
@@ -368,7 +379,7 @@ def _start_multi_rule_listener(
 
 def _poll_for_file(server_node, filepath: str, timeout: float) -> None:
     """Poll via SSH until a file exists on the server node."""
-    deadline = time.time() + timeout
+    deadline: float = time.time() + timeout
     while time.time() < deadline:
         try:
             out = server_node.ssh_command(
@@ -404,7 +415,7 @@ def _prime_pipeline(
     All probe traffic occurs before the trigger file is created, so it falls
     in Phase 3 (drain) and is NOT counted in the measurement window.
     """
-    deadline = time.time() + 30.0
+    deadline: float = time.time() + 30.0
     while time.time() < deadline:
         try:
             if protocol == "icmp":
@@ -456,7 +467,7 @@ class TestManyFlowStats:
         client_network_v4,
         server_ip_v4: netaddr.IPAddress,
         nmap_installed,
-    ):
+    ) -> None:
         """
         A single DROP rule covers all UDP traffic from the client subnet.
         ``NUM_FLOWS`` parallel flows each send ``PACKETS_PER_FLOW`` UDP packets
@@ -465,7 +476,7 @@ class TestManyFlowStats:
         """
         client = nodes["client"]
 
-        result = policy_client.add_rule(
+        result: OperationResult = policy_client.add_rule(
             AddRuleOptions(
                 src=client_network_v4,
                 protocol="udp",
@@ -475,10 +486,10 @@ class TestManyFlowStats:
         )
         assert result.success, f"add_rule failed: {result.message}"
 
-        initial = policy_client.get_stats(attached_ingress)
-        initial_drops = initial.global_stats.policy_drops
+        initial: InterfaceStats = policy_client.get_stats(attached_ingress)
+        initial_drops: int = initial.global_stats.policy_drops
 
-        flow_results = _run_parallel_flows(
+        flow_results: List[_FlowResult] = _run_parallel_flows(
             client,
             server_ip_v4,
             interface=client_interface.if_name,
@@ -487,8 +498,8 @@ class TestManyFlowStats:
             protocol="udp",
         )
 
-        packets_sent = sum(r.packets_sent for r in flow_results)
-        errors = [r.error for r in flow_results if r.error]
+        packets_sent: int = sum(r.packets_sent for r in flow_results)
+        errors: List[str] = [r.error for r in flow_results if r.error]
         logger.info(
             f"Sent {packets_sent} UDP packets across {NUM_FLOWS} parallel flows"
         )
@@ -498,8 +509,8 @@ class TestManyFlowStats:
             f"flow errors: {errors}"
         )
 
-        final = policy_client.get_stats(attached_ingress)
-        drops_delta = final.global_stats.policy_drops - initial_drops
+        final: InterfaceStats = policy_client.get_stats(attached_ingress)
+        drops_delta: int = final.global_stats.policy_drops - initial_drops
         logger.info(f"Global drops delta: {drops_delta} (expected {packets_sent})")
         assert drops_delta == packets_sent, (
             f"Global policy_drops mismatch under parallel UDP load: "
@@ -516,14 +527,14 @@ class TestManyFlowStats:
         client_network_v4,
         server_ip_v4: netaddr.IPAddress,
         nmap_installed,
-    ):
+    ) -> None:
         """
         Same as ``test_many_udp_flows_global_drop_stats`` but using TCP SYN
         packets.  Confirms stat accuracy is protocol-independent.
         """
         client = nodes["client"]
 
-        result = policy_client.add_rule(
+        result: OperationResult = policy_client.add_rule(
             AddRuleOptions(
                 src=client_network_v4,
                 protocol="tcp",
@@ -533,10 +544,10 @@ class TestManyFlowStats:
         )
         assert result.success, f"add_rule failed: {result.message}"
 
-        initial = policy_client.get_stats(attached_ingress)
-        initial_drops = initial.global_stats.policy_drops
+        initial: InterfaceStats = policy_client.get_stats(attached_ingress)
+        initial_drops: int = initial.global_stats.policy_drops
 
-        flow_results = _run_parallel_flows(
+        flow_results: List[_FlowResult] = _run_parallel_flows(
             client,
             server_ip_v4,
             interface=client_interface.if_name,
@@ -546,8 +557,8 @@ class TestManyFlowStats:
             base_dst_port=BASE_DST_PORT + 100,
         )
 
-        packets_sent = sum(r.packets_sent for r in flow_results)
-        errors = [r.error for r in flow_results if r.error]
+        packets_sent: int = sum(r.packets_sent for r in flow_results)
+        errors: List[str] = [r.error for r in flow_results if r.error]
         logger.info(
             f"Sent {packets_sent} TCP SYN packets across {NUM_FLOWS} parallel flows"
         )
@@ -557,8 +568,8 @@ class TestManyFlowStats:
             f"flow errors: {errors}"
         )
 
-        final = policy_client.get_stats(attached_ingress)
-        drops_delta = final.global_stats.policy_drops - initial_drops
+        final: InterfaceStats = policy_client.get_stats(attached_ingress)
+        drops_delta: int = final.global_stats.policy_drops - initial_drops
         logger.info(f"Global drops delta: {drops_delta} (expected {packets_sent})")
         assert drops_delta == packets_sent, (
             f"Global policy_drops mismatch under parallel TCP load: "
@@ -575,7 +586,7 @@ class TestManyFlowStats:
         client_network_v4,
         server_ip_v4: netaddr.IPAddress,
         nmap_installed,
-    ):
+    ) -> None:
         """
         Install ``NUM_FLOWS`` DROP rules each matching a distinct UDP destination
         port.  Send all flows in parallel, each to its own port.  Every rule's
@@ -586,9 +597,9 @@ class TestManyFlowStats:
 
         rule_ids = []
         for i in range(NUM_FLOWS):
-            rid = BASE_RULE_ID + 20 + i
+            rid: int = BASE_RULE_ID + 20 + i
             rule_ids.append(rid)
-            r = policy_client.add_rule(
+            r: OperationResult = policy_client.add_rule(
                 AddRuleOptions(
                     src=client_network_v4,
                     dport=BASE_DST_PORT + 200 + i,
@@ -605,7 +616,7 @@ class TestManyFlowStats:
         for rid in rule_ids:
             policy_client.clear_rule_stats(rid)
 
-        flow_results = _run_parallel_flows(
+        flow_results: List[_FlowResult] = _run_parallel_flows(
             client,
             server_ip_v4,
             interface=client_interface.if_name,
@@ -615,23 +626,24 @@ class TestManyFlowStats:
             base_dst_port=BASE_DST_PORT + 200,
         )
 
-        packets_sent = sum(r.packets_sent for r in flow_results)
-        errors = [r.error for r in flow_results if r.error]
+        packets_sent: int = sum(r.packets_sent for r in flow_results)
+        errors: List[str] = [r.error for r in flow_results if r.error]
         assert packets_sent == NUM_FLOWS * PACKETS_PER_FLOW, (
             f"Flows sent {packets_sent}/{NUM_FLOWS * PACKETS_PER_FLOW}; errors: {errors}"
         )
 
-        stats_resp = policy_client.get_rule_stats()
+        stats_resp: RuleStatsResponse = policy_client.get_rule_stats()
         mismatches = []
         for i, rid in enumerate(rule_ids):
-            entry = next(
+            entry: RuleWithStats | None = next(
                 (rws for rws in stats_resp.rules if rws.rule.rule_id == rid), None
             )
             assert entry is not None, f"No stats entry for rule {rid}"
-            if entry.stats.packets != PACKETS_PER_FLOW:
+            if entry.stats is None or entry.stats.packets != PACKETS_PER_FLOW:
+                packets = entry.stats.packets if entry.stats else "None"
                 mismatches.append(
                     f"rule={rid} dport={BASE_DST_PORT + 200 + i}: "
-                    f"packets={entry.stats.packets}, expected={PACKETS_PER_FLOW}"
+                    f"packets={packets}, expected={PACKETS_PER_FLOW}"
                 )
 
         assert not mismatches, (
@@ -649,7 +661,7 @@ class TestManyFlowStats:
         client_network_v4,
         server_ip_v4: netaddr.IPAddress,
         nmap_installed,
-    ):
+    ) -> None:
         """
         Same as ``test_per_rule_stats_parallel_udp_flows`` but using TCP SYN.
         Each TCP flow must be counted only by its matching per-port rule.
@@ -658,9 +670,9 @@ class TestManyFlowStats:
 
         rule_ids = []
         for i in range(NUM_FLOWS):
-            rid = BASE_RULE_ID + 30 + i
+            rid: int = BASE_RULE_ID + 30 + i
             rule_ids.append(rid)
-            r = policy_client.add_rule(
+            r: OperationResult = policy_client.add_rule(
                 AddRuleOptions(
                     src=client_network_v4,
                     dport=BASE_DST_PORT + 300 + i,
@@ -676,7 +688,7 @@ class TestManyFlowStats:
         for rid in rule_ids:
             policy_client.clear_rule_stats(rid)
 
-        flow_results = _run_parallel_flows(
+        flow_results: List[_FlowResult] = _run_parallel_flows(
             client,
             server_ip_v4,
             interface=client_interface.if_name,
@@ -686,23 +698,24 @@ class TestManyFlowStats:
             base_dst_port=BASE_DST_PORT + 300,
         )
 
-        packets_sent = sum(r.packets_sent for r in flow_results)
-        errors = [r.error for r in flow_results if r.error]
+        packets_sent: int = sum(r.packets_sent for r in flow_results)
+        errors: List[str] = [r.error for r in flow_results if r.error]
         assert packets_sent == NUM_FLOWS * PACKETS_PER_FLOW, (
             f"Flows sent {packets_sent}/{NUM_FLOWS * PACKETS_PER_FLOW}; errors: {errors}"
         )
 
-        stats_resp = policy_client.get_rule_stats()
+        stats_resp: RuleStatsResponse = policy_client.get_rule_stats()
         mismatches = []
         for i, rid in enumerate(rule_ids):
-            entry = next(
+            entry: RuleWithStats | None = next(
                 (rws for rws in stats_resp.rules if rws.rule.rule_id == rid), None
             )
             assert entry is not None, f"No stats entry for rule {rid}"
-            if entry.stats.packets != PACKETS_PER_FLOW:
+            if entry.stats is None or entry.stats.packets != PACKETS_PER_FLOW:
+                packets = entry.stats.packets if entry.stats else "None"
                 mismatches.append(
                     f"rule={rid} dport={BASE_DST_PORT + 300 + i}: "
-                    f"packets={entry.stats.packets}, expected={PACKETS_PER_FLOW}"
+                    f"packets={packets}, expected={PACKETS_PER_FLOW}"
                 )
 
         assert not mismatches, (
@@ -720,7 +733,7 @@ class TestManyFlowStats:
         client_network_v4,
         server_ip_v4: netaddr.IPAddress,
         nmap_installed,
-    ):
+    ) -> None:
         """
         Half the flows target DROP rules; the other half target PASS rules.
         All flows are launched simultaneously from a single barrier.
@@ -731,15 +744,15 @@ class TestManyFlowStats:
         - each individual rule's packet counter == PACKETS_PER_FLOW
         """
         client = nodes["client"]
-        half = NUM_FLOWS // 2
+        half: int = NUM_FLOWS // 2
 
         drop_rule_ids = []
         pass_rule_ids = []
 
         for i in range(half):
-            rid = BASE_RULE_ID + 40 + i
+            rid: int = BASE_RULE_ID + 40 + i
             drop_rule_ids.append(rid)
-            r = policy_client.add_rule(
+            r: OperationResult = policy_client.add_rule(
                 AddRuleOptions(
                     src=client_network_v4,
                     dport=BASE_DST_PORT + 400 + i,
@@ -772,9 +785,9 @@ class TestManyFlowStats:
         for rid in all_rule_ids:
             policy_client.clear_rule_stats(rid)
 
-        initial = policy_client.get_stats(attached_ingress)
-        initial_drops = initial.global_stats.policy_drops
-        initial_matches = initial.global_stats.policy_matches
+        initial: InterfaceStats = policy_client.get_stats(attached_ingress)
+        initial_drops: int = initial.global_stats.policy_drops
+        initial_matches: int = initial.global_stats.policy_matches
 
         # Build one barrier for all NUM_FLOWS threads (drop + pass flows together).
         all_results: List[_FlowResult] = []
@@ -820,18 +833,18 @@ class TestManyFlowStats:
         for t in threads:
             t.join(timeout=120)
 
-        total_sent = sum(r.packets_sent for r in all_results)
-        errors = [r.error for r in all_results if r.error]
+        total_sent: int = sum(r.packets_sent for r in all_results)
+        errors: List[str] = [r.error for r in all_results if r.error]
         assert total_sent == NUM_FLOWS * PACKETS_PER_FLOW, (
             f"Expected {NUM_FLOWS * PACKETS_PER_FLOW} packets, got {total_sent}; "
             f"errors: {errors}"
         )
 
-        final = policy_client.get_stats(attached_ingress)
-        drops_delta = final.global_stats.policy_drops - initial_drops
-        matches_delta = final.global_stats.policy_matches - initial_matches
-        expected_drops = half * PACKETS_PER_FLOW
-        expected_matches = NUM_FLOWS * PACKETS_PER_FLOW
+        final: InterfaceStats = policy_client.get_stats(attached_ingress)
+        drops_delta: int = final.global_stats.policy_drops - initial_drops
+        matches_delta: int = final.global_stats.policy_matches - initial_matches
+        expected_drops: int = half * PACKETS_PER_FLOW
+        expected_matches: int = NUM_FLOWS * PACKETS_PER_FLOW
 
         logger.info(
             f"drops_delta={drops_delta} (expected {expected_drops}), "
@@ -845,16 +858,17 @@ class TestManyFlowStats:
         )
 
         # Per-rule packet counters must each equal exactly PACKETS_PER_FLOW.
-        stats_resp = policy_client.get_rule_stats()
+        stats_resp: RuleStatsResponse = policy_client.get_rule_stats()
         mismatches = []
         for rid in all_rule_ids:
-            entry = next(
+            entry: RuleWithStats | None = next(
                 (rws for rws in stats_resp.rules if rws.rule.rule_id == rid), None
             )
             assert entry is not None, f"No stats entry for rule {rid}"
-            if entry.stats.packets != PACKETS_PER_FLOW:
+            if entry.stats is None or entry.stats.packets != PACKETS_PER_FLOW:
+                packets = entry.stats.packets if entry.stats else "None"
                 mismatches.append(
-                    f"rule={rid}: packets={entry.stats.packets}, expected={PACKETS_PER_FLOW}"
+                    f"rule={rid}: packets={packets}, expected={PACKETS_PER_FLOW}"
                 )
 
         assert not mismatches, (
@@ -889,7 +903,7 @@ class TestManyFlowLogEvents:
         server_ip_v4: netaddr.IPAddress,
         nmap_installed,
         websocket_installed,
-    ):
+    ) -> None:
         """
         A single UDP LOG rule (no rate limit, src→dst) covers all UDP traffic
         from the client subnet to the server IP.  ``NUM_FLOWS`` parallel UDP
@@ -902,9 +916,9 @@ class TestManyFlowLogEvents:
         """
         server = nodes["server"]
         client = nodes["client"]
-        rule_id = BASE_RULE_ID + 100
+        rule_id: int = BASE_RULE_ID + 100
 
-        r = policy_client.add_rule(
+        r: OperationResult = policy_client.add_rule(
             AddRuleOptions(
                 src=client_network_v4,
                 dst=f"{server_ip_v4}/32",
@@ -940,7 +954,7 @@ class TestManyFlowLogEvents:
         server.ssh_command(f"touch {shlex.quote(trigger_file)}", timeout=5)
         time.sleep(0.3)  # allow listener to enter Phase 4
 
-        flow_results = _run_parallel_flows(
+        flow_results: List[_FlowResult] = _run_parallel_flows(
             client,
             server_ip_v4,
             interface=client_interface.if_name,
@@ -952,8 +966,8 @@ class TestManyFlowLogEvents:
 
         listener_thread.join(timeout=LISTEN_SECS + 15)
 
-        total_sent = sum(r.packets_sent for r in flow_results)
-        errors = [r.error for r in flow_results if r.error]
+        total_sent: int = sum(r.packets_sent for r in flow_results)
+        errors: List[str] = [r.error for r in flow_results if r.error]
         assert total_sent == NUM_FLOWS * PACKETS_PER_FLOW, (
             f"Flows sent {total_sent}/{NUM_FLOWS * PACKETS_PER_FLOW}; errors: {errors}"
         )
@@ -991,7 +1005,7 @@ class TestManyFlowLogEvents:
         server_ip_v4: netaddr.IPAddress,
         nmap_installed,
         websocket_installed,
-    ):
+    ) -> None:
         """
         ``NUM_FLOWS`` LOG rules each match a distinct UDP destination port.
         ``NUM_FLOWS`` parallel flows each target their matching rule.
@@ -1006,9 +1020,9 @@ class TestManyFlowLogEvents:
 
         rule_ids = []
         for i in range(NUM_FLOWS):
-            rid = BASE_RULE_ID + 110 + i
+            rid: int = BASE_RULE_ID + 110 + i
             rule_ids.append(rid)
-            r = policy_client.add_rule(
+            r: OperationResult = policy_client.add_rule(
                 AddRuleOptions(
                     src=client_network_v4,
                     dport=BASE_DST_PORT + 600 + i,
@@ -1042,7 +1056,7 @@ class TestManyFlowLogEvents:
         server.ssh_command(f"touch {shlex.quote(trigger_file)}", timeout=5)
         time.sleep(0.3)
 
-        flow_results = _run_parallel_flows(
+        flow_results: List[_FlowResult] = _run_parallel_flows(
             client,
             server_ip_v4,
             interface=client_interface.if_name,
@@ -1054,8 +1068,8 @@ class TestManyFlowLogEvents:
 
         listener_thread.join(timeout=LISTEN_SECS + 15)
 
-        total_sent = sum(r.packets_sent for r in flow_results)
-        errors = [r.error for r in flow_results if r.error]
+        total_sent: int = sum(r.packets_sent for r in flow_results)
+        errors: List[str] = [r.error for r in flow_results if r.error]
         assert total_sent == NUM_FLOWS * PACKETS_PER_FLOW, (
             f"Flows sent {total_sent}/{NUM_FLOWS * PACKETS_PER_FLOW}; errors: {errors}"
         )
@@ -1097,7 +1111,7 @@ class TestManyFlowLogEvents:
         server_ip_v4: netaddr.IPAddress,
         nmap_installed,
         websocket_installed,
-    ):
+    ) -> None:
         """
         A LOG+PASS multi-action rule (no rate limit) is hit by ``NUM_FLOWS``
         parallel UDP flows, each from a distinct source port.
@@ -1110,11 +1124,11 @@ class TestManyFlowLogEvents:
         """
         server = nodes["server"]
         client = nodes["client"]
-        rule_id = BASE_RULE_ID + 130
+        rule_id: int = BASE_RULE_ID + 130
 
         # No protocol restriction so ICMP priming probes can trigger the LOG
         # rule and confirm the ring buffer is open before measurement starts.
-        r = policy_client.add_rule(
+        r: OperationResult = policy_client.add_rule(
             AddRuleOptions(
                 src=client_network_v4,
                 actions=[("log", 0), ("pass", 1)],
@@ -1147,7 +1161,7 @@ class TestManyFlowLogEvents:
 
         # All flows target a port range matched by the broad rule.  Each flow
         # uses a distinct source port so BPF sees them as separate 5-tuples.
-        flow_results = _run_parallel_flows(
+        flow_results: List[_FlowResult] = _run_parallel_flows(
             client,
             server_ip_v4,
             interface=client_interface.if_name,
@@ -1159,19 +1173,19 @@ class TestManyFlowLogEvents:
 
         listener_thread.join(timeout=LISTEN_SECS + 15)
 
-        total_sent = sum(r.packets_sent for r in flow_results)
-        errors = [r.error for r in flow_results if r.error]
+        total_sent: int = sum(r.packets_sent for r in flow_results)
+        errors: List[str] = [r.error for r in flow_results if r.error]
         assert total_sent == NUM_FLOWS * PACKETS_PER_FLOW, (
             f"Flows sent {total_sent}/{NUM_FLOWS * PACKETS_PER_FLOW}; errors: {errors}"
         )
 
         # BPF rule statistics counter.
-        stats_resp = policy_client.get_rule_stats()
-        entry = next(
+        stats_resp: RuleStatsResponse = policy_client.get_rule_stats()
+        entry: RuleWithStats | None = next(
             (rws for rws in stats_resp.rules if rws.rule.rule_id == rule_id), None
         )
         assert entry is not None, f"No stats entry for rule {rule_id}"
-        stat_packets = entry.stats.packets
+        stat_packets: int = entry.stats.packets if entry.stats else 0
 
         # WebSocket event count.
         data = listener_result[0]

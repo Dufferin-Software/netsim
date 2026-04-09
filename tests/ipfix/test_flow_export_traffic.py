@@ -26,7 +26,7 @@ from tenacity import retry, retry_if_exception_type, stop_after_delay, wait_fixe
 
 from tests.nping_utils import send_ping, send_tcp_syn
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 # Background loop runs every 10s; idle_timeout=5s configured in conftest.
 # Allow up to 30s for at least one export cycle to fire.
@@ -47,7 +47,7 @@ class TestFlowCachePopulation:
         server_ip_v4,
         client_interface,
         nmap_installed,
-    ):
+    ) -> None:
         """
         ICMP traffic matching a PASS rule should create entries in the flow cache.
 
@@ -72,7 +72,7 @@ class TestFlowCachePopulation:
             retry=retry_if_exception_type(AssertionError),
             reraise=True,
         )
-        def assert_flow_cache_populated():
+        def assert_flow_cache_populated() -> None:
             status = graphql_client.get_flow_export_status()
             logger.info(f"activeFlowCount after ping: {status.active_flow_count}")
             assert status.active_flow_count > initial_flows, (
@@ -92,7 +92,7 @@ class TestFlowCachePopulation:
         server_ip_v4,
         client_interface,
         nmap_installed,
-    ):
+    ) -> None:
         """TCP SYNs through the policy engine should create flow cache entries."""
         client = nodes["client"]
 
@@ -113,7 +113,7 @@ class TestFlowCachePopulation:
             retry=retry_if_exception_type(AssertionError),
             reraise=True,
         )
-        def assert_flows_created():
+        def assert_flows_created() -> None:
             status = graphql_client.get_flow_export_status()
             assert status.active_flow_count > initial_flows, (
                 f"Expected TCP flows in cache, got activeFlowCount={status.active_flow_count}"
@@ -135,7 +135,7 @@ class TestFlowExport:
         server_ip_v4,
         client_interface,
         nmap_installed,
-    ):
+    ) -> None:
         """
         After the idle timeout elapses, flowsExportedTotal should increment.
 
@@ -161,7 +161,7 @@ class TestFlowExport:
             retry=retry_if_exception_type(AssertionError),
             reraise=True,
         )
-        def wait_for_flows():
+        def wait_for_flows() -> None:
             status = graphql_client.get_flow_export_status()
             assert status.active_flow_count > 0, "No flows in cache after traffic"
 
@@ -180,7 +180,7 @@ class TestFlowExport:
             retry=retry_if_exception_type(AssertionError),
             reraise=True,
         )
-        def assert_flows_exported():
+        def assert_flows_exported() -> None:
             status = graphql_client.get_flow_export_status()
             exported_delta = status.flows_exported_total - initial_exported
             logger.info(
@@ -205,7 +205,7 @@ class TestFlowExport:
         server_ip_v4,
         client_interface,
         nmap_installed,
-    ):
+    ) -> None:
         """
         After flows are exported they are deleted from the cache.
 
@@ -222,7 +222,7 @@ class TestFlowExport:
             retry=retry_if_exception_type(AssertionError),
             reraise=True,
         )
-        def wait_for_flows():
+        def wait_for_flows() -> None:
             assert graphql_client.get_flow_export_status().active_flow_count > 0
 
         wait_for_flows()
@@ -237,7 +237,7 @@ class TestFlowExport:
             retry=retry_if_exception_type(AssertionError),
             reraise=True,
         )
-        def assert_cache_shrinks():
+        def assert_cache_shrinks() -> None:
             status = graphql_client.get_flow_export_status()
             logger.info(
                 f"activeFlowCount={status.active_flow_count} (was {peak_flows})"
@@ -263,7 +263,7 @@ class TestIpfixUdpPackets:
         server_ip_v4,
         client_interface,
         nmap_installed,
-    ):
+    ) -> None:
         """
         Verify IPFIX UDP packets reach the collector by capturing on loopback.
 
@@ -326,7 +326,7 @@ class TestIpfixUdpPackets:
             retry=retry_if_exception_type(AssertionError),
             reraise=True,
         )
-        def wait_for_new_export():
+        def wait_for_new_export() -> None:
             status = graphql_client.get_flow_export_status()
             delta = status.flows_exported_total - initial_exported
             logger.info(
@@ -414,7 +414,7 @@ class TestIpfixRecordAddresses:
         client_ip_v4,
         client_interface,
         nmap_installed,
-    ):
+    ) -> None:
         """
         Exported IPFIX records must contain IP addresses in network byte order.
 
@@ -461,7 +461,7 @@ class TestIpfixRecordAddresses:
             retry=retry_if_exception_type(AssertionError),
             reraise=True,
         )
-        def wait_for_export():
+        def wait_for_export() -> None:
             delta = (
                 graphql_client.get_flow_export_status().flows_exported_total
                 - initial_exported
@@ -482,8 +482,8 @@ class TestIpfixRecordAddresses:
             """Return the address that would appear if octets were byte-reversed."""
             return ".".join(reversed(ip.split(".")))
 
-        server_ip_swapped = byte_swap_ip(server_ip_str)
-        client_ip_swapped = byte_swap_ip(client_ip_str)
+        server_ip_swapped: str = byte_swap_ip(server_ip_str)
+        client_ip_swapped: str = byte_swap_ip(client_ip_str)
 
         @retry(
             stop=stop_after_delay(_EXPORT_WAIT_S),
@@ -491,7 +491,7 @@ class TestIpfixRecordAddresses:
             retry=retry_if_exception_type(AssertionError),
             reraise=True,
         )
-        def assert_expected_ips_in_log():
+        def assert_expected_ips_in_log() -> None:  # type: ignore[annotation-unchecked]
             log = server.ssh_command(f"cat {recv_log} 2>/dev/null || true", timeout=5)
             all_ips: set[str] = set()
             for line in log.splitlines():

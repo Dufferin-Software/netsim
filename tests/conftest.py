@@ -10,13 +10,14 @@ Provides:
 - Pause on failure for debugging
 """
 
+from re import Match
 import subprocess
 import tempfile
 import logging
 import os
 import time
 from pathlib import Path
-from typing import Dict
+from typing import Callable, Any, Dict, Generator
 import pytest
 import yaml
 from tenacity import (
@@ -27,17 +28,17 @@ from tenacity import (
     before_sleep_log,
 )
 
-from netsim.topology import TopologyParser
+from netsim.topology import Topology, TopologyParser
 from netsim.simulator import TopologySimulator
 from netsim import libvirt_utils
 from tests.parallel_utils import run_parallel_simple
 from tests.node import Node, NodeInterface
 
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 # Log SSH commands to file (override with NETSIM_SSH_LOG)
-SSH_LOG_PATH = Path(os.getenv("NETSIM_SSH_LOG", "ssh_commands.log")).resolve()
+SSH_LOG_PATH: Path = Path(os.getenv("NETSIM_SSH_LOG", "ssh_commands.log")).resolve()
 
 # Track if any test failed
 _test_failed: bool = False
@@ -47,20 +48,20 @@ _current_topology = None
 
 
 # Helper functions for running_topology
-def _cleanup_leftover_vms(topology):
+def _cleanup_leftover_vms(topology) -> None:
     """Clean up any leftover VMs from previous failed runs."""
     libvirt_utils.cleanup_leftover_vms(topology)
 
 
-def _wait_for_vms_running(simulator, timeout=30):
+def _wait_for_vms_running(simulator, timeout=30) -> None:
     """Wait for all VMs to be running."""
 
-    start_time = time.time()
+    start_time: float = time.time()
     while True:
         status = simulator.status()
-        all_running = all(status.values())
+        all_running: bool = all(status.values())
         if all_running:
-            running_nodes = ", ".join(status.keys())
+            running_nodes: str = ", ".join(status.keys())
             logger.info(f"✓ All domains started: {running_nodes}")
             break
         if time.time() - start_time > timeout:
@@ -68,15 +69,15 @@ def _wait_for_vms_running(simulator, timeout=30):
         time.sleep(1)
 
 
-def _wait_for_ssh_availability(topology, timeout_per_node=60):
+def _wait_for_ssh_availability(topology, timeout_per_node=60) -> None:
     """Wait for SSH to be available on all nodes in parallel."""
 
-    def _wait_for_node_ssh(node_name, ssh_port):
+    def _wait_for_node_ssh(node_name, ssh_port) -> None:
         """Wait for SSH on a single node."""
-        ssh_start = time.time()
+        ssh_start: float = time.time()
         while True:
             try:
-                result = subprocess.run(
+                result: subprocess.CompletedProcess[bytes] = subprocess.run(
                     [
                         "ssh",
                         "-o",
@@ -113,7 +114,7 @@ def _wait_for_ssh_availability(topology, timeout_per_node=60):
     run_parallel_simple(_wait_for_node_ssh, node_ssh_info)
 
 
-def _pause_for_debugging(topology, request):
+def _pause_for_debugging(topology, request) -> None:
     """Pause for debugging if test failed and --pause-on-failure is set."""
     global _test_failed
 
@@ -137,7 +138,7 @@ def _pause_for_debugging(topology, request):
     logger.info("=" * 60)
     logger.info("Topology is still running. SSH access:")
     for idx, node in enumerate(topology.nodes):
-        ssh_port = 2200 + idx
+        ssh_port: int = 2200 + idx
         logger.info(f"  {node.name}: ssh -p {ssh_port} netsim@localhost")
     logger.info("")
     logger.info("Press ENTER to tear down topology and continue...")
@@ -154,12 +155,12 @@ def _pause_for_debugging(topology, request):
         logger.info("Proceeding with teardown...")
 
 
-def _log_vm_count(topology):
+def _log_vm_count(topology) -> None:
     """Log VM count for debugging."""
     libvirt_utils.log_vm_count(topology)
 
 
-def pytest_addoption(parser):
+def pytest_addoption(parser) -> None:
     """Add custom command-line options."""
     parser.addoption(
         "--pause-on-failure",
@@ -175,7 +176,7 @@ def pytest_addoption(parser):
     )
 
 
-def pytest_configure(config):
+def pytest_configure(config) -> None:
     """Validate configuration before tests run (before VMs are started)."""
     packages_opt = config.getoption("--install-packages", default=None)
     if not packages_opt:
@@ -198,14 +199,14 @@ def pytest_configure(config):
         raise pytest.UsageError("\n".join(errors))
 
 
-def pytest_runtest_makereport(item, call):
+def pytest_runtest_makereport(item, call) -> None:
     """Track test failures."""
     global _test_failed
     if call.when == "call" and call.excinfo is not None:
         _test_failed = True
 
 
-def pytest_enter_pdb(config, pdb):
+def pytest_enter_pdb(config, pdb) -> None:
     """Called when entering PDB debugger - print connection info."""
     global _current_topology
     if _current_topology is not None:
@@ -214,7 +215,7 @@ def pytest_enter_pdb(config, pdb):
         print("=" * 60)
         print("SSH access to nodes:")
         for idx, node in enumerate(_current_topology.nodes):
-            ssh_port = 2200 + idx
+            ssh_port: int = 2200 + idx
             print(f"  {node.name}: ssh -p {ssh_port} netsim@localhost")
         print("=" * 60 + "\n")
 
@@ -229,11 +230,11 @@ def topology_path(request) -> Path:
     """
     # Get the test file's directory
     test_file = Path(request.fspath)
-    test_dir = test_file.parent
+    test_dir: Path = test_file.parent
 
     # Look for topology file in the test directory
-    topo_name = test_dir.name
-    topo_path = test_dir / f"{topo_name}.yaml"
+    topo_name: str = test_dir.name
+    topo_path: Path = test_dir / f"{topo_name}.yaml"
 
     if topo_path.exists():
         logger.info(f"Discovered topology for {test_file.name}: {topo_path}")
@@ -243,13 +244,13 @@ def topology_path(request) -> Path:
 
 
 @pytest.fixture(scope="package")
-def topology(topology_path: Path):
+def topology(topology_path: Path) -> Topology:
     """Load topology from YAML."""
     return TopologyParser.load(str(topology_path))
 
 
 @pytest.fixture(scope="package", autouse=True)
-def running_topology(topology, request):
+def running_topology(topology, request) -> Generator[TopologySimulator, Any, None]:
     """
     Auto-start topology for test module, clean up after.
 
@@ -324,16 +325,16 @@ def running_topology(topology, request):
 
 
 @pytest.fixture(scope="package")
-def node_allocations(topology) -> Dict[str, Dict[str, Dict[str, str]]]:
+def node_allocations(topology) -> Dict[str, Dict[str, Dict[str, str | None]]]:
     """
     Get auto-allocated IPv4 and IPv6 addresses for each node.
 
     Returns:
-        Dict mapping node_name -> {network_name: {"ipv4": "10.0.1.10/24", "ipv6": "2001:db8:1::10/64"}, ...}
+        Dict mapping node_name -> {network_name: {"ipv4": "10.0.1.10/24", "ipv6": "2001:db8:1::10/64" or None}, ...}
     """
     # Simulate the allocation process without running setup()
-    allocations = {}
-    net_allocators = {}
+    allocations: Dict[str, Dict[str, Dict[str, str | None]]] = {}
+    net_allocators: Dict[str, Dict[str, Dict[str, Any] | None]] = {}
 
     import ipaddress
 
@@ -343,21 +344,22 @@ def node_allocations(topology) -> Dict[str, Dict[str, Dict[str, str]]]:
         Avoids materializing the full host list (which is impossible for /64 IPv6).
         idx=0 corresponds to the first usable host (network+1).
         """
-        first_host = int(net.network_address) + 1  # skip network address
+        first_host: int = int(net.network_address) + 1  # skip network address
         # IPv4: exclude broadcast; IPv6: no broadcast, so allow all after network
+        last_host: int
         if isinstance(net, ipaddress.IPv4Network):
             last_host = int(net.broadcast_address) - 1
         else:
             last_host = int(net.network_address) + net.num_addresses - 1
 
-        candidate = first_host + idx
+        candidate: int = first_host + idx
         if candidate > last_host:
             raise ValueError(f"IP pool exhausted for network {net} (idx={idx})")
 
         return f"{ipaddress.ip_address(candidate)}/{net.prefixlen}"
 
     for node in topology.nodes:
-        node_ifaces = {}
+        node_ifaces: Dict[str, Dict[str, str | None]] = {}
 
         for net_name in node.networks:
             # Initialize allocator if not present
@@ -379,20 +381,28 @@ def node_allocations(topology) -> Dict[str, Dict[str, Dict[str, str]]]:
                     "ipv6": {"net": ipv6_net, "current": 9} if ipv6_net else None,
                 }
             else:
-                net_allocators[net_name]["ipv4"]["current"] += 1
-                if net_allocators[net_name]["ipv6"]:
-                    net_allocators[net_name]["ipv6"]["current"] += 1
+                ipv4_alloc = net_allocators[net_name]["ipv4"]
+                if isinstance(ipv4_alloc, dict):
+                    ipv4_alloc["current"] += 1
+                ipv6_alloc = net_allocators[net_name]["ipv6"]
+                if ipv6_alloc and isinstance(ipv6_alloc, dict):
+                    ipv6_alloc["current"] += 1
 
             # Allocate IPv4 (without materializing host list)
-            ipv4_obj = net_allocators[net_name]["ipv4"]["net"]
-            ipv4_idx = net_allocators[net_name]["ipv4"]["current"]
-            ipv4_cidr = _alloc_ip(ipv4_obj, ipv4_idx)
+            ipv4_entry = net_allocators[net_name]["ipv4"]
+            if isinstance(ipv4_entry, dict):
+                ipv4_obj: ipaddress._BaseNetwork = ipv4_entry["net"]
+                ipv4_idx: int = ipv4_entry["current"]
+                ipv4_cidr: str = _alloc_ip(ipv4_obj, ipv4_idx)
+            else:
+                continue
 
             # Allocate IPv6 if available
-            ipv6_cidr = None
-            if net_allocators[net_name]["ipv6"]:
-                ipv6_obj = net_allocators[net_name]["ipv6"]["net"]
-                ipv6_idx = net_allocators[net_name]["ipv6"]["current"]
+            ipv6_cidr: str | None = None
+            ipv6_entry = net_allocators[net_name]["ipv6"]
+            if ipv6_entry and isinstance(ipv6_entry, dict):
+                ipv6_obj: ipaddress._BaseNetwork = ipv6_entry["net"]
+                ipv6_idx: int = ipv6_entry["current"]
                 ipv6_cidr = _alloc_ip(ipv6_obj, ipv6_idx)
 
             node_ifaces[net_name] = {
@@ -406,7 +416,7 @@ def node_allocations(topology) -> Dict[str, Dict[str, Dict[str, str]]]:
 
 
 @pytest.fixture(scope="package")
-def install_packages(nodes, apt_updated):
+def install_packages(nodes, apt_updated) -> Callable[..., None]:
     """
     Fixture for installing packages on nodes.
 
@@ -426,13 +436,13 @@ def install_packages(nodes, apt_updated):
             node_name: Name of the node
             packages: List of package names to install
         """
-        cache_key = (node_name, tuple(sorted(packages)))
+        cache_key: tuple[str, tuple[str, ...]] = (node_name, tuple(sorted(packages)))
         if cache_key in installed_cache:
             logger.debug(f"{node_name}: packages {packages} already installed")
             return
 
         node = nodes[node_name]
-        package_list = " ".join(packages)
+        package_list: str = " ".join(packages)
 
         logger.info(f"{node_name}: installing packages: {package_list}")
 
@@ -454,7 +464,12 @@ def install_packages(nodes, apt_updated):
     return _install
 
 
-def _build_netplan_config(node_name, ifaces, node_allocations, mgmt_interface):
+def _build_netplan_config(
+    node_name: str,
+    ifaces: dict[str, NodeInterface],
+    node_allocations: dict[str, dict[str, dict[str, str | None]]],
+    mgmt_interface: str,
+) -> dict[str, Any]:
     """Build netplan YAML config for a node's interfaces."""
     iface_configs = node_allocations[node_name]
     interfaces = {}
@@ -500,16 +515,22 @@ def _build_netplan_config(node_name, ifaces, node_allocations, mgmt_interface):
     }
 
 
-def _apply_netplan_to_node(node_name, ifaces, netplan_yaml, node, mgmt_interface):
+def _apply_netplan_to_node(
+    node_name: str,
+    ifaces: dict[str, NodeInterface],
+    netplan_yaml: str,
+    node: Node,
+    mgmt_interface: str,
+) -> None:
     """Apply netplan configuration to a single node."""
     try:
         # Create temporary file with config locally
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write(netplan_yaml)
-            temp_path = f.name
+            temp_path: str = f.name
 
         # Copy to node
-        scp_cmd = [
+        scp_cmd: list[str] = [
             "scp",
             "-o",
             "StrictHostKeyChecking=no",
@@ -550,7 +571,7 @@ def _apply_netplan_to_node(node_name, ifaces, netplan_yaml, node, mgmt_interface
             pass
 
         def _wait_for_static_ipv4(if_name: str, expected_addr: str) -> None:
-            addr = expected_addr.split("/")[0]
+            addr: str = expected_addr.split("/")[0]
 
             @retry(
                 stop=stop_after_attempt(15),
@@ -558,7 +579,7 @@ def _apply_netplan_to_node(node_name, ifaces, netplan_yaml, node, mgmt_interface
                 retry=retry_if_exception_type(AddressNotReady),
                 reraise=True,
             )
-            def _check():
+            def _check() -> None:
                 out = node.ssh_command(
                     f"ip -4 addr show dev {if_name} 2>/dev/null"
                     f" | awk '/inet / {{print $2}}' | cut -d/ -f1",
@@ -577,7 +598,7 @@ def _apply_netplan_to_node(node_name, ifaces, netplan_yaml, node, mgmt_interface
                 )
 
         def _wait_for_static_ipv6(if_name: str, expected_addr: str) -> None:
-            addr = expected_addr.split("/")[0]
+            addr: str = expected_addr.split("/")[0]
 
             @retry(
                 stop=stop_after_attempt(15),
@@ -585,7 +606,7 @@ def _apply_netplan_to_node(node_name, ifaces, netplan_yaml, node, mgmt_interface
                 retry=retry_if_exception_type(AddressNotReady),
                 reraise=True,
             )
-            def _check():
+            def _check() -> None:
                 out = node.ssh_command(
                     f"ip -6 addr show dev {if_name} | grep 'inet6' | grep -v 'fe80'",
                     timeout=5,
@@ -611,7 +632,7 @@ def _apply_netplan_to_node(node_name, ifaces, netplan_yaml, node, mgmt_interface
                 retry=retry_if_exception_type(AddressNotReady),
                 reraise=True,
             )
-            def _check():
+            def _check() -> None:
                 out = node.ssh_command(
                     f"ip -4 addr show dev {if_name} 2>/dev/null"
                     f" | awk '/inet / {{print $2}}' | cut -d/ -f1",
@@ -664,7 +685,7 @@ def _apply_netplan_to_node(node_name, ifaces, netplan_yaml, node, mgmt_interface
 @pytest.fixture(scope="package")
 def configure_node_interfaces(
     node_interfaces, node_allocations, nodes, install_user_packages
-):
+) -> None:
     """
     Fixture that configures all node interfaces with netplan in parallel.
 
@@ -680,7 +701,7 @@ def configure_node_interfaces(
     logger.info("Configuring node interfaces with netplan (in parallel)")
     logger.info("=" * 60)
 
-    def _configure_node(node_name, ifaces):
+    def _configure_node(node_name: str, ifaces: dict[str, NodeInterface]) -> None:
         """Configure a single node's interfaces."""
         iface_configs = node_allocations[node_name]
         node = nodes[node_name]
@@ -711,12 +732,12 @@ def configure_node_interfaces(
                 ipv4 = addrs.get("ipv4", "")
                 ipv6 = addrs.get("ipv6", "")
                 addr_parts = [addr for addr in [ipv4, ipv6] if addr]
-                addr_info = ", ".join(addr_parts)
+                addr_info: str = ", ".join(addr_parts)
                 logger.info(
                     f"  [{node_name}] {node_iface.if_name} ({net_name}): {addr_info}"
                 )
 
-        netplan_yaml = yaml.dump(netplan_config, default_flow_style=False)
+        netplan_yaml: str = yaml.dump(netplan_config, default_flow_style=False)
         _apply_netplan_to_node(node_name, ifaces, netplan_yaml, node, mgmt_interface)
 
     # Configure all nodes in parallel
@@ -736,7 +757,7 @@ def configure_node_interfaces(
 
 
 @pytest.fixture(scope="package")
-def node_ssh_port(topology) -> callable:
+def node_ssh_port(topology) -> Callable[[str], int]:
     """
     Get SSH port for a node by name.
 
@@ -772,7 +793,7 @@ def nodes(topology) -> Dict[str, Node]:
 
 
 @pytest.fixture(scope="package")
-def apt_updated(nodes):
+def apt_updated(nodes) -> None:
     """
     Run 'apt-get update' once per node for the lifetime of the topology.
 
@@ -781,7 +802,7 @@ def apt_updated(nodes):
     installation attempts.
     """
 
-    def _update_node(node_name, node):
+    def _update_node(node_name, node) -> None:
         logger.info(f"  [{node_name}] Running apt-get update...")
         node.ssh_command("sudo apt-get update -qq", timeout=600)
         logger.info(f"  [{node_name}] ✓ apt-get update complete")
@@ -793,7 +814,7 @@ def apt_updated(nodes):
 
 
 @pytest.fixture(scope="package")
-def install_user_packages(nodes, apt_updated, request):
+def install_user_packages(nodes, apt_updated, request) -> None:
     """
     Install debian packages on all nodes if --install-packages is specified.
 
@@ -820,10 +841,10 @@ def install_user_packages(nodes, apt_updated, request):
 
     # Package paths already validated in pytest_configure
 
-    def _install_packages_on_node(node_name, node):
+    def _install_packages_on_node(node_name, node) -> None:
         """Install all packages on a single node."""
         for pkg_path in package_paths:
-            pkg_name = Path(pkg_path).name
+            pkg_name: str = Path(pkg_path).name
 
             logger.info(f"  [{node_name}] Copying {pkg_name}...")
 
@@ -833,7 +854,7 @@ def install_user_packages(nodes, apt_updated, request):
             except FileNotFoundError as e:
                 pytest.fail(str(e))
             except subprocess.CalledProcessError as e:
-                error_msg = e.stderr if e.stderr else "Unknown error"
+                error_msg: Any | str = e.stderr if e.stderr else "Unknown error"
                 pytest.fail(f"Failed to copy {pkg_name} to {node_name}: {error_msg}")
 
             logger.info(f"  [{node_name}] Installing {pkg_name}...")
@@ -899,7 +920,7 @@ def install_user_packages(nodes, apt_updated, request):
     logger.info("=" * 60)
 
 
-def _discover_interface_names(node_name, node):
+def _discover_interface_names(node_name: str, node: Node) -> list[str]:
     """Discover interface names on a node via SSH."""
     output = node.ssh_command(
         "ip -o link show | grep -v ' lo:' | awk -F': ' '{print $2}'"
@@ -915,7 +936,12 @@ def _discover_interface_names(node_name, node):
     return if_names
 
 
-def _map_networks_to_interfaces(node_name, if_names, node_allocations, node):
+def _map_networks_to_interfaces(
+    node_name: str,
+    if_names: list[str],
+    node_allocations: dict[str, dict[str, dict[str, str | None]]],
+    node: Node,
+) -> dict[str, NodeInterface]:
     """Map networks to discovered interfaces."""
     iface_configs = node_allocations[node_name]
     node_ifaces = {}
@@ -927,7 +953,7 @@ def _map_networks_to_interfaces(node_name, if_names, node_allocations, node):
     config_idx = 0
     for net_name, addrs in iface_configs.items():
         # Skip management interface (if_names[0]) by adding 1 to index
-        if_idx = config_idx + 1
+        if_idx: int = config_idx + 1
         if if_idx < len(if_names):
             if_name = if_names[if_idx]
             ipv4_addr = addrs.get("ipv4")
@@ -989,11 +1015,11 @@ class BaseTopologyTests:
     """
 
     @pytest.fixture(autouse=True)
-    def ensure_topology_running(self, running_topology):
+    def ensure_topology_running(self, running_topology) -> None:
         """Ensure topology is started before any test in this class runs."""
         pass
 
-    def test_nodes_configured(self, topology, node_allocations):
+    def test_nodes_configured(self, topology, node_allocations) -> None:
         """Verify nodes and interfaces are properly allocated."""
         # Check all topology nodes are present
         assert len(topology.nodes) > 0, "Topology should have at least one node"
@@ -1028,7 +1054,7 @@ class BaseTopologyTests:
                     network.subnet.split("/")[0].rsplit(".", 1)[0]
                 ), f"IP {ip_cidr} not in subnet {network.subnet}"
 
-    def test_interface_discovery(self, node_interfaces, topology):
+    def test_interface_discovery(self, node_interfaces, topology) -> None:
         """Test that interfaces are discovered correctly on all nodes."""
         # Check all nodes have interface discovery
         for node in topology.nodes:
@@ -1054,7 +1080,7 @@ class BaseTopologyTests:
 
     def test_interface_configuration(
         self, configure_node_interfaces, node_interfaces, node_allocations
-    ):
+    ) -> None:
         """Test that interfaces are configured with correct IPs on all nodes."""
         for node_name, ifaces in node_interfaces.items():
             allocations = node_allocations[node_name]
@@ -1079,7 +1105,13 @@ class BaseTopologyTests:
                 )
 
     @staticmethod
-    def _ping_and_extract_rtt(node, target_ip, count=3, ipv6=False, timeout=10):
+    def _ping_and_extract_rtt(
+        node: Node,
+        target_ip: str,
+        count: int = 3,
+        ipv6: bool = False,
+        timeout: int = 10,
+    ) -> tuple[bool, float | None, str]:
         """Execute ping and extract average RTT.
 
         Args:
@@ -1094,7 +1126,7 @@ class BaseTopologyTests:
         """
         import re
 
-        cmd = f"ping6 -c {count}" if ipv6 else f"ping -c {count}"
+        cmd: str = f"ping6 -c {count}" if ipv6 else f"ping -c {count}"
         cmd += f" {target_ip}"
 
         try:
@@ -1102,13 +1134,13 @@ class BaseTopologyTests:
 
             # Extract average RTT from output
             # Format: rtt min/avg/max/mdev = 0.123/0.456/0.789/0.012 ms
-            rtt_match = re.search(
+            rtt_match: Match[str] | None = re.search(
                 r"rtt min/avg/max/mdev = [\d.]+/([\d.]+)/[\d.]+/[\d.]+ ms", result
             )
-            avg_rtt = float(rtt_match.group(1)) if rtt_match else None
+            avg_rtt: float | None = float(rtt_match.group(1)) if rtt_match else None
 
             # Check for packet loss
-            success = "100% packet loss" not in result
+            success: bool = "100% packet loss" not in result
 
             return success, avg_rtt, result
         except subprocess.CalledProcessError as e:
@@ -1116,10 +1148,10 @@ class BaseTopologyTests:
 
     def test_ping_between_nodes(
         self, configure_node_interfaces, node_interfaces, topology, nodes
-    ):
+    ) -> None:
         """Test ICMP connectivity between nodes that share networks (IPv4 and IPv6)."""
         # Build a map of network -> [nodes]
-        network_nodes = {}
+        network_nodes: dict[str, list[str]] = {}
         for topo_node in topology.nodes:
             for net_name in topo_node.networks:
                 if net_name not in network_nodes:
@@ -1155,6 +1187,7 @@ class BaseTopologyTests:
                     count=1,
                     ipv6=False,
                 )
+                rtt_str: str = ""
                 if success:
                     rtt_str = f" ({avg_rtt:.2f}ms)" if avg_rtt else ""
                     logger.info(
@@ -1175,8 +1208,8 @@ class BaseTopologyTests:
                     class IPv6PingFailed(Exception):
                         """Raised when IPv6 ping fails."""
 
-                        def __init__(self, output: str):
-                            self.output = output
+                        def __init__(self, output: str) -> None:
+                            self.output: str = output
                             super().__init__(output)
 
                     @retry(
@@ -1186,7 +1219,7 @@ class BaseTopologyTests:
                         before_sleep=before_sleep_log(logger, logging.DEBUG),
                         reraise=True,
                     )
-                    def ping_ipv6():
+                    def ping_ipv6() -> float | None:
                         success, avg_rtt, output = self._ping_and_extract_rtt(
                             source_node,
                             str(target_ipv6),
@@ -1217,7 +1250,7 @@ class BaseTopologyTests:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def cleanup_ssh_connections():
+def cleanup_ssh_connections() -> Generator[None, Any, None]:
     """
     Cleanup SSH connections at the end of the test session.
 

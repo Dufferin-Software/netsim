@@ -4,6 +4,7 @@
 Libvirt (KVM/QEMU) VM management.
 """
 
+from logging import Logger
 import xml.etree.ElementTree as ET
 import os
 import subprocess
@@ -28,7 +29,7 @@ class VMConfig:
     mgmt_ssh_port: Optional[int] = None  # Host port forwarded to guest ssh
     cloudinit_iso: Optional[str] = None  # Path to cloud-init ISO
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         # Ensure tap_devices is always a list for mypy and runtime safety
         if self.tap_devices is None:
             self.tap_devices = []
@@ -37,7 +38,7 @@ class VMConfig:
 class LibvirtVM:
     """Manager for a single KVM/QEMU VM via libvirt."""
 
-    def __init__(self, config: VMConfig, runtime_dir: str = "/tmp/netsim"):
+    def __init__(self, config: VMConfig, runtime_dir: str = "/tmp/netsim") -> None:
         """
         Initialize libvirt VM.
 
@@ -45,20 +46,20 @@ class LibvirtVM:
             config: VM configuration
             runtime_dir: Directory for VM runtime data
         """
-        self.config = config
+        self.config: VMConfig = config
         self.runtime_dir = Path(runtime_dir)
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
-        self.vm_dir = self.runtime_dir / config.name
+        self.vm_dir: Path = self.runtime_dir / config.name
         self.vm_dir.mkdir(exist_ok=True)
 
     def _generate_domain_xml(self) -> str:
         """Generate libvirt domain XML configuration."""
         # Create disk image as copy-on-write layer
-        disk_path = self.vm_dir / f"{self.config.name}.qcow2"
+        disk_path: Path = self.vm_dir / f"{self.config.name}.qcow2"
         self._create_cow_disk(disk_path)
 
         # Build domain XML
-        domain = ET.Element("domain", type="kvm")
+        domain: ET.Element[str] = ET.Element("domain", type="kvm")
 
         # Name
         ET.SubElement(domain, "name").text = self.config.name
@@ -70,7 +71,7 @@ class LibvirtVM:
         )
 
         # vCPU
-        vcpu_elem = ET.SubElement(domain, "vcpu")
+        vcpu_elem: ET.Element[str] = ET.SubElement(domain, "vcpu")
         vcpu_elem.set("placement", "static")
         vcpu_elem.text = str(self.config.vcpus)
 
@@ -79,18 +80,20 @@ class LibvirtVM:
         ET.SubElement(domain, "cpu", mode="host-passthrough")
 
         # OS boot
-        os_elem = ET.SubElement(domain, "os")
+        os_elem: ET.Element[str] = ET.SubElement(domain, "os")
         ET.SubElement(os_elem, "type", arch="x86_64", machine="pc").text = "hvm"
         ET.SubElement(os_elem, "boot", dev="hd")
 
         # Devices
-        devices = ET.SubElement(domain, "devices")
+        devices: ET.Element[str] = ET.SubElement(domain, "devices")
 
         # Emulator
         ET.SubElement(devices, "emulator").text = "/usr/bin/qemu-system-x86_64"
 
         # Controller for CD-ROM (SATA)
-        controller = ET.SubElement(devices, "controller", type="sata", index="0")
+        controller: ET.Element[str] = ET.SubElement(
+            devices, "controller", type="sata", index="0"
+        )
         ET.SubElement(
             controller,
             "address",
@@ -102,7 +105,9 @@ class LibvirtVM:
         )
 
         # Disk
-        disk = ET.SubElement(devices, "disk", type="file", device="disk")
+        disk: ET.Element[str] = ET.SubElement(
+            devices, "disk", type="file", device="disk"
+        )
         ET.SubElement(disk, "driver", name="qemu", type="qcow2")
         ET.SubElement(disk, "source", file=str(disk_path))
         ET.SubElement(disk, "target", dev="vda", bus="virtio")
@@ -118,17 +123,19 @@ class LibvirtVM:
 
         # Cloud-init ISO (if provided)
         if self.config.cloudinit_iso:
-            iso_disk = ET.SubElement(devices, "disk", type="file", device="cdrom")
+            iso_disk: ET.Element[str] = ET.SubElement(
+                devices, "disk", type="file", device="cdrom"
+            )
             ET.SubElement(iso_disk, "driver", name="qemu", type="raw")
             ET.SubElement(iso_disk, "source", file=str(self.config.cloudinit_iso))
             ET.SubElement(iso_disk, "target", dev="sda", bus="sata")
             ET.SubElement(iso_disk, "readonly")
 
         # Serial console
-        serial = ET.SubElement(devices, "serial", type="pty")
+        serial: ET.Element[str] = ET.SubElement(devices, "serial", type="pty")
         ET.SubElement(serial, "target", port="0")
 
-        console = ET.SubElement(devices, "console", type="pty")
+        console: ET.Element[str] = ET.SubElement(devices, "console", type="pty")
         ET.SubElement(console, "target", type="serial", port="0")
 
         # Graphics (VNC)
@@ -139,7 +146,7 @@ class LibvirtVM:
 
         # Add QEMU command-line arguments for networking with explicit PCI slots to avoid collisions
         domain.set("xmlns:qemu", "http://libvirt.org/schemas/domain/qemu/1.0")
-        qemu_cmd = ET.SubElement(
+        qemu_cmd: ET.Element[str] = ET.SubElement(
             domain, "{http://libvirt.org/schemas/domain/qemu/1.0}commandline"
         )
 
@@ -184,7 +191,7 @@ class LibvirtVM:
                 value="-device",
             )
             # Offset addresses to avoid collision with disk (0x2) and mgmt NIC (0x5)
-            pci_addr = hex(5 + idx)
+            pci_addr: str = hex(5 + idx)
             ET.SubElement(
                 qemu_cmd,
                 "{http://libvirt.org/schemas/domain/qemu/1.0}arg",
@@ -207,7 +214,7 @@ class LibvirtVM:
 
             import logging
 
-            logger = logging.getLogger(__name__)
+            logger: Logger = logging.getLogger(__name__)
             logger.debug(f"Creating COW disk for {self.config.name}")
             logger.debug(f"  Base image: {base_image}")
             logger.debug(f"  COW disk: {disk_path}")
@@ -257,22 +264,22 @@ class LibvirtVM:
     def _generate_mac(self, interface_idx: int) -> str:
         """Generate deterministic MAC address."""
         # Use a stable MAC based on VM name and interface index
-        hash_base = f"{self.config.name}{interface_idx}".encode()
+        hash_base: bytes = f"{self.config.name}{interface_idx}".encode()
         import hashlib
 
-        h = hashlib.md5(hash_base).digest()
+        h: bytes = hashlib.md5(hash_base).digest()
         # Format: 52:54:00:xx:xx:xx (QEMU OUI)
         return f"52:54:00:{h[0]:02x}:{h[1]:02x}:{h[2]:02x}"
 
-    def start(self):
+    def start(self) -> None:
         """Create and start or resume the VM via libvirt."""
         # Generate domain XML (which creates the COW disk)
         try:
-            xml = self._generate_domain_xml()
+            xml: str = self._generate_domain_xml()
         except RuntimeError as e:
             raise RuntimeError(f"Failed to prepare VM disk: {e}")
 
-        conn = self._get_conn()
+        conn: libvirt.virConnect = self._get_conn()
         try:
             # If domain exists, handle existing state or redefine
             dom = None
@@ -290,7 +297,7 @@ class LibvirtVM:
                     return
                 # Undefine to refresh XML for shutoff/crashed domains
                 # Use flags to handle managed save images and snapshots
-                undefine_flags = (
+                undefine_flags: int = (
                     libvirt.VIR_DOMAIN_UNDEFINE_MANAGED_SAVE
                     | libvirt.VIR_DOMAIN_UNDEFINE_SNAPSHOTS_METADATA
                 )
@@ -311,7 +318,7 @@ class LibvirtVM:
 
             # Wait for VM to be running
             timeout = 10
-            start_time = time.time()
+            start_time: float = time.time()
             while True:
                 state, _ = dom.state()
                 if state == libvirt.VIR_DOMAIN_RUNNING:
@@ -324,12 +331,14 @@ class LibvirtVM:
         finally:
             conn.close()
 
-    def stop(self):
+    def stop(self) -> None:
         """Suspend the VM (keep memory for fast resume)."""
         try:
-            conn = self._get_conn()
+            conn: libvirt.virConnect = self._get_conn()
             try:
-                dom = conn.lookupByName(self.config.name)
+                dom: libvirt.virDomain[libvirt.virConnect] = conn.lookupByName(
+                    self.config.name
+                )
             except libvirt.libvirtError:
                 return
             state, _ = dom.state()
@@ -341,12 +350,14 @@ class LibvirtVM:
             except Exception:
                 pass
 
-    def destroy(self):
+    def destroy(self) -> None:
         """Permanently delete the VM and its data."""
-        conn = self._get_conn()
+        conn: libvirt.virConnect = self._get_conn()
         try:
             try:
-                dom = conn.lookupByName(self.config.name)
+                dom: libvirt.virDomain[libvirt.virConnect] = conn.lookupByName(
+                    self.config.name
+                )
             except libvirt.libvirtError:
                 dom = None
 
@@ -355,7 +366,7 @@ class LibvirtVM:
                 if state == libvirt.VIR_DOMAIN_RUNNING:
                     dom.destroy()
                 # Use flags to handle managed save images and snapshots
-                undefine_flags = (
+                undefine_flags: int = (
                     libvirt.VIR_DOMAIN_UNDEFINE_MANAGED_SAVE
                     | libvirt.VIR_DOMAIN_UNDEFINE_SNAPSHOTS_METADATA
                 )
@@ -389,9 +400,11 @@ class LibvirtVM:
     def is_running(self) -> bool:
         """Check if VM is running."""
         try:
-            conn = self._get_conn()
+            conn: libvirt.virConnect = self._get_conn()
             try:
-                dom = conn.lookupByName(self.config.name)
+                dom: libvirt.virDomain[libvirt.virConnect] = conn.lookupByName(
+                    self.config.name
+                )
             except libvirt.libvirtError:
                 return False
             state, _ = dom.state()
@@ -406,10 +419,12 @@ class LibvirtVM:
 
     def get_info(self) -> dict:
         """Get VM information."""
-        conn = self._get_conn()
+        conn: libvirt.virConnect = self._get_conn()
         try:
             try:
-                dom = conn.lookupByName(self.config.name)
+                dom: libvirt.virDomain[libvirt.virConnect] = conn.lookupByName(
+                    self.config.name
+                )
             except libvirt.libvirtError:
                 return {"state": "undefined"}
 
@@ -432,15 +447,15 @@ class LibvirtVM:
 
     def _get_conn(self) -> libvirt.virConnect:
         """Open a libvirt connection (session by default)."""
-        uri = os.environ.get("NETSIM_LIBVIRT_URI", "qemu:///session")
-        conn = libvirt.open(uri)
+        uri: str = os.environ.get("NETSIM_LIBVIRT_URI", "qemu:///session")
+        conn: libvirt.virConnect = libvirt.open(uri)
         if conn is None:
             raise RuntimeError(f"Failed to open libvirt connection to {uri}")
         return conn
 
     @staticmethod
     def _state_to_str(state: int) -> str:
-        mapping = {
+        mapping: dict[int, str] = {
             libvirt.VIR_DOMAIN_NOSTATE: "nostate",
             libvirt.VIR_DOMAIN_RUNNING: "running",
             libvirt.VIR_DOMAIN_BLOCKED: "blocked",

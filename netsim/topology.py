@@ -4,6 +4,7 @@
 Topology definition and parsing from YAML.
 """
 
+
 import yaml
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Any, Union
@@ -70,7 +71,7 @@ class TopologyParser:
     def _parse(data: Dict[str, Any]) -> Topology:
         """Parse topology dictionary."""
         # Parse networks
-        networks = []
+        networks: List[Network] = []
         for net_data in data.get("networks", []):
             networks.append(
                 Network(
@@ -82,10 +83,10 @@ class TopologyParser:
             )
 
         # Parse nodes
-        nodes = []
+        nodes: List[Node] = []
         for node_data in data.get("nodes", []):
             # Get list of network names this node connects to
-            node_networks = node_data.get("networks", [])
+            node_networks: List[str] = node_data.get("networks", [])
 
             nodes.append(
                 Node(
@@ -110,7 +111,7 @@ class TopologyParser:
     @staticmethod
     def _validate(networks: List[Network], nodes: List[Node]) -> None:
         """Validate topology consistency."""
-        network_names = {n.name for n in networks}
+        network_names: set = {n.name for n in networks}
 
         for node in nodes:
             for net_name in node.networks:

@@ -11,11 +11,11 @@ GraphQLPolicyClient for the policy-engine.
 import json
 import logging
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from tests.node import Node
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 _CONTROLLER_URL = "http://127.0.0.1:8443/graphql"
 
@@ -54,26 +54,28 @@ class ControllerClient:
     consistent with the netsim test infrastructure pattern.
     """
 
-    def __init__(self, node: Node, url: str = _CONTROLLER_URL):
-        self.node = node
-        self.url = url
+    def __init__(self, node: Node, url: str = _CONTROLLER_URL) -> None:
+        self.node: Node = node
+        self.url: str = url
 
     def _execute(self, query: str, variables: Optional[dict] = None) -> dict:
         """Run a GraphQL query/mutation via curl on the controller VM."""
-        payload = {"query": query}
+        payload: dict[str, Any] = {"query": query}
         if variables:
             payload["variables"] = variables
 
-        payload_json = json.dumps(payload)
+        payload_json: str = json.dumps(payload)
         logger.debug(f"[controller] GraphQL: {query[:80]}...")
 
+        cmd: str
+        output: str
         if len(payload_json) > 10000:
             cmd = (
                 f"curl -s -X POST -H 'Content-Type: application/json' -d @- {self.url}"
             )
             output = self.node.ssh_command_with_stdin(cmd, payload_json, timeout=30)
         else:
-            payload_escaped = payload_json.replace("'", "'\\''")
+            payload_escaped: str = payload_json.replace("'", "'\\''")
             cmd = (
                 f"curl -s -X POST -H 'Content-Type: application/json' "
                 f"-d '{payload_escaped}' {self.url}"
@@ -369,7 +371,7 @@ class ControllerClient:
     def is_healthy(self) -> bool:
         """Return True if the controller HTTP API is responding."""
         try:
-            out = self.node.ssh_command(
+            out: str = self.node.ssh_command(
                 "curl -s -o /dev/null -w '%{http_code}' "
                 "--max-time 2 http://127.0.0.1:8443/health 2>/dev/null || true",
                 timeout=10,

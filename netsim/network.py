@@ -9,7 +9,7 @@ import re
 import os
 import getpass
 import pwd
-from typing import List
+from typing import Any, List
 
 
 class NetworkManager:
@@ -26,7 +26,7 @@ class NetworkManager:
             sudo: Whether sudo has been attempted (internal use)
             ignore_exists: If True, ignore "File exists" errors
         """
-        cmd_to_run = ["sudo"] + cmd if sudo else cmd
+        cmd_to_run: List[str] = ["sudo"] + cmd if sudo else cmd
 
         try:
             subprocess.run(cmd_to_run, check=True, capture_output=True)
@@ -51,18 +51,18 @@ class NetworkManager:
           to keep permissions tight.
         - Allow override via NETSIM_TAP_USER for custom setups.
         """
-        override = os.environ.get("NETSIM_TAP_USER")
+        override: str | None = os.environ.get("NETSIM_TAP_USER")
         if override:
             return override
 
         try:
-            uri_result = subprocess.run(
+            uri_result: subprocess.CompletedProcess[str] = subprocess.run(
                 ["virsh", "uri"],
                 capture_output=True,
                 text=True,
                 timeout=3,
             )
-            uri = uri_result.stdout.strip()
+            uri: str = uri_result.stdout.strip()
         except Exception:
             uri = ""
 
@@ -104,7 +104,7 @@ class NetworkManager:
                     return
         except OSError:
             return
-        nft = next(
+        nft: str | None = next(
             (p for p in ["/usr/sbin/nft", "/sbin/nft", "nft"] if os.path.isfile(p)),
             None,
         )
@@ -112,7 +112,7 @@ class NetworkManager:
             return
         try:
             # Check if ip filter FORWARD chain exists (created by Docker/libvirt)
-            result = subprocess.run(
+            result: subprocess.CompletedProcess[bytes] = subprocess.run(
                 [nft, "list", "chain", "ip", "filter", "FORWARD"],
                 capture_output=True,
             )
@@ -150,20 +150,20 @@ class NetworkManager:
     def create_tap(name: str) -> str:
         """Create a tap interface and return its name."""
         try:
-            tap_owner = NetworkManager._detect_tap_owner()
+            tap_owner: str = NetworkManager._detect_tap_owner()
 
             # Check if tap already exists
-            result = subprocess.run(
+            result: subprocess.CompletedProcess[str] = subprocess.run(
                 ["ip", "link", "show", name], capture_output=True, text=True
             )
             if result.returncode == 0:
                 # Interface already exists; ensure ownership matches the expected tap owner
-                detail = subprocess.run(
+                detail: subprocess.CompletedProcess[str] = subprocess.run(
                     ["ip", "-d", "link", "show", name], capture_output=True, text=True
                 )
-                detail_out = detail.stdout + detail.stderr
-                owner_match = re.search(r"user (\S+)", detail_out)
-                current_owner = owner_match.group(1) if owner_match else ""
+                detail_out: str = detail.stdout + detail.stderr
+                owner_match: re.Match[str] | None = re.search(r"user (\S+)", detail_out)
+                current_owner: str | Any = owner_match.group(1) if owner_match else ""
 
                 if current_owner and current_owner != tap_owner:
                     # Recreate with correct owner so QEMU can open it
@@ -222,7 +222,7 @@ class NetworkManager:
     def bridge_exists(name: str) -> bool:
         """Check if bridge exists."""
         try:
-            result = subprocess.run(
+            result: subprocess.CompletedProcess[bytes] = subprocess.run(
                 ["ip", "link", "show", name], check=True, capture_output=True
             )
             return "bridge" in result.stdout.decode()
@@ -233,7 +233,7 @@ class NetworkManager:
     def get_existing_bridges() -> List[str]:
         """Get list of existing bridges."""
         try:
-            result = subprocess.run(
+            result: subprocess.CompletedProcess[bytes] = subprocess.run(
                 ["ip", "link", "show", "type", "bridge"],
                 check=True,
                 capture_output=True,
@@ -241,7 +241,7 @@ class NetworkManager:
             bridges = []
             for line in result.stdout.decode().split("\n"):
                 # Lines like "2: br0: <BROADCAST,MULTICAST,UP,LOWER_UP>..."
-                match = re.match(r"\d+:\s+(\w+):", line)
+                match: re.Match[str] | None = re.match(r"\d+:\s+(\w+):", line)
                 if match:
                     bridges.append(match.group(1))
             return bridges

@@ -38,10 +38,7 @@ jobs:
           key: poetry-${{ runner.os }}-${{ hashFiles('poetry.lock') }}
 
       - name: Install dependencies
-        run: poetry install --no-interaction
+        run: poetry install --no-interaction --with dev
 
-      - name: Ruff lint
-        run: poetry run ruff check netsim/ tests/
-
-      - name: Mypy type check
-        run: poetry run mypy netsim/
+      - name: Linting + Type checking
+        run: make lint-all

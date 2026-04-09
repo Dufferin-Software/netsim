@@ -19,6 +19,8 @@ mypy = "^1.19.1"
 types-pyyaml = "^6.0.12.20250915"
 pytest = "^7.0"
 paramiko = "^3.0"
+types-paramiko = "*"
+types-netaddr = "*"
 
 [tool.poetry.scripts]
 netsim = "netsim.cli:main"

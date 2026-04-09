@@ -15,14 +15,21 @@ can be excluded during fast pre-merge runs with: -m "not slow".
 
 import logging
 import time
+from typing import List
 
 import pytest
 
-from lib.policy_engine.engine.cli.client import AddRuleOptions, WeeklyWindow
+from lib.policy_engine.engine.cli.client import (
+    AddRuleOptions,
+    LpmRule,
+    ManagedRule,
+    OperationResult,
+    WeeklyWindow,
+)
 from lib.policy_engine.engine.graphql.client import GraphQLPolicyClient
-from tests.nping_utils import send_ping
+from tests.nping_utils import NpingResult, send_ping
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 # How long to wait for a scheduler tick to process an expired TTL rule.
 # Scheduler runs every 30 s; add 15 s margin.
@@ -57,55 +64,55 @@ class TestTTLRuleRegistry:
 
     def test_ttl_rule_appears_in_managed_rules(
         self, graphql_client: GraphQLPolicyClient, attached_ingress, clean_ingress_rules
-    ):
+    ) -> None:
         """A rule added with expiresAfterSecs must appear in managedRules."""
-        opts = _drop_rule(rule_id=9001, expires_after_secs=3600)
-        result = graphql_client.add_rule(opts, direction="ingress")
+        opts: AddRuleOptions = _drop_rule(rule_id=9001, expires_after_secs=3600)
+        result: OperationResult = graphql_client.add_rule(opts, direction="ingress")
         assert result.success, result.message
 
-        managed = graphql_client.managed_rules(direction="ingress")
-        ids = [r.rule_id for r in managed]
+        managed: List[ManagedRule] = graphql_client.managed_rules(direction="ingress")
+        ids: list[int] = [r.rule_id for r in managed]
         assert 9001 in ids, f"Rule 9001 not in managedRules: {ids}"
 
-        mr = next(r for r in managed if r.rule_id == 9001)
+        mr: ManagedRule = next(r for r in managed if r.rule_id == 9001)
         assert mr.rule_state == "active"
         assert mr.expires_at_ms is not None
         assert mr.schedule_windows is None
 
     def test_ttl_rule_active_in_bpf(
         self, graphql_client: GraphQLPolicyClient, attached_ingress, clean_ingress_rules
-    ):
+    ) -> None:
         """A TTL rule must be in the live BPF map (visible via list_rules)."""
-        opts = _drop_rule(rule_id=9002, expires_after_secs=3600)
+        opts: AddRuleOptions = _drop_rule(rule_id=9002, expires_after_secs=3600)
         graphql_client.add_rule(opts, direction="ingress")
 
-        rules = graphql_client.list_rules(direction="ingress")
-        ids = [r.rule_id for r in rules]
+        rules: List[LpmRule] = graphql_client.list_rules(direction="ingress")
+        ids: list[int] = [r.rule_id for r in rules]
         assert 9002 in ids, f"Rule 9002 not in list_rules: {ids}"
 
     def test_permanent_rule_not_in_managed_rules(
         self, graphql_client: GraphQLPolicyClient, attached_ingress, clean_ingress_rules
-    ):
+    ) -> None:
         """A plain (permanent) rule must NOT appear in managedRules."""
-        opts = _drop_rule(rule_id=9003)
+        opts: AddRuleOptions = _drop_rule(rule_id=9003)
         graphql_client.add_rule(opts, direction="ingress")
 
-        managed = graphql_client.managed_rules(direction="ingress")
-        ids = [r.rule_id for r in managed]
+        managed: List[ManagedRule] = graphql_client.managed_rules(direction="ingress")
+        ids: list[int] = [r.rule_id for r in managed]
         assert 9003 not in ids, "Permanent rule should not be in managedRules"
 
     def test_ttl_rule_validation_zero_ttl(
         self, graphql_client: GraphQLPolicyClient, attached_ingress
-    ):
+    ) -> None:
         """expiresAfterSecs=0 must be rejected by the server."""
-        opts = _drop_rule(rule_id=9004, expires_after_secs=0)
-        result = graphql_client.add_rule(opts, direction="ingress")
+        opts: AddRuleOptions = _drop_rule(rule_id=9004, expires_after_secs=0)
+        result: OperationResult = graphql_client.add_rule(opts, direction="ingress")
         assert not result.success, "Zero TTL should fail"
         assert "positive" in result.message.lower() or "0" in result.message
 
     def test_ttl_rule_validation_both_ttl_and_schedule(
         self, graphql_client: GraphQLPolicyClient, attached_ingress
-    ):
+    ) -> None:
         """Setting both expiresAfterSecs and schedule windows must be rejected."""
         opts = AddRuleOptions(
             src="0.0.0.0/0",
@@ -114,7 +121,7 @@ class TestTTLRuleRegistry:
             expires_after_secs=60,
             schedule_windows=[WeeklyWindow(0, 0, 0, 6, 23, 59)],
         )
-        result = graphql_client.add_rule(opts, direction="ingress")
+        result: OperationResult = graphql_client.add_rule(opts, direction="ingress")
         assert not result.success, "Both TTL and schedule should be mutually exclusive"
         assert (
             "exclusive" in result.message.lower()
@@ -123,41 +130,45 @@ class TestTTLRuleRegistry:
 
     def test_delete_ttl_rule_removes_from_managed_rules(
         self, graphql_client: GraphQLPolicyClient, attached_ingress, clean_ingress_rules
-    ):
+    ) -> None:
         """Manually deleting a TTL rule must remove it from managedRules."""
-        opts = _drop_rule(rule_id=9005, expires_after_secs=3600)
+        opts: AddRuleOptions = _drop_rule(rule_id=9005, expires_after_secs=3600)
         graphql_client.add_rule(opts, direction="ingress")
 
-        managed_before = graphql_client.managed_rules(direction="ingress")
+        managed_before: List[ManagedRule] = graphql_client.managed_rules(
+            direction="ingress"
+        )
         assert any(r.rule_id == 9005 for r in managed_before)
 
         graphql_client.delete_rule(rule_id=9005, direction="ingress")
 
-        managed_after = graphql_client.managed_rules(direction="ingress")
+        managed_after: List[ManagedRule] = graphql_client.managed_rules(
+            direction="ingress"
+        )
         assert not any(r.rule_id == 9005 for r in managed_after), (
             "Deleted TTL rule should be removed from managedRules"
         )
 
     def test_expires_at_ms_is_in_the_future(
         self, graphql_client: GraphQLPolicyClient, attached_ingress, clean_ingress_rules
-    ):
+    ) -> None:
         """The expiresAtMs timestamp must be in the future relative to now."""
-        opts = _drop_rule(rule_id=9006, expires_after_secs=3600)
+        opts: AddRuleOptions = _drop_rule(rule_id=9006, expires_after_secs=3600)
         graphql_client.add_rule(opts, direction="ingress")
 
-        managed = graphql_client.managed_rules(direction="ingress")
-        mr = next((r for r in managed if r.rule_id == 9006), None)
+        managed: List[ManagedRule] = graphql_client.managed_rules(direction="ingress")
+        mr: ManagedRule | None = next((r for r in managed if r.rule_id == 9006), None)
         assert mr is not None
         now_ms = int(time.time() * 1000)
-        assert mr.expires_at_ms > now_ms, (
+        assert mr.expires_at_ms is not None and mr.expires_at_ms > now_ms, (
             f"expiresAtMs {mr.expires_at_ms} is not in the future (now={now_ms})"
         )
 
     def test_cli_ttl_rule_appears_in_managed_rules(
         self, cli_client, attached_ingress, clean_ingress_rules
-    ):
+    ) -> None:
         """CLI: --expires-after-secs must be reflected in 'rule managed-rules'."""
-        opts = _drop_rule(rule_id=9007, expires_after_secs=3600)
+        opts: AddRuleOptions = _drop_rule(rule_id=9007, expires_after_secs=3600)
         result = cli_client.add_rule(opts, direction="ingress")
         assert result.success, result.message
 
@@ -181,13 +192,13 @@ class TestTTLRuleExpiry:
 
     def test_ttl_rule_removed_from_bpf_after_expiry(
         self, graphql_client: GraphQLPolicyClient, attached_ingress, clean_ingress_rules
-    ):
+    ) -> None:
         """After expiry the rule must disappear from the live BPF map."""
-        opts = _drop_rule(rule_id=9010, expires_after_secs=5)
+        opts: AddRuleOptions = _drop_rule(rule_id=9010, expires_after_secs=5)
         graphql_client.add_rule(opts, direction="ingress")
 
         # Confirm it is active immediately
-        rules_before = graphql_client.list_rules(direction="ingress")
+        rules_before: List[LpmRule] = graphql_client.list_rules(direction="ingress")
         assert any(r.rule_id == 9010 for r in rules_before), (
             "Rule should be active in BPF immediately after add"
         )
@@ -195,22 +206,22 @@ class TestTTLRuleExpiry:
         logger.info(f"Waiting {_SCHEDULER_WAIT}s for TTL expiry + scheduler tick...")
         time.sleep(_SCHEDULER_WAIT)
 
-        rules_after = graphql_client.list_rules(direction="ingress")
+        rules_after: List[LpmRule] = graphql_client.list_rules(direction="ingress")
         assert not any(r.rule_id == 9010 for r in rules_after), (
             "Rule 9010 should have been removed from BPF after TTL expiry"
         )
 
     def test_ttl_rule_removed_from_managed_rules_after_expiry(
         self, graphql_client: GraphQLPolicyClient, attached_ingress, clean_ingress_rules
-    ):
+    ) -> None:
         """After expiry the rule must disappear from managedRules too."""
-        opts = _drop_rule(rule_id=9011, expires_after_secs=5)
+        opts: AddRuleOptions = _drop_rule(rule_id=9011, expires_after_secs=5)
         graphql_client.add_rule(opts, direction="ingress")
 
         logger.info(f"Waiting {_SCHEDULER_WAIT}s for TTL expiry + scheduler tick...")
         time.sleep(_SCHEDULER_WAIT)
 
-        managed = graphql_client.managed_rules(direction="ingress")
+        managed: List[ManagedRule] = graphql_client.managed_rules(direction="ingress")
         assert not any(r.rule_id == 9011 for r in managed), (
             "Expired TTL rule should be removed from managedRules"
         )
@@ -224,7 +235,7 @@ class TestTTLRuleExpiry:
         nodes,
         server_ip_v4,
         client_ip_v4,
-    ):
+    ) -> None:
         """
         Traffic is blocked while a DROP TTL rule is active, and flows freely
         once the rule has expired and been removed by the scheduler.
@@ -232,7 +243,7 @@ class TestTTLRuleExpiry:
         client = nodes["client"]
 
         # Baseline: traffic should pass before adding any DROP rule
-        pre_result = send_ping(client, str(server_ip_v4), count=3)
+        pre_result: NpingResult = send_ping(client, str(server_ip_v4), count=3)
         assert pre_result.packets_received > 0, (
             "Baseline: ICMP should pass before DROP rule"
         )
@@ -246,11 +257,13 @@ class TestTTLRuleExpiry:
             rule_id=9012,
             expires_after_secs=5,
         )
-        result = graphql_client.add_rule(opts, direction="ingress")
+        result: OperationResult = graphql_client.add_rule(opts, direction="ingress")
         assert result.success, result.message
 
         # Traffic should be blocked
-        drop_result = send_ping(client, str(server_ip_v4), count=3, timeout=5)
+        drop_result: NpingResult = send_ping(
+            client, str(server_ip_v4), count=3, timeout=5
+        )
         assert drop_result.packets_received == 0, (
             "ICMP should be blocked by active TTL DROP rule"
         )
@@ -260,7 +273,7 @@ class TestTTLRuleExpiry:
         time.sleep(_SCHEDULER_WAIT)
 
         # Traffic should flow again
-        post_result = send_ping(client, str(server_ip_v4), count=3)
+        post_result: NpingResult = send_ping(client, str(server_ip_v4), count=3)
         assert post_result.packets_received > 0, (
             "ICMP should pass after TTL DROP rule has expired"
         )

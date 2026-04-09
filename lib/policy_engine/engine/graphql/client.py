@@ -9,7 +9,7 @@ but communicates directly with the GraphQL API instead of using the CLI.
 
 import json
 import logging
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from tests.node import Node
 from lib.policy_engine.engine.cli.client import (
@@ -35,9 +35,10 @@ from lib.policy_engine.engine.cli.client import (
     RuleWithStats,
     ServerFeatures,
     ServerStatus,
+    WeeklyWindow,
 )
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class GraphQLPolicyClient:
@@ -54,7 +55,7 @@ class GraphQLPolicyClient:
         server_url: str = "http://127.0.0.1:8080/graphql",
         tls_ca_cert: Optional[str] = None,
         tls_insecure: bool = False,
-    ):
+    ) -> None:
         """
         Initialize the GraphQL policy client wrapper.
 
@@ -64,10 +65,10 @@ class GraphQLPolicyClient:
             tls_ca_cert: Path (on the remote node) to a PEM CA cert to trust
             tls_insecure: Skip TLS certificate verification (dev only)
         """
-        self.node = node
-        self.server_url = server_url
-        self.tls_ca_cert = tls_ca_cert
-        self.tls_insecure = tls_insecure
+        self.node: Node = node
+        self.server_url: str = server_url
+        self.tls_ca_cert: str | None = tls_ca_cert
+        self.tls_insecure: bool = tls_insecure
 
     def _execute_graphql(self, query: str, variables: Optional[dict] = None) -> dict:
         """
@@ -83,27 +84,29 @@ class GraphQLPolicyClient:
         Raises:
             ValueError: If GraphQL returns errors
         """
-        payload = {"query": query}
+        payload: dict[str, Any] = {"query": query}
         if variables:
             payload["variables"] = variables
 
-        payload_json = json.dumps(payload)
+        payload_json: str = json.dumps(payload)
         logger.debug(f"[{self.node.name}] GraphQL: {query[:100]}...")
 
-        tls_flags = ""
+        tls_flags: str = ""
         if self.tls_ca_cert:
             tls_flags = f"--cacert {self.tls_ca_cert}"
         elif self.tls_insecure:
             tls_flags = "-k"
 
         # Use stdin for large payloads to avoid command-line length limits
+        cmd: str
+        output: str
         if len(payload_json) > 10000:
             # Use curl with stdin (-d @-)
             cmd = f"curl -s {tls_flags} -X POST -H 'Content-Type: application/json' -d @- {self.server_url}"
             output = self.node.ssh_command_with_stdin(cmd, payload_json, timeout=30)
         else:
             # For small payloads, use command line (simpler)
-            payload_escaped = payload_json.replace("'", "'\\''")  # Escape single quotes
+            payload_escaped: str = payload_json.replace("'", "'\\''")  # Escape single quotes
             cmd = f"curl -s {tls_flags} -X POST -H 'Content-Type: application/json' -d '{payload_escaped}' {self.server_url}"
             output = self.node.ssh_command(cmd, timeout=30)
 
@@ -190,7 +193,7 @@ class GraphQLPolicyClient:
             }
         }
         """
-        variables = {
+        variables: dict[str, dict[str, str]] = {
             "input": {
                 "interface": interface,
                 "mode": mode.value,
@@ -225,7 +228,7 @@ class GraphQLPolicyClient:
             }
         }
         """
-        variables = {"input": {"interface": interface}}
+        variables: dict[str, dict[str, str]] = {"input": {"interface": interface}}
         data = self._execute_graphql(mutation, variables)
 
         if "__error__" in data:
@@ -255,7 +258,7 @@ class GraphQLPolicyClient:
             }
         }
         """
-        variables = {"input": {"interface": interface}}
+        variables: dict[str, dict[str, str]] = {"input": {"interface": interface}}
         data = self._execute_graphql(mutation, variables)
 
         if "__error__" in data:
@@ -285,7 +288,7 @@ class GraphQLPolicyClient:
             }
         }
         """
-        variables = {"input": {"interface": interface}}
+        variables: dict[str, dict[str, str]] = {"input": {"interface": interface}}
         data = self._execute_graphql(mutation, variables)
 
         if "__error__" in data:
@@ -355,7 +358,7 @@ class GraphQLPolicyClient:
             action, priority = entry[0], entry[1]
             param_ms = entry[2] if len(entry) >= 3 else 0
             # Map action string to GraphQL enum value
-            action_map = {
+            action_map: dict[str, str] = {
                 "pass": "PASS",
                 "drop": "DROP",
                 "log": "LOG",
@@ -364,23 +367,23 @@ class GraphQLPolicyClient:
                 "tail_call": "TAIL_CALL",
                 "tailcall": "TAIL_CALL",
             }
-            gql_action = action_map.get(action.lower(), "PASS")
+            gql_action: str = action_map.get(action.lower(), "PASS")
             gql_actions.append(
                 {"action": gql_action, "priority": priority, "param": param_ms}
             )
 
         # Map protocol string to GraphQL string value (server expects lowercase)
-        proto_map = {
+        proto_map: dict[str, str] = {
             "any": "any",
             "tcp": "tcp",
             "udp": "udp",
             "icmp": "icmp",
             "icmpv6": "icmp",  # Server auto-converts to icmpv6 for IPv6 rules
         }
-        gql_protocol = proto_map.get(options.protocol.lower(), "any")
+        gql_protocol: str = proto_map.get(options.protocol.lower(), "any")
 
         # Map direction string to GraphQL enum
-        gql_direction = "INGRESS" if direction == "ingress" else "EGRESS"
+        gql_direction: str = "INGRESS" if direction == "ingress" else "EGRESS"
 
         input_data = {
             "direction": gql_direction,
@@ -451,7 +454,7 @@ class GraphQLPolicyClient:
             }
         }
         """
-        gql_direction = "INGRESS" if direction == "ingress" else "EGRESS"
+        gql_direction: str = "INGRESS" if direction == "ingress" else "EGRESS"
         data = self._execute_graphql(query, {"direction": gql_direction})
         if "__error__" in data:
             return []
@@ -493,7 +496,7 @@ class GraphQLPolicyClient:
         """
 
         # Map action string to GraphQL enum value
-        action_map = {
+        action_map: dict[str, str] = {
             "pass": "PASS",
             "drop": "DROP",
             "log": "LOG",
@@ -504,7 +507,7 @@ class GraphQLPolicyClient:
         }
 
         # Map protocol string to GraphQL string value (server expects lowercase)
-        proto_map = {
+        proto_map: dict[str, str] = {
             "any": "any",
             "tcp": "tcp",
             "udp": "udp",
@@ -513,7 +516,7 @@ class GraphQLPolicyClient:
         }
 
         # Map direction string to GraphQL enum
-        gql_direction = "INGRESS" if direction == "ingress" else "EGRESS"
+        gql_direction: str = "INGRESS" if direction == "ingress" else "EGRESS"
 
         gql_rules = []
         for options in rules:
@@ -522,12 +525,12 @@ class GraphQLPolicyClient:
             for entry in options.actions:
                 action, priority = entry[0], entry[1]
                 param_ms = entry[2] if len(entry) >= 3 else 0
-                gql_action = action_map.get(action.lower(), "PASS")
+                gql_action: str = action_map.get(action.lower(), "PASS")
                 gql_actions.append(
                     {"action": gql_action, "priority": priority, "param": param_ms}
                 )
 
-            gql_protocol = proto_map.get(options.protocol.lower(), "any")
+            gql_protocol: str = proto_map.get(options.protocol.lower(), "any")
 
             input_data = {
                 "direction": gql_direction,
@@ -602,7 +605,7 @@ class GraphQLPolicyClient:
         """
 
         # Map direction string to GraphQL enum
-        gql_direction = "INGRESS" if direction == "ingress" else "EGRESS"
+        gql_direction: str = "INGRESS" if direction == "ingress" else "EGRESS"
 
         gql_rules = []
         for i, rid in enumerate(ids):
@@ -659,9 +662,9 @@ class GraphQLPolicyClient:
         """
 
         # Map direction string to GraphQL enum
-        gql_direction = "INGRESS" if direction == "ingress" else "EGRESS"
+        gql_direction: str = "INGRESS" if direction == "ingress" else "EGRESS"
 
-        input_data = {"direction": gql_direction}
+        input_data: dict[str, Any] = {"direction": gql_direction}
         if rule_id is not None:
             input_data["id"] = str(rule_id)
         if src:
@@ -673,7 +676,7 @@ class GraphQLPolicyClient:
         if dport is not None:
             input_data["dport"] = dport
         if protocol:
-            proto_map = {
+            proto_map: dict[str, str] = {
                 "any": "any",
                 "tcp": "tcp",
                 "udp": "udp",
@@ -681,7 +684,7 @@ class GraphQLPolicyClient:
             }
             input_data["protocol"] = proto_map.get(protocol.lower(), "any")
 
-        variables = {"input": input_data}
+        variables: dict[str, dict[str, str]] = {"input": input_data}
         data = self._execute_graphql(mutation, variables)
 
         if "__error__" in data:
@@ -703,7 +706,7 @@ class GraphQLPolicyClient:
         Returns:
             List of LpmRule objects
         """
-        gql_direction = "INGRESS" if direction == "ingress" else "EGRESS"
+        gql_direction: str = "INGRESS" if direction == "ingress" else "EGRESS"
 
         query = """
         query ListRules($direction: GqlDirection!) {
@@ -736,7 +739,7 @@ class GraphQLPolicyClient:
         for r in rules_data:
             # Convert GraphQL protocol enum to Protocol enum
             proto_str = r.get("protocol", "ANY")
-            protocol = Protocol.from_string(proto_str)
+            protocol: Protocol = Protocol.from_string(proto_str)
 
             # Convert actions
             actions = []
@@ -783,7 +786,7 @@ class GraphQLPolicyClient:
         Returns:
             OperationResult indicating success/failure
         """
-        gql_direction = "INGRESS" if direction == "ingress" else "EGRESS"
+        gql_direction: str = "INGRESS" if direction == "ingress" else "EGRESS"
 
         mutation = """
         mutation FlushRules($direction: GqlDirection!) {
@@ -852,7 +855,7 @@ class GraphQLPolicyClient:
         Returns:
             InterfaceStats object
         """
-        gql_direction = "INGRESS" if direction == "ingress" else "EGRESS"
+        gql_direction: str = "INGRESS" if direction == "ingress" else "EGRESS"
 
         query = """
         query GetStats($interface: String!, $direction: GqlDirection!) {
@@ -889,7 +892,7 @@ class GraphQLPolicyClient:
             }
         }
         """
-        variables = {"interface": interface, "direction": gql_direction}
+        variables: dict[str, str] = {"interface": interface, "direction": gql_direction}
         data = self._execute_graphql(query, variables)
 
         if "__error__" in data:
@@ -943,7 +946,7 @@ class GraphQLPolicyClient:
             fib_fallback_packets=stats_data.get("fibFallbackPackets", 0),
         )
 
-        ethertype_stats = [
+        ethertype_stats: List[EthertypeStats] = [
             EthertypeStats(
                 ethertype=e.get("ethertype", 0),
                 ethertype_hex="",
@@ -973,7 +976,7 @@ class GraphQLPolicyClient:
         Returns:
             RuleStatsResponse object
         """
-        gql_direction = "INGRESS" if direction == "ingress" else "EGRESS"
+        gql_direction: str = "INGRESS" if direction == "ingress" else "EGRESS"
 
         if rule_id is not None:
             # Get stats for specific rule - note: ruleId is required (not optional)
@@ -1047,7 +1050,7 @@ class GraphQLPolicyClient:
 
             # Convert rule data
             proto_str = r.get("protocol", "ANY")
-            protocol = Protocol.from_string(proto_str)
+            protocol: Protocol = Protocol.from_string(proto_str)
 
             actions = []
             for a in r.get("actions", []):
@@ -1101,7 +1104,7 @@ class GraphQLPolicyClient:
         self, rule_id: int, direction: str = "ingress"
     ) -> Optional[dict]:
         """Get stats for a single rule."""
-        gql_direction = "INGRESS" if direction == "ingress" else "EGRESS"
+        gql_direction: str = "INGRESS" if direction == "ingress" else "EGRESS"
 
         query = """
         query GetRuleStats($ruleId: String!, $direction: GqlDirection!) {
@@ -1112,7 +1115,7 @@ class GraphQLPolicyClient:
             }
         }
         """
-        variables = {"ruleId": str(rule_id), "direction": gql_direction}
+        variables: dict[str, str] = {"ruleId": str(rule_id), "direction": gql_direction}
         data = self._execute_graphql(query, variables)
         return data.get("ruleStats")
 
@@ -1142,16 +1145,16 @@ class GraphQLPolicyClient:
         }
         """
         # Map action to GraphQL enum
-        action_map = {
+        action_map: dict[PolicyAction, str] = {
             PolicyAction.PASS: "PASS",
             PolicyAction.DROP: "DROP",
             PolicyAction.LOG: "LOG",
             PolicyAction.NAT: "NAT",
         }
-        gql_action = action_map.get(action, "PASS")
-        gql_direction = "INGRESS" if direction == "ingress" else "EGRESS"
+        gql_action: str = action_map.get(action, "PASS")
+        gql_direction: str = "INGRESS" if direction == "ingress" else "EGRESS"
 
-        variables = {"input": {"action": gql_action, "direction": gql_direction}}
+        variables: dict[str, dict[str, str]] = {"input": {"action": gql_action, "direction": gql_direction}}
         data = self._execute_graphql(mutation, variables)
 
         if "__error__" in data:
@@ -1185,7 +1188,7 @@ class GraphQLPolicyClient:
             }
         }
         """
-        gql_direction = "INGRESS" if direction == "ingress" else "EGRESS"
+        gql_direction: str = "INGRESS" if direction == "ingress" else "EGRESS"
         variables = {
             "input": {"slot": slot, "program": program, "direction": gql_direction}
         }
@@ -1217,7 +1220,7 @@ class GraphQLPolicyClient:
         Returns:
             OperationResult indicating success/failure
         """
-        gql_direction = "INGRESS" if direction == "ingress" else "EGRESS"
+        gql_direction: str = "INGRESS" if direction == "ingress" else "EGRESS"
 
         mutation = """
         mutation ClearGlobalStats($interface: String!, $direction: GqlDirection!) {
@@ -1227,7 +1230,7 @@ class GraphQLPolicyClient:
             }
         }
         """
-        variables = {"interface": interface, "direction": gql_direction}
+        variables: dict[str, str] = {"interface": interface, "direction": gql_direction}
         data = self._execute_graphql(mutation, variables)
 
         if "__error__" in data:
@@ -1252,7 +1255,7 @@ class GraphQLPolicyClient:
         Returns:
             OperationResult indicating success/failure
         """
-        gql_direction = "INGRESS" if direction == "ingress" else "EGRESS"
+        gql_direction: str = "INGRESS" if direction == "ingress" else "EGRESS"
 
         mutation = """
         mutation ClearInterfaceStats($interface: String!, $direction: GqlDirection!) {
@@ -1262,7 +1265,7 @@ class GraphQLPolicyClient:
             }
         }
         """
-        variables = {"interface": interface, "direction": gql_direction}
+        variables: dict[str, str] = {"interface": interface, "direction": gql_direction}
         data = self._execute_graphql(mutation, variables)
 
         if "__error__" in data:
@@ -1287,7 +1290,7 @@ class GraphQLPolicyClient:
         Returns:
             OperationResult indicating success/failure
         """
-        gql_direction = "INGRESS" if direction == "ingress" else "EGRESS"
+        gql_direction: str = "INGRESS" if direction == "ingress" else "EGRESS"
 
         if rule_id is not None:
             mutation = """
@@ -1298,7 +1301,7 @@ class GraphQLPolicyClient:
                 }
             }
             """
-            variables = {"ruleId": str(rule_id), "direction": gql_direction}
+            variables: dict[str, str] = {"ruleId": str(rule_id), "direction": gql_direction}
             data = self._execute_graphql(mutation, variables)
 
             if "__error__" in data:
@@ -1339,7 +1342,7 @@ class GraphQLPolicyClient:
         Returns:
             OperationResult indicating success/failure
         """
-        gql_direction = "INGRESS" if direction == "ingress" else "EGRESS"
+        gql_direction: str = "INGRESS" if direction == "ingress" else "EGRESS"
 
         mutation = """
         mutation ClearEthertypeStats($interface: String!, $direction: GqlDirection!) {
@@ -1349,7 +1352,7 @@ class GraphQLPolicyClient:
             }
         }
         """
-        variables = {"interface": interface, "direction": gql_direction}
+        variables: dict[str, str] = {"interface": interface, "direction": gql_direction}
         data = self._execute_graphql(mutation, variables)
 
         if "__error__" in data:
@@ -1438,7 +1441,7 @@ class GraphQLPolicyClient:
         Args:
             mode: Inspect mode string ("ips" or "ids")
         """
-        gql_mode = mode.upper()
+        gql_mode: str = mode.upper()
         mutation = """
         mutation ConfigureInspect($input: ConfigureInspectInput!) {
             configureInspect(input: $input) {
@@ -1447,7 +1450,7 @@ class GraphQLPolicyClient:
             }
         }
         """
-        variables = {"input": {"mode": gql_mode}}
+        variables: dict[str, dict[str, str]] = {"input": {"mode": gql_mode}}
         data = self._execute_graphql(mutation, variables)
 
         if "__error__" in data:
@@ -1487,7 +1490,7 @@ class GraphQLPolicyClient:
         Args:
             direction: Traffic direction ("ingress" or "egress")
         """
-        gql_direction = "INGRESS" if direction.lower() == "ingress" else "EGRESS"
+        gql_direction: str = "INGRESS" if direction.lower() == "ingress" else "EGRESS"
         query = """
         query FlowVerdicts($direction: GqlDirection!) {
             flowVerdicts(direction: $direction) {
@@ -1495,7 +1498,7 @@ class GraphQLPolicyClient:
             }
         }
         """
-        variables = {"direction": gql_direction}
+        variables: dict[str, str] = {"direction": gql_direction}
         data = self._execute_graphql(query, variables)
 
         if "__error__" in data:
@@ -1513,7 +1516,7 @@ class GraphQLPolicyClient:
         Args:
             direction: Traffic direction ("ingress" or "egress")
         """
-        gql_direction = "INGRESS" if direction.lower() == "ingress" else "EGRESS"
+        gql_direction: str = "INGRESS" if direction.lower() == "ingress" else "EGRESS"
         mutation = """
         mutation ClearFlowVerdicts($direction: GqlDirection!) {
             clearFlowVerdicts(direction: $direction) {
@@ -1522,7 +1525,7 @@ class GraphQLPolicyClient:
             }
         }
         """
-        variables = {"direction": gql_direction}
+        variables: dict[str, str] = {"direction": gql_direction}
         data = self._execute_graphql(mutation, variables)
 
         if "__error__" in data:
@@ -1553,7 +1556,7 @@ class GraphQLPolicyClient:
             }
         }
         """
-        variables = {"input": {"enabled": enabled}}
+        variables: dict[str, dict[str, bool]] = {"input": {"enabled": enabled}}
         data = self._execute_graphql(mutation, variables)
 
         if "__error__" in data:
@@ -1627,7 +1630,7 @@ class GraphQLPolicyClient:
             }
         }
         """
-        variables = {"input": {"rules": rules_text, "filename": filename}}
+        variables: dict[str, dict[str, str]] = {"input": {"rules": rules_text, "filename": filename}}
         data = self._execute_graphql(mutation, variables)
 
         if "__error__" in data:

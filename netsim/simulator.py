@@ -6,17 +6,18 @@ Main topology simulator orchestrating VMs and networks.
 
 import logging
 import shutil
+from subprocess import CompletedProcess
 import yaml
 import ipaddress
 from typing import Dict, Optional, List, Tuple
 from pathlib import Path
 
-from netsim.topology import Topology
+from netsim.topology import Network, Topology
 from netsim.vm import LibvirtVM, VMConfig
 from netsim.network import NetworkManager
 from netsim.images import ImageManager
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class SimulatorError(Exception):
@@ -33,7 +34,7 @@ class TopologySimulator:
         topology: Topology,
         runtime_dir: str = "/tmp/netsim",
         image_cache_dir: Optional[str] = None,
-    ):
+    ) -> None:
         """
         Initialize simulator.
 
@@ -42,8 +43,8 @@ class TopologySimulator:
             runtime_dir: Directory for VM runtime data
             image_cache_dir: Directory for image caching. Defaults to ~/.netsim/images
         """
-        self.topology = topology
-        self.runtime_dir = runtime_dir
+        self.topology: Topology = topology
+        self.runtime_dir: str = runtime_dir
         self.image_manager = ImageManager(cache_dir=image_cache_dir)
         self.vms: Dict[str, LibvirtVM] = {}
         self.tap_devices: Dict[
@@ -60,7 +61,7 @@ class TopologySimulator:
             str, int
         ] = {}  # Track current allocation index per network
 
-    def setup(self):
+    def setup(self) -> None:
         """Setup topology: create bridges, tap devices, configure VMs."""
         logger.info(f"Setting up topology: {self.topology.name}")
 
@@ -76,28 +77,28 @@ class TopologySimulator:
             self.cleanup()
             raise
 
-    def _setup_networks(self):
+    def _setup_networks(self) -> None:
         """Create bridges and tap interfaces for each network."""
         logger.info("Setting up networks...")
 
         for network in self.topology.networks:
-            bridge_name = f"br-{network.name}"
+            bridge_name: str = f"br-{network.name}"
             logger.debug(f"Creating bridge: {bridge_name}")
 
             NetworkManager.create_bridge(bridge_name, mtu=network.mtu)
             self.bridges[network.name] = bridge_name
 
             # Extract gateway IP from subnet (first usable address)
-            subnet_parts = network.subnet.split("/")
-            subnet_ip = subnet_parts[0]
-            prefix = subnet_parts[1] if len(subnet_parts) > 1 else "24"
+            subnet_parts: List[str] = network.subnet.split("/")
+            subnet_ip: str = subnet_parts[0]
+            prefix: str = subnet_parts[1] if len(subnet_parts) > 1 else "24"
 
             # Set bridge IP to gateway (.1)
-            gateway_cidr = self._get_gateway_cidr(subnet_ip, prefix)
+            gateway_cidr: str = self._get_gateway_cidr(subnet_ip, prefix)
             logger.debug(f"Setting bridge IP: {gateway_cidr}")
             NetworkManager.set_bridge_ip(bridge_name, gateway_cidr)
 
-    def _setup_vms(self):
+    def _setup_vms(self) -> None:
         """Create and configure VM instances."""
         logger.info("Setting up VMs...")
 
@@ -110,21 +111,21 @@ class TopologySimulator:
 
             for net_idx, net_name in enumerate(node.networks):
                 # Generate tap name (use index-based naming to keep it under 15 chars)
-                if_name = f"eth{net_idx}"
-                tap_name = f"tap{idx}{net_idx}"
+                if_name: str = f"eth{net_idx}"
+                tap_name: str = f"tap{idx}{net_idx}"
                 logger.debug(f"Creating tap interface: {tap_name} for {net_name}")
 
                 NetworkManager.create_tap(tap_name)
 
                 # Add to appropriate bridge
-                bridge_name = self.bridges[net_name]
+                bridge_name: str = self.bridges[net_name]
                 NetworkManager.bridge_tap(bridge_name, tap_name)
 
                 tap_devices.append(tap_name)
                 self.tap_devices[(node.name, net_idx)] = tap_name
 
                 # Auto-allocate IP from network
-                ip_cidr = self._allocate_ip(net_name)
+                ip_cidr: str = self._allocate_ip(net_name)
                 node_ifaces.append((net_name, ip_cidr))
                 logger.debug(f"Allocated {if_name}: {ip_cidr} on {net_name}")
 
@@ -132,11 +133,11 @@ class TopologySimulator:
 
             # Resolve image path (may download from cache)
             logger.debug(f"Resolving image for {node.name}: {node.image}")
-            image_path = self.image_manager.resolve_image(node.image)
+            image_path: str = self.image_manager.resolve_image(node.image)
             logger.info(f"Image resolved for {node.name}: {image_path}")
 
             # Generate per-node cloud-init ISO with hostname
-            cloudinit_iso = self._get_or_generate_cloudinit_iso(node.name)
+            cloudinit_iso: str = self._get_or_generate_cloudinit_iso(node.name)
 
             # Create VM configuration
             vm_config = VMConfig(
@@ -162,9 +163,9 @@ class TopologySimulator:
         Returns:
             Path to the cloud-init ISO file.
         """
-        iso_cache_dir = Path.home() / ".netsim" / "cloud-init"
+        iso_cache_dir: Path = Path.home() / ".netsim" / "cloud-init"
         iso_cache_dir.mkdir(parents=True, exist_ok=True)
-        iso_path = iso_cache_dir / f"cloud-init-{hostname}.iso"
+        iso_path: Path = iso_cache_dir / f"cloud-init-{hostname}.iso"
 
         if iso_path.exists():
             logger.debug(f"Using cached cloud-init ISO for {hostname}: {iso_path}")
@@ -177,11 +178,11 @@ class TopologySimulator:
             import tempfile
 
             # Read SSH public key
-            ssh_key_path = Path.home() / ".ssh" / "id_rsa.pub"
+            ssh_key_path: Path = Path.home() / ".ssh" / "id_rsa.pub"
             if not ssh_key_path.exists():
                 raise RuntimeError(f"SSH key not found at {ssh_key_path}")
 
-            ssh_key = ssh_key_path.read_text().strip()
+            ssh_key: str = ssh_key_path.read_text().strip()
             logger.debug(f"Using SSH key from {ssh_key_path}")
 
             # Create cloud-config YAML with hostname
@@ -200,22 +201,22 @@ class TopologySimulator:
                 ],
             }
 
-            cloud_config_yaml = yaml.dump(cloud_config, default_flow_style=False)
-            user_data = f"#cloud-config\n{cloud_config_yaml}"
+            cloud_config_yaml: str = yaml.dump(cloud_config, default_flow_style=False)
+            user_data: str = f"#cloud-config\n{cloud_config_yaml}"
 
             with tempfile.TemporaryDirectory() as tmpdir:
                 tmpdir_path = Path(tmpdir)
 
                 # Write cloud-init files
-                user_data_path = tmpdir_path / "user-data"
+                user_data_path: Path = tmpdir_path / "user-data"
                 user_data_path.write_text(user_data)
 
-                meta_data_path = tmpdir_path / "meta-data"
+                meta_data_path: Path = tmpdir_path / "meta-data"
                 meta_data_path.write_text("instance-id: netsim\n")
 
                 # Generate ISO using genisoimage or mkisofs
-                iso_tmp = tmpdir_path / "cloud-init.iso"
-                cmd = None
+                iso_tmp: Path = tmpdir_path / "cloud-init.iso"
+                cmd: List[str] | None = None
 
                 # Try genisoimage first, fall back to mkisofs
                 for tool in ["genisoimage", "mkisofs"]:
@@ -261,7 +262,7 @@ class TopologySimulator:
             logger.error(f"Failed to generate cloud-init ISO: {e}")
             raise
 
-    def start(self):
+    def start(self) -> None:
         """Start all VMs."""
         logger.info("Starting VMs...")
 
@@ -273,7 +274,7 @@ class TopologySimulator:
                 logger.error(f"Failed to start VM {node_name}: {e}")
                 raise
 
-    def stop(self):
+    def stop(self) -> None:
         """Suspend all VMs."""
         logger.info("Suspending VMs...")
 
@@ -284,7 +285,7 @@ class TopologySimulator:
             except Exception as e:
                 logger.error(f"Failed to suspend VM {node_name}: {e}")
 
-    def cleanup(self):
+    def cleanup(self) -> None:
         """Clean up all resources: VMs, taps, bridges."""
         logger.info("Cleaning up topology...")
 
@@ -314,7 +315,7 @@ class TopologySimulator:
 
         logger.info("Cleanup complete")
 
-    def destroy(self):
+    def destroy(self) -> None:
         """Fully tear down topology resources and remove runtime directory."""
         # Seed expected resources so cleanup removes them even if setup was never called
         if not self.bridges:
@@ -324,12 +325,12 @@ class TopologySimulator:
         if not self.tap_devices:
             for idx, node in enumerate(self.topology.nodes):
                 for iface_idx in range(len(node.networks)):
-                    tap_name = f"tap{idx}{iface_idx}"
+                    tap_name: str = f"tap{idx}{iface_idx}"
                     self.tap_devices[(node.name, iface_idx)] = tap_name
 
         if not self.vms:
             for idx, node in enumerate(self.topology.nodes):
-                image_path = ""
+                image_path: str = ""
                 if isinstance(node.image, str):
                     image_path = node.image
                 elif isinstance(node.image, dict):
@@ -370,7 +371,7 @@ class TopologySimulator:
             import subprocess
 
             try:
-                result = subprocess.run(
+                result: CompletedProcess[str] = subprocess.run(
                     ["virsh", "list", "--all", "--name"],
                     capture_output=True,
                     text=True,
@@ -387,13 +388,13 @@ class TopologySimulator:
                     if node.name in existing_vms:
                         # Query if it's running
                         try:
-                            state_result = subprocess.run(
+                            state_result: CompletedProcess[str] = subprocess.run(
                                 ["virsh", "domstate", node.name],
                                 capture_output=True,
                                 text=True,
                                 check=True,
                             )
-                            is_running = "running" in state_result.stdout.lower()
+                            is_running: bool = "running" in state_result.stdout.lower()
                             status[node.name] = is_running
                         except subprocess.CalledProcessError:
                             status[node.name] = False
@@ -409,7 +410,7 @@ class TopologySimulator:
     def _get_gateway_cidr(self, subnet_ip: str, prefix: str) -> str:
         """Convert subnet to gateway IP with CIDR."""
         # For simplicity, assume .1 is the gateway
-        parts = subnet_ip.split(".")
+        parts: List[str] = subnet_ip.split(".")
         parts[-1] = "1"
         return f"{'.'.join(parts)}/{prefix}"
 
@@ -426,11 +427,13 @@ class TopologySimulator:
         """
         # Initialize allocator if not present
         if net_name not in self.net_allocators:
-            network = self.topology.get_network(net_name)
+            network: Network | None = self.topology.get_network(net_name)
             if not network:
                 raise ValueError(f"Unknown network: {net_name}")
 
-            net = ipaddress.IPv4Network(network.subnet, strict=False)
+            net: ipaddress.IPv4Network = ipaddress.IPv4Network(
+                network.subnet, strict=False
+            )
             self.net_allocators[net_name] = net
 
             # Start allocation from .10 (index 9, since hosts[0] is .1)
@@ -440,14 +443,14 @@ class TopologySimulator:
             self.net_alloc_indices[net_name] += 1
 
         net = self.net_allocators[net_name]
-        alloc_idx = self.net_alloc_indices[net_name]
+        alloc_idx: int = self.net_alloc_indices[net_name]
 
         # Generate IP address
-        hosts = list(net.hosts())
+        hosts: List[ipaddress.IPv4Address] = list(net.hosts())
         if alloc_idx >= len(hosts):
             raise ValueError(
                 f"IP pool exhausted for network {net_name}. Subnet too small."
             )
 
-        ip_addr = hosts[alloc_idx]
+        ip_addr: ipaddress.IPv4Address = hosts[alloc_idx]
         return f"{ip_addr}/{net.prefixlen}"
