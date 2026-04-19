@@ -74,6 +74,7 @@ class TestInspectAction:
 
         # Add INSPECT rule for all TCP from client subnet
         options = AddRuleOptions(
+            interface=attached_ingress,
             src=client_network_v4,
             protocol="tcp",
             actions=[("inspect", 0), ("pass", 1)],
@@ -166,6 +167,7 @@ class TestInspectAction:
 
         # INSPECT + PASS action — traffic should pass while being cloned to Suricata
         options = AddRuleOptions(
+            interface=attached_ingress,
             src=client_network_v4,
             protocol="icmp",
             actions=[("inspect", 0), ("pass", 1)],
@@ -234,6 +236,7 @@ class TestFlowVerdicts:
 
         # Add INSPECT rule
         options = AddRuleOptions(
+            interface=attached_ingress,
             src=client_network_v4,
             protocol="tcp",
             actions=[("inspect", 0), ("pass", 1)],
@@ -304,6 +307,7 @@ class TestIpsModeTraffic:
 
         # Add INSPECT rule for TCP from client to port 8888
         options = AddRuleOptions(
+            interface=attached_ingress,
             src=client_network_v4,
             protocol="tcp",
             dport=8888,
@@ -370,6 +374,7 @@ class TestIpsModeTraffic:
 
         # Add INSPECT rule only for TCP port 8888
         options = AddRuleOptions(
+            interface=attached_ingress,
             src=client_network_v4,
             protocol="tcp",
             dport=8888,
@@ -432,6 +437,7 @@ class TestIdsModeTraffic:
 
         # Add INSPECT rule for TCP port 9999
         options = AddRuleOptions(
+            interface=attached_ingress,
             src=client_network_v4,
             protocol="tcp",
             dport=9999,

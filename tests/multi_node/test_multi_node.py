@@ -23,7 +23,6 @@ Run with:
   netsim destroy tests/multi_node/multi_node.yaml
 """
 
-import json
 import logging
 import time
 from typing import Dict
@@ -51,7 +50,7 @@ def _attach_ingress_on_node(
     """Attach ingress program via the controller to the node's data interface."""
     # Find the data interface (not mgmt)
     data_iface = None
-    for iface in node.interfaces:
+    for iface in node.interfaces.values():
         if iface.network.name != "mgmt":
             data_iface = iface
             break
@@ -179,74 +178,69 @@ class TestEnrollment:
 
 
 class TestConfigDistribution:
-    """Scenario 2: create + assign a ruleset, verify rules appear on all nodes."""
+    """Scenario 2: create rules on all nodes, verify they appear via local GraphQL."""
 
-    def test_ruleset_pushed_to_all_nodes(
+    def test_rules_pushed_to_all_nodes(
         self,
         nodes,
         controller_client: ControllerClient,
         enrolled_nodes: Dict[str, str],
     ):
         """
-        Create a drop-all ruleset, assign to all nodes, push, then verify
-        that each node's local policy-engine reflects the correct rule count.
+        Attach ingress on all nodes, create a drop-all rule on all nodes via
+        createRulesMultiNode, then verify each node's local policy-engine
+        reflects the rule.
         """
-        # Create a simple ruleset with one ingress drop-all rule.
-        # The rules_json array must contain valid AddRuleInput JSON objects
-        # (deserialized by the agent's ConfigApplier when applying the push).
-        drop_all_rule = [
-            {
-                "direction": "INGRESS",
-                "src": "0.0.0.0/0",
-                "dst": "0.0.0.0/0",
-                "sport": 0,
-                "dport": 0,
-                "protocol": "any",
-                "actions": [{"action": "DROP", "priority": 0, "param": 0}],
-            }
-        ]
-        ruleset = controller_client.create_ruleset(
-            name="test-drop-all",
-            rules_json=json.dumps(drop_all_rule),
-            description="Integration test ruleset",
-            default_action_ingress="drop",
-        )
-        assert ruleset.id, "Ruleset ID must be set"
-        logger.info(f"Created ruleset {ruleset.id}")
-
-        # Attach ingress programs on all managed nodes before pushing rules
+        # Attach ingress programs on all managed nodes first
         for vm_name, node_id in enrolled_nodes.items():
             node = nodes[vm_name]
             _attach_ingress_on_node(node, controller_client, node_id)
 
-        # Assign and push to all managed nodes
-        for vm_name, node_id in enrolled_nodes.items():
-            result = controller_client.assign_ruleset(node_id, ruleset.id)
-            assert result.success, (
-                f"assign_ruleset to {vm_name} failed: {result.message}"
-            )
-            result = controller_client.push_config(node_id)
-            assert result.success, f"push_config to {vm_name} failed: {result.message}"
-            logger.info(f"Assigned + pushed ruleset to {vm_name}")
+        # Find the data interface name for node1 (all nodes share the same topology)
+        node1 = nodes["node1"]
+        data_iface = None
+        for iface in node1.interfaces.values():
+            if iface.network.name != "mgmt":
+                data_iface = iface
+                break
+        if not data_iface:
+            pytest.fail("No data interface found on node1")
+
+        # Create a drop-all ingress rule on all managed nodes at once
+        node_ids = list(enrolled_nodes.values())
+        rules = controller_client.create_rules_multi_node(
+            node_ids=node_ids,
+            interface_name=data_iface.if_name,
+            direction="ingress",
+            actions_json='[{"action":"drop","priority":0}]',
+        )
+        assert len(rules) == len(node_ids), (
+            f"Expected {len(node_ids)} rules, got {len(rules)}"
+        )
+        logger.info(f"Created {len(rules)} rules across {len(node_ids)} nodes")
 
         # Verify rules appeared on each node's local policy-engine
         for vm_name in enrolled_nodes:
             node = nodes[vm_name]
             _wait_for_rules_on_node(node, expected_rule_count=1)
-            rules = _list_rules_on_node(node)
-            logger.info(f"[{vm_name}] Rules after push: {rules}")
-            assert len(rules) >= 1, f"[{vm_name}] Expected at least 1 rule after push"
+            local_rules = _list_rules_on_node(node)
+            logger.info(f"[{vm_name}] Rules after push: {local_rules}")
+            assert len(local_rules) >= 1, (
+                f"[{vm_name}] Expected at least 1 rule after push"
+            )
 
-    def test_push_config_all_returns_success(
+    def test_push_config_per_node_succeeds(
         self,
         controller_client: ControllerClient,
         enrolled_nodes: Dict[str, str],
     ):
-        """pushConfigAll mutation must report success when nodes are online."""
-        result = controller_client.push_config_all()
-        assert result.success, f"pushConfigAll failed: {result.message}"
-        assert result.message, "pushConfigAll should return a message"
-        logger.info(f"pushConfigAll: {result.message}")
+        """pushConfig must succeed for each online node."""
+        for vm_name, node_id in enrolled_nodes.items():
+            result = controller_client.push_config(node_id)
+            assert result.success, (
+                f"push_config to {vm_name} (id={node_id}) failed: {result.message}"
+            )
+            logger.info(f"push_config to {vm_name}: ok")
 
 
 class TestMetricsVisibility:

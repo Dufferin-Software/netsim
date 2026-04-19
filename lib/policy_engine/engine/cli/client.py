@@ -311,13 +311,14 @@ class LpmRule:
     quic_version: Optional[str] = None
     src_mac: Optional[str] = None
     dst_mac: Optional[str] = None
+    interface: str = ""
 
     @classmethod
     def from_json(cls, data: dict) -> "LpmRule":
         protocol_str = data.get("protocol", "Any")
         actions_data = data.get("actions", [])
         return cls(
-            rule_id=data.get("ruleId", 0),
+            rule_id=int(data.get("ruleId", 0)),
             src_prefix=data.get("srcPrefix", "0.0.0.0/0"),
             dst_prefix=data.get("dstPrefix", "0.0.0.0/0"),
             sport=data.get("sport", 0),
@@ -328,6 +329,7 @@ class LpmRule:
             quic_version=data.get("quicVersion"),
             src_mac=data.get("srcMac"),
             dst_mac=data.get("dstMac"),
+            interface=data.get("interface", ""),
         )
 
     @property
@@ -580,6 +582,7 @@ class ManagedRule:
 
     rule_id: int
     direction: str
+    interface: str
     rule_state: str  # "active" | "inactive"
     expires_at_ms: Optional[int]  # epoch-ms, None for scheduled/permanent
     schedule_windows: Optional[List[WeeklyWindow]]
@@ -611,6 +614,7 @@ class ManagedRule:
         return cls(
             rule_id=int(data.get("ruleId", 0)),
             direction=data.get("direction", "INGRESS"),
+            interface=data.get("interface", ""),
             rule_state=data.get("ruleState", "active"),
             expires_at_ms=int(raw_expires) if raw_expires is not None else None,
             schedule_windows=windows,
@@ -622,6 +626,10 @@ class ManagedRule:
 class AddRuleOptions:
     """Options for adding a rule."""
 
+    # Rules are scoped per-interface per-direction. Callers must set `interface`
+    # to the name of an attached interface (e.g., "eth0") before invoking the
+    # client; the server resolves this to an ifindex.
+    interface: str = ""
     src: Optional[str] = None
     dst: Optional[str] = None
     sport: int = 0
@@ -824,7 +832,7 @@ class PolicyClient:
         Returns:
             OperationResult indicating success/failure
         """
-        args = ["rule", "add", "--direction", direction]
+        args = ["rule", "add", "--interface", options.interface, "--direction", direction]
 
         if options.src:
             args.extend(["--src", options.src])
@@ -877,6 +885,7 @@ class PolicyClient:
 
     def delete_rule(
         self,
+        interface: str,
         rule_id: Optional[int] = None,
         src: Optional[str] = None,
         dst: Optional[str] = None,
@@ -889,6 +898,7 @@ class PolicyClient:
         Delete a policy rule.
 
         Args:
+            interface: Interface the rule is scoped to (required)
             rule_id: Rule ID to delete
             src: Source prefix (alternative to id)
             dst: Destination prefix
@@ -900,7 +910,7 @@ class PolicyClient:
         Returns:
             OperationResult indicating success/failure
         """
-        args = ["rule", "delete", "--direction", direction]
+        args = ["rule", "delete", "--interface", interface, "--direction", direction]
 
         if rule_id is not None:
             args.extend(["--id", str(rule_id)])
@@ -918,47 +928,65 @@ class PolicyClient:
         data = self._run_command_json(args)
         return OperationResult.from_json(data)
 
-    def list_rules(self, direction: str = "ingress") -> List[LpmRule]:
+    def list_rules(
+        self, direction: str = "ingress", interface: Optional[str] = None
+    ) -> List[LpmRule]:
         """
         List all policy rules.
 
         Args:
             direction: Traffic direction ("ingress" or "egress")
+            interface: Optional interface name to filter results
 
         Returns:
             List of LpmRule objects
         """
-        data = self._run_command_json(["rule", "list", "--direction", direction])
+        args = ["rule", "list", "--direction", direction]
+        if interface is not None:
+            args.extend(["--interface", interface])
+        data = self._run_command_json(args)
         if isinstance(data, list):
             return [LpmRule.from_json(r) for r in data]
         return []
 
-    def flush_rules(self, direction: str = "ingress") -> OperationResult:
+    def flush_rules(
+        self, direction: str = "ingress", interface: Optional[str] = None
+    ) -> OperationResult:
         """
-        Flush all policy rules.
+        Flush policy rules.
 
         Args:
             direction: Traffic direction ("ingress" or "egress")
+            interface: Optional interface name; when given, only rules on that
+                interface are flushed. All rules in the direction are flushed
+                when omitted.
 
         Returns:
             OperationResult indicating success/failure
         """
-        data = self._run_command_json(["rule", "flush", "--direction", direction])
+        args = ["rule", "flush", "--direction", direction]
+        if interface is not None:
+            args.extend(["--interface", interface])
+        data = self._run_command_json(args)
         return OperationResult.from_json(data)
 
-    def managed_rules(self, direction: str = "ingress") -> List[ManagedRule]:
+    def managed_rules(
+        self, direction: str = "ingress", interface: Optional[str] = None
+    ) -> List[ManagedRule]:
         """
         List rules with a TTL or schedule (managed rules).
 
         Args:
             direction: Traffic direction ("ingress" or "egress")
+            interface: Optional interface name to filter results
 
         Returns:
             List of ManagedRule objects
         """
-        data = self._run_command_json(
-            ["rule", "managed-rules", "--direction", direction]
-        )
+        args = ["rule", "managed-rules", "--direction", direction]
+        if interface is not None:
+            args.extend(["--interface", interface])
+        data = self._run_command_json(args)
         if isinstance(data, list):
             return [ManagedRule.from_json(r) for r in data]
         return []
@@ -1019,7 +1047,7 @@ class PolicyClient:
     # ========================================================================
 
     def set_default_action(
-        self, action: PolicyAction, direction: str = "ingress"
+        self, action: PolicyAction, direction: str = "ingress", interface: str = ""
     ) -> OperationResult:
         """
         Set the default action for unmatched packets.
@@ -1027,21 +1055,23 @@ class PolicyClient:
         Args:
             action: Default action
             direction: Traffic direction ("ingress" or "egress")
+            interface: Interface name (required by server)
 
         Returns:
             OperationResult indicating success/failure
         """
         action_str = action.value.lower()
-        data = self._run_command_json(
-            [
-                "config",
-                "default-action",
-                "--action",
-                action_str,
-                "--direction",
-                direction,
-            ]
-        )
+        args = [
+            "config",
+            "default-action",
+            "--interface",
+            interface,
+            "--action",
+            action_str,
+            "--direction",
+            direction,
+        ]
+        data = self._run_command_json(args)
         return OperationResult.from_json(data)
 
     def register_tail_call(

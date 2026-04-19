@@ -108,6 +108,7 @@ class TestStatePersistenceAfterReboot:
         # Add DROP rule for client → server ICMP
         add_result = policy_client.add_rule(
             AddRuleOptions(
+                interface=iface_name,
                 src=f"{client_ip_v4}/32",
                 dst=f"{server_ip_v4}/32",
                 protocol=Protocol.ICMP,
@@ -243,6 +244,7 @@ class TestStatePersistenceAfterReboot:
 
         add_result = policy_client.add_rule(
             AddRuleOptions(
+                interface=iface_name,
                 src=f"{client_ip_v4}/32",
                 protocol=Protocol.ANY,
                 actions=[(PolicyAction.LOG, 0)],

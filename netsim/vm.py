@@ -144,14 +144,16 @@ class LibvirtVM:
         # Disable virtio balloon to avoid PCI slot collisions with manually placed NICs
         ET.SubElement(devices, "memballoon", model="none")
 
-        # Add QEMU command-line arguments for networking with explicit PCI slots to avoid collisions
-        domain.set("xmlns:qemu", "http://libvirt.org/schemas/domain/qemu/1.0")
-        qemu_cmd: ET.Element[str] = ET.SubElement(
-            domain, "{http://libvirt.org/schemas/domain/qemu/1.0}commandline"
-        )
-
-        # Management interface: user-mode with hostfwd to guest ssh
+        # Management interface: user-mode SLIRP with SSH port forward.
+        # libvirt has no declarative hostfwd support so this stays as a QEMU
+        # command-line arg.  The data tap interfaces use native libvirt XML so
+        # libvirt (root) opens /dev/net/tun and passes an fd to QEMU — QEMU
+        # itself never opens /dev/net/tun (which is cgroup-restricted).
         if self.config.mgmt_ssh_port:
+            domain.set("xmlns:qemu", "http://libvirt.org/schemas/domain/qemu/1.0")
+            qemu_cmd: ET.Element[str] = ET.SubElement(
+                domain, "{http://libvirt.org/schemas/domain/qemu/1.0}commandline"
+            )
             ET.SubElement(
                 qemu_cmd,
                 "{http://libvirt.org/schemas/domain/qemu/1.0}arg",
@@ -173,29 +175,27 @@ class LibvirtVM:
                 value=f"virtio-net-pci,netdev=mgmt,mac={self._generate_mac(0)},bus=pci.0,addr=0x5",
             )
 
-        # Data interfaces: pre-created tap devices
+        # Data interfaces: native libvirt ethernet interfaces backed by
+        # pre-created tap devices.  managed='no' tells libvirt not to
+        # create/destroy the tap; it still opens it (as root) and hands the fd
+        # to QEMU, so QEMU never needs /dev/net/tun access directly.
         for idx, tap_dev in enumerate(self.config.tap_devices, start=1):
-            ET.SubElement(
-                qemu_cmd,
-                "{http://libvirt.org/schemas/domain/qemu/1.0}arg",
-                value="-netdev",
+            iface: ET.Element[str] = ET.SubElement(
+                devices, "interface", type="ethernet"
             )
-            ET.SubElement(
-                qemu_cmd,
-                "{http://libvirt.org/schemas/domain/qemu/1.0}arg",
-                value=f"tap,id=net{idx},ifname={tap_dev},script=no,downscript=no",
-            )
-            ET.SubElement(
-                qemu_cmd,
-                "{http://libvirt.org/schemas/domain/qemu/1.0}arg",
-                value="-device",
-            )
-            # Offset addresses to avoid collision with disk (0x2) and mgmt NIC (0x5)
+            ET.SubElement(iface, "mac", address=self._generate_mac(idx))
+            ET.SubElement(iface, "target", dev=tap_dev, managed="no")
+            ET.SubElement(iface, "model", type="virtio")
+            # Offset PCI addresses to avoid collision with disk (0x2) and mgmt NIC (0x5)
             pci_addr: str = hex(5 + idx)
             ET.SubElement(
-                qemu_cmd,
-                "{http://libvirt.org/schemas/domain/qemu/1.0}arg",
-                value=f"virtio-net-pci,netdev=net{idx},mac={self._generate_mac(idx)},bus=pci.0,addr={pci_addr}",
+                iface,
+                "address",
+                type="pci",
+                domain="0x0000",
+                bus="0x00",
+                slot=pci_addr,
+                function="0x0",
             )
 
         # Convert to string
@@ -221,6 +221,16 @@ class LibvirtVM:
 
             # Ensure parent directory exists and is writable
             disk_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Make the runtime and vm directories traversable by libvirt-qemu
+            # (system libvirt runs QEMU as libvirt-qemu, which needs +rx on every
+            # ancestor directory of the disk file)
+            for directory in [disk_path.parent.parent, disk_path.parent]:
+                subprocess.run(
+                    ["sudo", "chmod", "a+rx", str(directory)],
+                    capture_output=True,
+                    timeout=5,
+                )
 
             # Make base image readable by all (needed for libvirt-qemu user)
             subprocess.run(
@@ -314,7 +324,18 @@ class LibvirtVM:
             if dom is None:
                 raise RuntimeError(f"Failed to define domain {self.config.name}")
 
-            dom.create()
+            try:
+                dom.create()
+            except libvirt.libvirtError as e:
+                msg = str(e)
+                if "Permission denied" in msg and "process exited" in msg:
+                    raise RuntimeError(
+                        f"{msg}\n"
+                        "Hint: AppArmor may be blocking QEMU from reading ~/.netsim images.\n"
+                        "Fix: set 'security_driver = \"none\"' in /etc/libvirt/qemu.conf "
+                        "and restart libvirtd."
+                    ) from e
+                raise
 
             # Wait for VM to be running
             timeout = 10
@@ -446,12 +467,11 @@ class LibvirtVM:
                 pass
 
     def _get_conn(self) -> libvirt.virConnect:
-        """Open a libvirt connection (session by default)."""
-        uri: str = os.environ.get("NETSIM_LIBVIRT_URI", "qemu:///session")
-        conn: libvirt.virConnect = libvirt.open(uri)
-        if conn is None:
-            raise RuntimeError(f"Failed to open libvirt connection to {uri}")
-        return conn
+        """Open a libvirt connection."""
+        from netsim.libvirt_utils import open_with_timeout
+
+        uri: str = os.environ.get("NETSIM_LIBVIRT_URI", "qemu:///system")
+        return open_with_timeout(uri)
 
     @staticmethod
     def _state_to_str(state: int) -> str:

@@ -166,6 +166,7 @@ class TestLifecycleEventStream:
 
         def _add():
             opts = AddRuleOptions(
+                interface=attached_ingress,
                 src="0.0.0.0/0",
                 protocol="any",
                 actions=[("drop", 0)],
@@ -194,6 +195,7 @@ class TestLifecycleEventStream:
 
         # Pre-add the rule so delete has something to act on
         opts = AddRuleOptions(
+            interface=attached_ingress,
             src="0.0.0.0/0",
             protocol="any",
             actions=[("drop", 0)],
@@ -202,7 +204,9 @@ class TestLifecycleEventStream:
         graphql_client.add_rule(opts, direction="ingress")
 
         def _delete():
-            graphql_client.delete_rule(rule_id=rule_id, direction="ingress")
+            graphql_client.delete_rule(
+                attached_ingress, rule_id=rule_id, direction="ingress"
+            )
 
         events = _collect_ws_events(server, duration=5, action_fn=_delete)
 
@@ -225,6 +229,7 @@ class TestLifecycleEventStream:
 
         def _add():
             opts = AddRuleOptions(
+                interface=attached_ingress,
                 src="0.0.0.0/0",
                 protocol="any",
                 actions=[("drop", 0)],
@@ -259,6 +264,7 @@ class TestLifecycleEventStream:
 
         # Add rule with a window that is currently inactive (Sun 03:47–03:48)
         opts = AddRuleOptions(
+            interface=attached_ingress,
             src="0.0.0.0/0",
             protocol="any",
             actions=[("drop", 0)],
@@ -274,7 +280,9 @@ class TestLifecycleEventStream:
             pytest.skip("Rule did not start inactive — window boundary issue")
 
         def _delete():
-            graphql_client.delete_rule(rule_id=rule_id, direction="ingress")
+            graphql_client.delete_rule(
+                attached_ingress, rule_id=rule_id, direction="ingress"
+            )
 
         events = _collect_ws_events(server, duration=5, action_fn=_delete)
 
@@ -313,6 +321,7 @@ class TestLifecycleEventStream:
         time.sleep(1)  # let both WS connections open
 
         opts = AddRuleOptions(
+            interface=attached_ingress,
             src="0.0.0.0/0",
             protocol="any",
             actions=[("drop", 0)],
@@ -361,6 +370,7 @@ class TestLifecycleEventTTLExpiry:
 
         def _add_ttl_rule():
             opts = AddRuleOptions(
+                interface=attached_ingress,
                 src="0.0.0.0/0",
                 protocol="any",
                 actions=[("drop", 0)],
@@ -425,6 +435,7 @@ class TestLifecycleEventSchedulerTransitions:
 
         window = WeeklyWindow(start_dow, start_h, start_m, end_dow, end_h, end_m)
         opts = AddRuleOptions(
+            interface=attached_ingress,
             src="0.0.0.0/0",
             protocol="any",
             actions=[("drop", 0)],

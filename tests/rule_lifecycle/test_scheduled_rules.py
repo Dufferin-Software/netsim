@@ -60,6 +60,7 @@ class TestScheduledRuleRegistry:
     ):
         """A rule whose window covers the entire week must start active."""
         opts = AddRuleOptions(
+            interface=attached_ingress,
             src="0.0.0.0/0",
             protocol="any",
             actions=[("drop", 0)],
@@ -93,6 +94,7 @@ class TestScheduledRuleRegistry:
     ):
         """A rule outside its active window must NOT be in the live BPF map."""
         opts = AddRuleOptions(
+            interface=attached_ingress,
             src="0.0.0.0/0",
             protocol="any",
             actions=[("drop", 0)],
@@ -117,6 +119,7 @@ class TestScheduledRuleRegistry:
     ):
         """A rule outside its window must appear in managedRules with state=inactive."""
         opts = AddRuleOptions(
+            interface=attached_ingress,
             src="0.0.0.0/0",
             protocol="any",
             actions=[("drop", 0)],
@@ -136,6 +139,7 @@ class TestScheduledRuleRegistry:
     ):
         """Deleting an active scheduled rule removes it from both BPF and managedRules."""
         opts = AddRuleOptions(
+            interface=attached_ingress,
             src="0.0.0.0/0",
             protocol="any",
             actions=[("drop", 0)],
@@ -144,7 +148,9 @@ class TestScheduledRuleRegistry:
         )
         graphql_client.add_rule(opts, direction="ingress")
 
-        result = graphql_client.delete_rule(rule_id=8004, direction="ingress")
+        result = graphql_client.delete_rule(
+            attached_ingress, rule_id=8004, direction="ingress"
+        )
         assert result.success, result.message
 
         rules = graphql_client.list_rules(direction="ingress")
@@ -162,6 +168,7 @@ class TestScheduledRuleRegistry:
     ):
         """Deleting an inactive (out-of-window) scheduled rule succeeds."""
         opts = AddRuleOptions(
+            interface=attached_ingress,
             src="0.0.0.0/0",
             protocol="any",
             actions=[("drop", 0)],
@@ -170,7 +177,9 @@ class TestScheduledRuleRegistry:
         )
         graphql_client.add_rule(opts, direction="ingress")
 
-        result = graphql_client.delete_rule(rule_id=8005, direction="ingress")
+        result = graphql_client.delete_rule(
+            attached_ingress, rule_id=8005, direction="ingress"
+        )
         assert result.success, result.message
 
         managed = graphql_client.managed_rules(direction="ingress")
@@ -181,6 +190,7 @@ class TestScheduledRuleRegistry:
     ):
         """The schedule timezone must be round-tripped through managedRules."""
         opts = AddRuleOptions(
+            interface=attached_ingress,
             src="0.0.0.0/0",
             protocol="any",
             actions=[("drop", 0)],
@@ -202,6 +212,7 @@ class TestScheduledRuleRegistry:
         """Window day/hour/minute values must be preserved exactly."""
         window = WeeklyWindow(1, 8, 30, 5, 18, 0)  # Mon 08:30 → Fri 18:00
         opts = AddRuleOptions(
+            interface=attached_ingress,
             src="0.0.0.0/0",
             protocol="any",
             actions=[("drop", 0)],
@@ -234,6 +245,7 @@ class TestScheduledRuleValidation:
     ):
         """An unrecognised timezone string must be rejected."""
         opts = AddRuleOptions(
+            interface=attached_ingress,
             src="0.0.0.0/0",
             protocol="any",
             actions=[("drop", 0)],
@@ -248,6 +260,7 @@ class TestScheduledRuleValidation:
     ):
         """A day_of_week value outside 0–6 must be rejected."""
         opts = AddRuleOptions(
+            interface=attached_ingress,
             src="0.0.0.0/0",
             protocol="any",
             actions=[("drop", 0)],
@@ -261,6 +274,7 @@ class TestScheduledRuleValidation:
     ):
         """An hour value ≥ 24 must be rejected."""
         opts = AddRuleOptions(
+            interface=attached_ingress,
             src="0.0.0.0/0",
             protocol="any",
             actions=[("drop", 0)],
@@ -274,6 +288,7 @@ class TestScheduledRuleValidation:
     ):
         """A minute value ≥ 60 must be rejected."""
         opts = AddRuleOptions(
+            interface=attached_ingress,
             src="0.0.0.0/0",
             protocol="any",
             actions=[("drop", 0)],
@@ -338,6 +353,7 @@ class TestScheduledRuleTraffic:
         assert baseline.packets_received > 0, "Baseline ICMP should pass"
 
         opts = AddRuleOptions(
+            interface=attached_ingress,
             src=f"{client_ip_v4}/32",
             dst=f"{server_ip_v4}/32",
             protocol="icmp",
@@ -368,6 +384,7 @@ class TestScheduledRuleTraffic:
         client = nodes["client"]
 
         opts = AddRuleOptions(
+            interface=attached_ingress,
             src=f"{client_ip_v4}/32",
             dst=f"{server_ip_v4}/32",
             protocol="icmp",
@@ -428,6 +445,7 @@ class TestScheduledRuleSchedulerTransitions:
 
         window = WeeklyWindow(start_dow, start_h, start_m, end_dow, end_h, end_m)
         opts = AddRuleOptions(
+            interface=attached_ingress,
             src="0.0.0.0/0",
             protocol="any",
             actions=[("drop", 0)],

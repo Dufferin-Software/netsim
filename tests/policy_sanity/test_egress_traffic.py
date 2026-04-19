@@ -69,6 +69,7 @@ class TestEgressTrafficMatching:
 
         # Add egress drop rule for ICMP from server's network
         options = AddRuleOptions(
+            interface=attached_egress,
             src=server_network_v4,
             protocol="icmp",
             actions=[("drop", 0)],
@@ -123,6 +124,7 @@ class TestEgressTrafficMatching:
 
         # Add egress drop rule for ICMPv6 from server's network
         options = AddRuleOptions(
+            interface=attached_egress,
             src=server_network_v6,
             dst="::/0",
             protocol="icmpv6",
@@ -177,6 +179,7 @@ class TestEgressTrafficMatching:
 
         # Add egress drop rule for TCP port 8080 from server
         options = AddRuleOptions(
+            interface=attached_egress,
             src=server_network_v4,
             protocol="tcp",
             dport=8080,
@@ -247,6 +250,7 @@ class TestEgressTrafficMatching:
 
         # Add egress drop rule for TCP port 8080 from server IPv6 network
         options = AddRuleOptions(
+            interface=attached_egress,
             src=server_network_v6,
             dst="::/0",
             protocol="tcp",
@@ -299,6 +303,7 @@ class TestEgressTrafficMatching:
 
         # Add egress drop rule for UDP port 5353
         options = AddRuleOptions(
+            interface=attached_egress,
             src=server_network_v4,
             protocol="udp",
             dport=5353,
@@ -350,6 +355,7 @@ class TestEgressTrafficMatching:
 
         # Add egress drop rule for UDP port 5353
         options = AddRuleOptions(
+            interface=attached_egress,
             src=server_network_v6,
             dst="::/0",
             protocol="udp",
@@ -405,7 +411,9 @@ class TestEgressTrafficMatching:
         server = nodes["server"]
 
         # Set egress default action to DROP
-        result = policy_client.set_default_action(PolicyAction.DROP, direction="egress")
+        result = policy_client.set_default_action(
+            PolicyAction.DROP, direction="egress", interface=attached_egress
+        )
         assert result.success, f"Failed to set egress default action: {result.message}"
 
         try:
@@ -440,7 +448,9 @@ class TestEgressTrafficMatching:
             )
         finally:
             # Reset default action to PASS
-            policy_client.set_default_action(PolicyAction.PASS, direction="egress")
+            policy_client.set_default_action(
+                PolicyAction.PASS, direction="egress", interface=attached_egress
+            )
 
     def test_egress_rule_stats_increment(
         self,
@@ -459,6 +469,7 @@ class TestEgressTrafficMatching:
         # Add egress log+pass rule for ICMP
         rule_id = 99999
         options = AddRuleOptions(
+            interface=attached_egress,
             src=server_network_v4,
             protocol="icmp",
             actions=[("log", 0), ("pass", 1)],

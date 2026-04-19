@@ -72,13 +72,18 @@ def attached_egress(policy_client, server_interface, configure_node_interfaces):
 
 
 @pytest.fixture(scope="function")
-def clean_egress_rules(policy_client):
+def clean_egress_rules(policy_client, server_interface):
     """Fixture to ensure egress rules and default action are cleaned up before and after each test."""
+    iface = server_interface.if_name
     policy_client.flush_rules(direction="egress")
-    policy_client.set_default_action(PolicyAction.PASS, direction="egress")
+    policy_client.set_default_action(
+        PolicyAction.PASS, direction="egress", interface=iface
+    )
     yield
     policy_client.flush_rules(direction="egress")
-    policy_client.set_default_action(PolicyAction.PASS, direction="egress")
+    policy_client.set_default_action(
+        PolicyAction.PASS, direction="egress", interface=iface
+    )
 
 
 @pytest.fixture(scope="function")
@@ -110,13 +115,18 @@ def attached_ingress(policy_client, server_interface, configure_node_interfaces)
 
 
 @pytest.fixture(scope="function")
-def clean_ingress_rules(policy_client):
+def clean_ingress_rules(policy_client, server_interface):
     """Fixture to ensure ingress rules and default action are cleaned up before and after each test."""
+    iface = server_interface.if_name
     policy_client.flush_rules(direction="ingress")
-    policy_client.set_default_action(PolicyAction.PASS, direction="ingress")
+    policy_client.set_default_action(
+        PolicyAction.PASS, direction="ingress", interface=iface
+    )
     yield
     policy_client.flush_rules(direction="ingress")
-    policy_client.set_default_action(PolicyAction.PASS, direction="ingress")
+    policy_client.set_default_action(
+        PolicyAction.PASS, direction="ingress", interface=iface
+    )
 
 
 AnyPolicyClient = Union[PolicyClient, GraphQLPolicyClient]

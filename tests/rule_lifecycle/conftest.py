@@ -156,17 +156,19 @@ def attached_ingress(graphql_client, server_interface, configure_node_interfaces
         logger.warning(f"Failed to detach ingress: {e}")
 
 
-def _full_cleanup(graphql_client):
+def _full_cleanup(graphql_client, iface: str):
     """Flush BPF rules, delete all managed rules, and reset default action."""
     graphql_client.flush_rules(direction="ingress")
     for mr in graphql_client.managed_rules(direction="ingress"):
-        graphql_client.delete_rule(rule_id=mr.rule_id, direction="ingress")
-    graphql_client.set_default_action(PolicyAction.PASS, direction="ingress")
+        graphql_client.delete_rule(iface, rule_id=mr.rule_id, direction="ingress")
+    graphql_client.set_default_action(
+        PolicyAction.PASS, direction="ingress", interface=iface
+    )
 
 
 @pytest.fixture(scope="function")
-def clean_ingress_rules(graphql_client):
+def clean_ingress_rules(graphql_client, attached_ingress):
     """Flush BPF rules, managed rules registry, and default action before/after each test."""
-    _full_cleanup(graphql_client)
+    _full_cleanup(graphql_client, attached_ingress)
     yield
-    _full_cleanup(graphql_client)
+    _full_cleanup(graphql_client, attached_ingress)

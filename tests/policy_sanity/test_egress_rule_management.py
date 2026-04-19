@@ -2,8 +2,8 @@ import logging
 
 from lib.policy_engine.engine.cli.client import (
     AddRuleOptions,
-    PolicyAction,
     IngressMode,
+    PolicyAction,
 )
 
 logger = logging.getLogger(__name__)
@@ -17,6 +17,7 @@ class TestEgressRuleManagement:
     ):
         """Test adding a basic IPv4 egress rule."""
         options = AddRuleOptions(
+            interface=attached_egress,
             src="10.0.0.0/8",
             dst="0.0.0.0/0",
             protocol="any",
@@ -36,6 +37,7 @@ class TestEgressRuleManagement:
     ):
         """Test adding a basic IPv6 egress rule."""
         options = AddRuleOptions(
+            interface=attached_egress,
             src="2001:db8::/32",
             dst="::/0",
             protocol="any",
@@ -53,6 +55,7 @@ class TestEgressRuleManagement:
     ):
         """Test deleting an egress rule by ID."""
         options = AddRuleOptions(
+            interface=attached_egress,
             src="10.0.0.0/8",
             protocol="any",
             actions=[("drop", 0)],
@@ -66,7 +69,9 @@ class TestEgressRuleManagement:
         assert rules[0].rule_id == 88888
 
         # Delete by ID
-        result = policy_client.delete_rule(rule_id=88888, direction="egress")
+        result = policy_client.delete_rule(
+            attached_egress, rule_id=88888, direction="egress"
+        )
         assert result.success, f"Failed to delete egress rule: {result.message}"
 
         # Verify deletion
@@ -80,6 +85,7 @@ class TestEgressRuleManagement:
         for i in range(3):
             policy_client.add_rule(
                 AddRuleOptions(
+                    interface=attached_egress,
                     src=f"10.{i}.0.0/16",
                     protocol="any",
                     actions=[("pass", 0)],
@@ -96,11 +102,15 @@ class TestEgressRuleManagement:
         rules = policy_client.list_rules(direction="egress")
         assert len(rules) == 0, "All egress rules should be flushed"
 
-    def test_egress_rules_independent_of_ingress(self, policy_client, server_interface):
+    def test_egress_rules_independent_of_ingress(
+        self,
+        policy_client,
+        server_interface,
+        configure_node_interfaces,
+    ):
         """Test that egress and ingress rules are independent."""
         iface_name = server_interface.if_name
 
-        # Attach both
         policy_client.attach_ingress(iface_name, IngressMode.AUTO)
         policy_client.attach_egress(iface_name)
 
@@ -108,6 +118,7 @@ class TestEgressRuleManagement:
             # Add ingress rule
             policy_client.add_rule(
                 AddRuleOptions(
+                    interface=iface_name,
                     src="10.0.0.0/8",
                     protocol="any",
                     actions=[("drop", 0)],
@@ -119,6 +130,7 @@ class TestEgressRuleManagement:
             # Add egress rule
             policy_client.add_rule(
                 AddRuleOptions(
+                    interface=iface_name,
                     src="192.168.0.0/16",
                     protocol="any",
                     actions=[("pass", 0)],
@@ -138,9 +150,7 @@ class TestEgressRuleManagement:
             assert 55002 in egress_ids, "Egress rule should be in egress list"
             assert 55001 not in egress_ids, "Ingress rule should NOT be in egress list"
             assert 55002 not in ingress_ids, "Egress rule should NOT be in ingress list"
-
         finally:
-            # Cleanup
             policy_client.flush_rules(direction="ingress")
             policy_client.flush_rules(direction="egress")
             policy_client.detach_all()

@@ -182,19 +182,23 @@ def attached_interfaces(policy_client, node_interfaces):
 
 @pytest.fixture(scope="function")
 def fib_enabled(policy_client, attached_interfaces):
-    """Enable FIB forwarding, disable after the test."""
-    result = policy_client.set_fib_forwarding(enabled=True)
-    if not result.success:
-        pytest.fail(f"Failed to enable FIB forwarding: {result.message}")
-    logger.info("FIB forwarding enabled")
+    """Enable FIB forwarding on both transit ingress interfaces, disable after the test."""
+    for net, iface in attached_interfaces.items():
+        result = policy_client.set_fib_forwarding(iface, enabled=True)
+        if not result.success:
+            pytest.fail(
+                f"Failed to enable FIB forwarding on {iface} ({net}): {result.message}"
+            )
+        logger.info(f"FIB forwarding enabled on transit/{net} ({iface})")
 
     yield
 
-    try:
-        policy_client.set_fib_forwarding(enabled=False)
-        logger.info("FIB forwarding disabled")
-    except Exception as e:
-        logger.warning(f"Failed to disable FIB forwarding: {e}")
+    for net, iface in attached_interfaces.items():
+        try:
+            policy_client.set_fib_forwarding(iface, enabled=False)
+            logger.info(f"FIB forwarding disabled on transit/{net} ({iface})")
+        except Exception as e:
+            logger.warning(f"Failed to disable FIB forwarding on {iface}: {e}")
 
 
 @pytest.fixture(scope="function")

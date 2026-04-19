@@ -28,6 +28,7 @@ class TestQuicRuleValidation:
     ):
         """Adding a QUIC rule with UDP protocol should succeed."""
         options = AddRuleOptions(
+            interface=attached_ingress,
             protocol="udp",
             dport=443,
             actions=[("drop", 0)],
@@ -44,6 +45,7 @@ class TestQuicRuleValidation:
     ):
         """Adding a QUIC rule with 'any' protocol should succeed."""
         options = AddRuleOptions(
+            interface=attached_ingress,
             protocol="any",
             dport=443,
             actions=[("drop", 0)],
@@ -62,6 +64,7 @@ class TestQuicRuleValidation:
     ):
         """Adding a QUIC rule with TCP protocol should be rejected."""
         options = AddRuleOptions(
+            interface=attached_ingress,
             protocol="tcp",
             dport=443,
             actions=[("drop", 0)],
@@ -78,6 +81,7 @@ class TestQuicRuleValidation:
     ):
         """Adding a QUIC v2 rule on egress should succeed."""
         options = AddRuleOptions(
+            interface=attached_egress,
             protocol="udp",
             dport=443,
             actions=[("drop", 0)],
@@ -94,6 +98,7 @@ class TestQuicRuleValidation:
     ):
         """Adding a QUIC v2 rule on ingress with UDP should succeed."""
         options = AddRuleOptions(
+            interface=attached_ingress,
             protocol="udp",
             dport=443,
             actions=[("log", 0), ("pass", 1)],
@@ -116,6 +121,7 @@ class TestQuicRuleOutput:
     ):
         """Listed rules should include the quic_version field."""
         options = AddRuleOptions(
+            interface=attached_ingress,
             protocol="udp",
             dport=443,
             actions=[("log", 0)],
@@ -139,6 +145,7 @@ class TestQuicRuleOutput:
     ):
         """Plain UDP rules without QUIC filter should have no quic_version."""
         options = AddRuleOptions(
+            interface=attached_ingress,
             protocol="udp",
             dport=53,
             actions=[("pass", 0)],
@@ -159,6 +166,7 @@ class TestQuicRuleOutput:
     ):
         """A QUIC 'any' rule should be stored and returned as 'any'."""
         options = AddRuleOptions(
+            interface=attached_ingress,
             protocol="udp",
             dport=443,
             actions=[("pass", 0)],
@@ -181,6 +189,7 @@ class TestQuicRuleOutput:
         """Multiple QUIC rules with different versions should all be stored correctly."""
         for version in ("v1", "v2"):
             options = AddRuleOptions(
+                interface=attached_ingress,
                 protocol="udp",
                 dport=443,
                 actions=[("log", 0)],

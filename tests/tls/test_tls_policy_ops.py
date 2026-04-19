@@ -61,6 +61,7 @@ class TestPolicyOpsOverTls:
         assert result.success, f"attach_ingress failed: {result.message}"
         try:
             opts = AddRuleOptions(
+                interface=iface,
                 src="198.51.100.0/24",
                 actions=[(PolicyAction.DROP, 0)],
                 rule_id=rule_id,
@@ -72,7 +73,9 @@ class TestPolicyOpsOverTls:
             rule_ids = [r.rule_id for r in rules]
             assert rule_id in rule_ids, f"Rule {rule_id} not found in rules: {rule_ids}"
 
-            del_result = policy_client.delete_rule(rule_id=rule_id, direction="ingress")
+            del_result = policy_client.delete_rule(
+                iface, rule_id=rule_id, direction="ingress"
+            )
             assert del_result.success, f"delete_rule failed: {del_result.message}"
 
             rules_after = policy_client.list_rules(direction="ingress")
@@ -91,11 +94,17 @@ class TestPolicyOpsOverTls:
         result = policy_client.attach_ingress(iface, IngressMode.AUTO)
         assert result.success, f"attach_ingress failed: {result.message}"
         try:
-            r = policy_client.set_default_action(PolicyAction.DROP, direction="ingress")
+            r = policy_client.set_default_action(
+                PolicyAction.DROP, direction="ingress", interface=iface
+            )
             assert r.success, f"set_default_action(DROP) failed: {r.message}"
 
-            r = policy_client.set_default_action(PolicyAction.PASS, direction="ingress")
+            r = policy_client.set_default_action(
+                PolicyAction.PASS, direction="ingress", interface=iface
+            )
             assert r.success, f"set_default_action(PASS) failed: {r.message}"
         finally:
-            policy_client.set_default_action(PolicyAction.PASS, direction="ingress")
+            policy_client.set_default_action(
+                PolicyAction.PASS, direction="ingress", interface=iface
+            )
             policy_client.detach_ingress(iface)

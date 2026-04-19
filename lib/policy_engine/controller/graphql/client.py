@@ -41,9 +41,41 @@ class Ruleset:
 
 
 @dataclass
+class NodeInterface:
+    node_id: str
+    name: str
+    mac_address: Optional[str] = None
+    link_state: str = "unknown"
+    addresses_json: str = "[]"
+    tag: Optional[str] = None
+    xdp_attached: bool = False
+    tc_attached: bool = False
+    fib_forwarding: bool = False
+    ingress_default_action: Optional[str] = None
+    egress_default_action: Optional[str] = None
+
+
+@dataclass
 class OperationResult:
     success: bool
     message: Optional[str] = None
+
+
+@dataclass
+class NodeRuleStats:
+    rule_id: str
+    direction: str
+    packets: int
+    bytes: int
+
+
+@dataclass
+class NodeInterfaceStats:
+    interface: str
+    direction: str
+    policy_drops: int
+    rx_packets: int
+    rx_bytes: int
 
 
 class ControllerClient:
@@ -69,18 +101,24 @@ class ControllerClient:
 
         cmd: str
         output: str
+        # Gated mutations (createRule, attachProgram, …) block for up to
+        # DEFAULT_CONFIRM_DEADLINE_MS (30 s) + 1 s buffer on the controller
+        # side, so 60 s leaves comfortable headroom without any risk of the
+        # SSH channel timing out before the controller responds.
+        _SSH_TIMEOUT = 60
+
         if len(payload_json) > 10000:
             cmd = (
                 f"curl -s -X POST -H 'Content-Type: application/json' -d @- {self.url}"
             )
-            output = self.node.ssh_command_with_stdin(cmd, payload_json, timeout=30)
+            output = self.node.ssh_command_with_stdin(cmd, payload_json, timeout=_SSH_TIMEOUT)
         else:
             payload_escaped: str = payload_json.replace("'", "'\\''")
             cmd = (
                 f"curl -s -X POST -H 'Content-Type: application/json' "
                 f"-d '{payload_escaped}' {self.url}"
             )
-            output = self.node.ssh_command(cmd, timeout=30)
+            output = self.node.ssh_command(cmd, timeout=_SSH_TIMEOUT)
 
         try:
             response = json.loads(output)
@@ -358,6 +396,328 @@ class ControllerClient:
         )
         r = data["detachProgram"]
         return OperationResult(success=r["success"], message=r.get("message"))
+
+    def set_fib_forwarding(
+        self, node_id: str, interface_name: str, enabled: bool
+    ) -> OperationResult:
+        """Enable or disable XDP FIB forwarding on an interface."""
+        query = """
+        mutation SetFib($nodeId: ID!, $interfaceName: String!, $enabled: Boolean!) {
+            setFibForwarding(nodeId: $nodeId, interfaceName: $interfaceName, enabled: $enabled) {
+                success message
+            }
+        }
+        """
+        data = self._execute(
+            query,
+            {"nodeId": node_id, "interfaceName": interface_name, "enabled": enabled},
+        )
+        r = data["setFibForwarding"]
+        return OperationResult(success=r["success"], message=r.get("message"))
+
+    def set_interface_default_action(
+        self,
+        node_id: str,
+        interface_name: str,
+        direction: str,
+        action: str,
+    ) -> OperationResult:
+        """Set the default action for unmatched packets on an interface+direction."""
+        query = """
+        mutation SetDefault(
+            $nodeId: ID!
+            $interfaceName: String!
+            $direction: String!
+            $action: String!
+        ) {
+            setInterfaceDefaultAction(
+                nodeId: $nodeId
+                interfaceName: $interfaceName
+                direction: $direction
+                action: $action
+            ) { success message }
+        }
+        """
+        data = self._execute(
+            query,
+            {
+                "nodeId": node_id,
+                "interfaceName": interface_name,
+                "direction": direction,
+                "action": action,
+            },
+        )
+        r = data["setInterfaceDefaultAction"]
+        return OperationResult(success=r["success"], message=r.get("message"))
+
+    def label_node(self, node_id: str, label: str) -> OperationResult:
+        """Set a human-readable label on a node."""
+        query = """
+        mutation LabelNode($nodeId: ID!, $label: String!) {
+            labelNode(nodeId: $nodeId, label: $label) { success message }
+        }
+        """
+        data = self._execute(query, {"nodeId": node_id, "label": label})
+        r = data["labelNode"]
+        return OperationResult(success=r["success"], message=r.get("message"))
+
+    # ── Interface queries ─────────────────────────────────────────────────────
+
+    def node_interfaces(self, node_id: str) -> List[NodeInterface]:
+        """List all interfaces reported for a node."""
+        query = """
+        query NodeInterfaces($nodeId: ID!) {
+            nodeInterfaces(nodeId: $nodeId) {
+                nodeId name macAddress linkState addressesJson tag
+                xdpAttached tcAttached fibForwarding
+                ingressDefaultAction egressDefaultAction
+            }
+        }
+        """
+        data = self._execute(query, {"nodeId": node_id})
+        return [
+            NodeInterface(
+                node_id=i["nodeId"],
+                name=i["name"],
+                mac_address=i.get("macAddress"),
+                link_state=i.get("linkState", "unknown"),
+                addresses_json=i.get("addressesJson", "[]"),
+                tag=i.get("tag"),
+                xdp_attached=i.get("xdpAttached", False),
+                tc_attached=i.get("tcAttached", False),
+                fib_forwarding=i.get("fibForwarding", False),
+                ingress_default_action=i.get("ingressDefaultAction"),
+                egress_default_action=i.get("egressDefaultAction"),
+            )
+            for i in data.get("nodeInterfaces", [])
+        ]
+
+    # ── Single-rule (gated) operations ────────────────────────────────────────
+
+    def create_rule(
+        self,
+        node_id: str,
+        interface_name: str,
+        direction: str,
+        src_cidr: Optional[str] = None,
+        dst_cidr: Optional[str] = None,
+        src_port: Optional[int] = None,
+        dst_port: Optional[int] = None,
+        protocol: Optional[str] = None,
+        actions_json: str = '[{"action":"drop","priority":0}]',
+    ) -> dict:
+        """
+        Create a single rule on a node via the gated createRule mutation.
+
+        Unlike assignRuleset/pushConfig, this path goes through the
+        controller's PendingRegistry — the controller waits for the agent's
+        ConfigConfirm handshake before returning. If the agent cannot
+        confirm (e.g. the new rule blackholes the controller path), the
+        mutation raises RuntimeError with "BLOCKED_PENDING_CONFIRM" or a
+        reverted/abandoned message depending on the outcome.
+        """
+        query = """
+        mutation CreateRule($input: CreateRuleInput!) {
+            createRule(input: $input) {
+                id nodeId interfaceName direction srcCidr dstCidr
+                srcPort dstPort protocol actionsJson
+            }
+        }
+        """
+        input_obj: dict[str, Any] = {
+            "nodeId": node_id,
+            "interfaceName": interface_name,
+            "direction": direction,
+            "actionsJson": actions_json,
+        }
+        if src_cidr is not None:
+            input_obj["srcCidr"] = src_cidr
+        if dst_cidr is not None:
+            input_obj["dstCidr"] = dst_cidr
+        if src_port is not None:
+            input_obj["srcPort"] = src_port
+        if dst_port is not None:
+            input_obj["dstPort"] = dst_port
+        if protocol is not None:
+            input_obj["protocol"] = protocol
+        data = self._execute(query, {"input": input_obj})
+        return data["createRule"]
+
+    def create_rules_multi_node(
+        self,
+        node_ids: List[str],
+        interface_name: str,
+        direction: str,
+        src_cidr: Optional[str] = None,
+        dst_cidr: Optional[str] = None,
+        src_port: Optional[int] = None,
+        dst_port: Optional[int] = None,
+        protocol: Optional[str] = None,
+        actions_json: str = '[{"action":"drop","priority":0}]',
+    ) -> list:
+        """Create the same rule on multiple nodes at once."""
+        query = """
+        mutation CreateMulti($input: CreateRuleMultiNodeInput!) {
+            createRulesMultiNode(input: $input) {
+                id nodeId interfaceName direction srcCidr dstCidr
+                srcPort dstPort protocol actionsJson
+            }
+        }
+        """
+        input_obj: dict = {
+            "nodeIds": node_ids,
+            "interfaceName": interface_name,
+            "direction": direction,
+            "actionsJson": actions_json,
+        }
+        if src_cidr is not None:
+            input_obj["srcCidr"] = src_cidr
+        if dst_cidr is not None:
+            input_obj["dstCidr"] = dst_cidr
+        if src_port is not None:
+            input_obj["srcPort"] = src_port
+        if dst_port is not None:
+            input_obj["dstPort"] = dst_port
+        if protocol is not None:
+            input_obj["protocol"] = protocol
+        data = self._execute(query, {"input": input_obj})
+        return data.get("createRulesMultiNode", [])
+
+    def delete_rule(self, rule_id: str) -> OperationResult:
+        """Delete a single rule from the controller (gated — blocks until the node confirms)."""
+        query = """
+        mutation DeleteRule($ruleId: ID!) {
+            deleteRule(ruleId: $ruleId) { success message }
+        }
+        """
+        data = self._execute(query, {"ruleId": rule_id})
+        r = data["deleteRule"]
+        return OperationResult(success=r["success"], message=r.get("message"))
+
+    def list_rules_for_node(
+        self,
+        node_id: str,
+        interface_name: Optional[str] = None,
+        direction: Optional[str] = None,
+    ) -> list:
+        """List controller-stored rules for a node (optionally filtered)."""
+        query = """
+        query Rules($nodeId: ID!, $iface: String, $dir: String) {
+            rules(nodeId: $nodeId, interfaceName: $iface, direction: $dir) {
+                id nodeId interfaceName direction
+                srcCidr dstCidr srcPort dstPort protocol actionsJson
+            }
+        }
+        """
+        data = self._execute(
+            query,
+            {"nodeId": node_id, "iface": interface_name, "dir": direction},
+        )
+        return data.get("rules", [])
+
+    def node_rule_stats(
+        self,
+        node_id: str,
+        rule_id: str,
+        direction: str,
+    ) -> Optional[NodeRuleStats]:
+        """Return packet/byte counters for a rule from the node's latest metrics snapshot.
+
+        Stats are derived from Prometheus metrics pushed by the agent every 30 s.
+        Returns None when no metrics snapshot has been received for the node yet.
+        The rule_id must be the controller-assigned string ID (same value returned
+        by create_rule).
+        """
+        query = """
+        query NodeRuleStats($nodeId: ID!, $ruleId: ID!, $dir: String!) {
+            nodeRuleStats(nodeId: $nodeId, ruleId: $ruleId, direction: $dir) {
+                ruleId direction packets bytes
+            }
+        }
+        """
+        data = self._execute(query, {"nodeId": node_id, "ruleId": rule_id, "dir": direction})
+        raw = data.get("nodeRuleStats")
+        if raw is None:
+            return None
+        return NodeRuleStats(
+            rule_id=raw["ruleId"],
+            direction=raw["direction"],
+            packets=raw["packets"],
+            bytes=raw["bytes"],
+        )
+
+    def node_interface_stats(
+        self,
+        node_id: str,
+        interface_name: str,
+        direction: str,
+    ) -> Optional[NodeInterfaceStats]:
+        """Return traffic counters for an interface from the node's latest metrics snapshot.
+
+        Stats are derived from Prometheus metrics pushed by the agent every 30 s.
+        Returns None when no metrics snapshot has been received for the node yet.
+        """
+        query = """
+        query NodeInterfaceStats($nodeId: ID!, $iface: String!, $dir: String!) {
+            nodeInterfaceStats(nodeId: $nodeId, interfaceName: $iface, direction: $dir) {
+                interface direction policyDrops rxPackets rxBytes
+            }
+        }
+        """
+        data = self._execute(
+            query, {"nodeId": node_id, "iface": interface_name, "dir": direction}
+        )
+        raw = data.get("nodeInterfaceStats")
+        if raw is None:
+            return None
+        return NodeInterfaceStats(
+            interface=raw["interface"],
+            direction=raw["direction"],
+            policy_drops=raw["policyDrops"],
+            rx_packets=raw["rxPackets"],
+            rx_bytes=raw["rxBytes"],
+        )
+
+    def refresh_node_metrics(self, node_id: str) -> OperationResult:
+        """Ask the controller to request an immediate metrics push from the node.
+
+        Sends a MetricsQuery message to the connected agent, waking its metrics
+        forwarder immediately rather than waiting for the next 30-second tick.
+        Returns an error result if the node is not currently connected.
+        """
+        query = """
+        mutation RefreshNodeMetrics($nodeId: ID!) {
+            refreshNodeMetrics(nodeId: $nodeId) { success message }
+        }
+        """
+        data = self._execute(query, {"nodeId": node_id})
+        r = data["refreshNodeMetrics"]
+        return OperationResult(success=r["success"], message=r.get("message"))
+
+    def node_last_seen(self, node_id: str) -> Optional[str]:
+        """Return the lastSeen timestamp (ISO-8601 string) for the node, or None."""
+        query = """
+        query NodeLastSeen($nodeId: ID!) {
+            node(id: $nodeId) { lastSeen }
+        }
+        """
+        data = self._execute(query, {"nodeId": node_id})
+        node = data.get("node")
+        if node is None:
+            return None
+        return node.get("lastSeen")
+
+    def pending_generation(self, node_id: str) -> Optional[dict]:
+        """Return the in-flight pending generation for a node, if any."""
+        query = """
+        query Pending($nodeId: ID!) {
+            pendingGeneration(nodeId: $nodeId) {
+                generationId nodeId opKind issuedAt
+            }
+        }
+        """
+        data = self._execute(query, {"nodeId": node_id})
+        return data.get("pendingGeneration")
 
     # ── CA cert ───────────────────────────────────────────────────────────────
 

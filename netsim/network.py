@@ -4,12 +4,15 @@
 Network bridge and interface management.
 """
 
+import logging
 import subprocess
 import re
 import os
 import getpass
 import pwd
 from typing import Any, List
+
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class NetworkManager:
@@ -97,34 +100,59 @@ class NetworkManager:
 
     @staticmethod
     def _allow_bridge_forwarding(name: str) -> None:
-        """Insert nftables ACCEPT rules for bridge forwarding if br_netfilter is active."""
-        try:
-            with open("/proc/sys/net/bridge/bridge-nf-call-iptables") as f:
-                if f.read().strip() != "1":
-                    return
-        except OSError:
-            return
+        """Insert nftables ACCEPT rules for bridge forwarding if br_netfilter is active.
+
+        When Docker (or anything that loads br_netfilter) is present, bridged
+        IPv4/IPv6 traffic traverses the host's ip/ip6 filter FORWARD chain.
+        Docker sets that chain's policy to drop, so VM-to-VM traffic on the
+        netsim bridge is silently dropped without these accept rules.
+
+        Idempotent: checks for pre-existing rules and skips insertion.
+        """
         nft: str | None = next(
             (p for p in ["/usr/sbin/nft", "/sbin/nft", "nft"] if os.path.isfile(p)),
             None,
         )
         if nft is None:
             return
-        try:
-            # Check if ip filter FORWARD chain exists (created by Docker/libvirt)
-            result: subprocess.CompletedProcess[bytes] = subprocess.run(
-                [nft, "list", "chain", "ip", "filter", "FORWARD"],
+
+        # Each family has its own br_netfilter sysctl toggle and filter table.
+        active_families: List[str] = []
+        for family, sysctl in (
+            ("ip", "bridge-nf-call-iptables"),
+            ("ip6", "bridge-nf-call-ip6tables"),
+        ):
+            try:
+                with open(f"/proc/sys/net/bridge/{sysctl}") as f:
+                    if f.read().strip() == "1":
+                        active_families.append(family)
+            except OSError:
+                continue
+
+        if not active_families:
+            return
+
+        for family in active_families:
+            list_res: subprocess.CompletedProcess[bytes] = subprocess.run(
+                ["sudo", nft, "list", "chain", family, "filter", "FORWARD"],
                 capture_output=True,
             )
-            if result.returncode != 0:
-                return
+            if list_res.returncode != 0:
+                # Filter table / FORWARD chain not present in this family.
+                continue
+
+            existing: str = list_res.stdout.decode()
             for direction in ("iifname", "oifname"):
-                subprocess.run(
+                # Match both quoted and unquoted forms that nft may emit.
+                if re.search(rf'{direction}\s+"?{re.escape(name)}"?(\s|$)', existing):
+                    continue
+                insert_res: subprocess.CompletedProcess[bytes] = subprocess.run(
                     [
+                        "sudo",
                         nft,
                         "insert",
                         "rule",
-                        "ip",
+                        family,
                         "filter",
                         "FORWARD",
                         direction,
@@ -134,8 +162,14 @@ class NetworkManager:
                     ],
                     capture_output=True,
                 )
-        except FileNotFoundError:
-            return
+                if insert_res.returncode != 0:
+                    logger.warning(
+                        "Failed to insert %s FORWARD %s accept rule for %s: %s",
+                        family,
+                        direction,
+                        name,
+                        insert_res.stderr.decode().strip(),
+                    )
 
     @staticmethod
     def delete_bridge(name: str) -> None:

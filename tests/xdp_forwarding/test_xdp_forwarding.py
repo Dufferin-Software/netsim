@@ -231,8 +231,11 @@ class TestXdpFibForwarding:
         client_prefix = client_ip + "/32"
 
         # Add a DROP rule for client source IP
+        transit_iface = self._transit_net1_iface(node_interfaces)
         result = policy_client.add_rule(
-            AddRuleOptions(src=client_prefix, actions=[("drop", 0)]),
+            AddRuleOptions(
+                interface=transit_iface, src=client_prefix, actions=[("drop", 0)]
+            ),
             direction="ingress",
         )
         assert result.success, f"Failed to add DROP rule: {result.message}"
@@ -253,7 +256,7 @@ class TestXdpFibForwarding:
         finally:
             # Remove rule and verify traffic resumes
             del_result = policy_client.delete_rule(
-                src=client_prefix, direction="ingress"
+                transit_iface, src=client_prefix, direction="ingress"
             )
             assert del_result.success, (
                 f"Failed to delete DROP rule: {del_result.message}"
@@ -327,16 +330,19 @@ class TestXdpFibForwarding:
         server_ip = self._server_ip(node_interfaces)
         iface = self._transit_net1_iface(node_interfaces)
 
-        # Initially disabled: query must return False
-        assert not policy_client.get_fib_forwarding(), (
-            "Expected FIB forwarding to be disabled initially"
+        # Initially disabled: query must return False for this interface
+        assert not policy_client.get_fib_forwarding(iface), (
+            f"Expected FIB forwarding to be disabled initially on {iface}"
         )
 
-        # Enable FIB
-        result = policy_client.set_fib_forwarding(enabled=True)
-        assert result.success, f"Failed to enable FIB: {result.message}"
-        assert policy_client.get_fib_forwarding(), (
-            "Expected FIB forwarding to be enabled after setFibForwarding(true)"
+        # Enable FIB on both transit ingress interfaces (client→server and reverse)
+        for peer_iface in attached_interfaces.values():
+            result = policy_client.set_fib_forwarding(peer_iface, enabled=True)
+            assert result.success, (
+                f"Failed to enable FIB on {peer_iface}: {result.message}"
+            )
+        assert policy_client.get_fib_forwarding(iface), (
+            f"Expected FIB forwarding to be enabled on {iface} after setFibForwarding(true)"
         )
 
         # Warm up ARP and send pings with FIB enabled
@@ -349,11 +355,14 @@ class TestXdpFibForwarding:
             f"FIB enabled: expected fib_forwarded_packets > 0, got {stats_on.fib_forwarded_packets}"
         )
 
-        # Disable FIB
-        result = policy_client.set_fib_forwarding(enabled=False)
-        assert result.success, f"Failed to disable FIB: {result.message}"
-        assert not policy_client.get_fib_forwarding(), (
-            "Expected FIB forwarding to be disabled after setFibForwarding(false)"
+        # Disable FIB on both transit ingress interfaces
+        for peer_iface in attached_interfaces.values():
+            result = policy_client.set_fib_forwarding(peer_iface, enabled=False)
+            assert result.success, (
+                f"Failed to disable FIB on {peer_iface}: {result.message}"
+            )
+        assert not policy_client.get_fib_forwarding(iface), (
+            f"Expected FIB forwarding to be disabled on {iface} after setFibForwarding(false)"
         )
 
         policy_client.clear_global_stats(iface, direction="ingress")

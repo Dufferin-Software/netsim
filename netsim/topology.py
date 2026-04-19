@@ -4,7 +4,6 @@
 Topology definition and parsing from YAML.
 """
 
-
 import yaml
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Any, Union

@@ -31,6 +31,7 @@ class TestSniRuleValidation:
     ):
         """Adding a rule with SNI and TCP protocol should succeed."""
         options = AddRuleOptions(
+            interface=attached_egress,
             protocol="tcp",
             dport=443,
             actions=[("drop", 0)],
@@ -47,6 +48,7 @@ class TestSniRuleValidation:
     ):
         """Adding a rule with wildcard SNI and TCP protocol should succeed."""
         options = AddRuleOptions(
+            interface=attached_egress,
             protocol="tcp",
             dport=443,
             actions=[("drop", 0)],
@@ -65,6 +67,7 @@ class TestSniRuleValidation:
     ):
         """Adding a rule with SNI and UDP protocol should fail."""
         options = AddRuleOptions(
+            interface=attached_egress,
             protocol="udp",
             dport=443,
             actions=[("drop", 0)],
@@ -84,6 +87,7 @@ class TestSniRuleValidation:
     ):
         """Adding a rule with SNI and ICMP protocol should fail."""
         options = AddRuleOptions(
+            interface=attached_egress,
             protocol="icmp",
             actions=[("drop", 0)],
             sni="example.com",
@@ -102,6 +106,7 @@ class TestSniRuleValidation:
     ):
         """Adding a rule with SNI and 'any' protocol should fail."""
         options = AddRuleOptions(
+            interface=attached_egress,
             protocol="any",
             dport=443,
             actions=[("drop", 0)],
@@ -121,6 +126,7 @@ class TestSniRuleValidation:
     ):
         """SNI rule should appear in rule list with correct SNI pattern."""
         options = AddRuleOptions(
+            interface=attached_egress,
             protocol="tcp",
             dport=443,
             actions=[("drop", 0)],
@@ -162,6 +168,7 @@ class TestSniRuleTrafficMatching:
 
         rule_id = 88888
         options = AddRuleOptions(
+            interface=attached_egress,
             src=server_network_v4,
             protocol="tcp",
             dport=443,
@@ -245,6 +252,7 @@ class TestMultiSniRuleMatching:
 
         result = policy_client.add_rule(
             AddRuleOptions(
+                interface=attached_egress,
                 src=server_network_v4,
                 protocol="tcp",
                 dport=443,
@@ -258,6 +266,7 @@ class TestMultiSniRuleMatching:
 
         result = policy_client.add_rule(
             AddRuleOptions(
+                interface=attached_egress,
                 src=server_network_v4,
                 protocol="tcp",
                 dport=443,
@@ -334,6 +343,7 @@ class TestMultiSniRuleMatching:
 
         result = policy_client.add_rule(
             AddRuleOptions(
+                interface=attached_egress,
                 src=server_network_v4,
                 protocol="tcp",
                 dport=443,
@@ -347,6 +357,7 @@ class TestMultiSniRuleMatching:
 
         result = policy_client.add_rule(
             AddRuleOptions(
+                interface=attached_egress,
                 src=server_network_v4,
                 protocol="tcp",
                 dport=443,
@@ -427,6 +438,7 @@ class TestMultiSniRuleMatching:
 
         result = policy_client.add_rule(
             AddRuleOptions(
+                interface=attached_egress,
                 src=server_network_v4,
                 protocol="tcp",
                 dport=443,
@@ -440,6 +452,7 @@ class TestMultiSniRuleMatching:
 
         result = policy_client.add_rule(
             AddRuleOptions(
+                interface=attached_egress,
                 src=server_network_v4,
                 protocol="tcp",
                 dport=8443,
@@ -540,6 +553,7 @@ class TestMultipleSniRules:
         rule_id_2 = 77772
 
         options_1 = AddRuleOptions(
+            interface=attached_egress,
             src=server_network_v4,
             protocol="tcp",
             dport=443,
@@ -554,6 +568,7 @@ class TestMultipleSniRules:
         logger.info(f"Added SNI rule {rule_id_1} for bing.com with LOG action")
 
         options_2 = AddRuleOptions(
+            interface=attached_egress,
             src=server_network_v4,
             protocol="tcp",
             dport=443,
@@ -645,6 +660,7 @@ class TestMultipleSniRules:
         rule_id_2 = 77782
 
         options_1 = AddRuleOptions(
+            interface=attached_egress,
             src=server_network_v4,
             protocol="tcp",
             dport=443,
@@ -658,6 +674,7 @@ class TestMultipleSniRules:
         )
 
         options_2 = AddRuleOptions(
+            interface=attached_egress,
             src=server_network_v4,
             protocol="tcp",
             dport=8443,

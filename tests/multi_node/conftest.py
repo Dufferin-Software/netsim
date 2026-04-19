@@ -106,6 +106,27 @@ def _wait_for_active_nodes(
     pytest.fail(f"Nodes {node_ids} did not reach Active status within {timeout}s")
 
 
+def _wait_for_online_nodes(
+    client: ControllerClient,
+    node_ids: List[str],
+    timeout: int = _ACTIVE_TIMEOUT,
+) -> None:
+    """Wait until all given node IDs appear in onlineNodes (management gRPC sessions)."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            online = set(client.online_nodes())
+            if all(nid in online for nid in node_ids):
+                logger.info(f"All nodes online: {node_ids}")
+                return
+            missing = [nid for nid in node_ids if nid not in online]
+            logger.debug(f"Still waiting for nodes to come online: {missing}")
+        except Exception as e:
+            logger.debug(f"Error polling online nodes: {e}")
+        time.sleep(_POLL_INTERVAL)
+    pytest.fail(f"Nodes {node_ids} did not come online within {timeout}s")
+
+
 def _write_agent_config(node: Node) -> None:
     """
     Write /etc/policy-node-agent/config.toml on the managed node.
@@ -140,13 +161,18 @@ def _write_hosts_entry(node: Node, controller_ip: str) -> None:
     This allows the agent to connect using the DNS name that matches the
     certificate, rather than using the IP address directly.
     """
-    # First, remove any existing controller entries to avoid duplicates
-    node.ssh_command("sudo sed -i '/\\bpolicy-controller\\b/d' /etc/hosts", timeout=10)
-    # Then append the new entry
-    node.ssh_command(
-        f"echo '{controller_ip} policy-controller' | sudo tee -a /etc/hosts > /dev/null",
-        timeout=10,
-    )
+    entry = f"{controller_ip} policy-controller"
+    # Remove any existing controller entries to avoid duplicates, then append.
+    # Write to both /etc/hosts (immediate effect) and the cloud-init template
+    # so the entry survives reboots when manage_etc_hosts=True is active.
+    for target in ["/etc/hosts", "/etc/cloud/templates/hosts.debian.tmpl"]:
+        node.ssh_command(
+            f"sudo sed -i '/\\bpolicy-controller\\b/d' {target}", timeout=10
+        )
+        node.ssh_command(
+            f"echo '{entry}' | sudo tee -a {target} > /dev/null",
+            timeout=10,
+        )
 
 
 def _write_ca_cert_on_node(node: Node, ca_pem: str) -> None:
@@ -326,5 +352,8 @@ def enrolled_nodes(nodes, controller_client, node_services) -> Dict[str, str]:
 
     # Wait for all to reach Active
     _wait_for_active_nodes(controller_client, list(approved.values()))
+
+    # Wait for agents to establish management gRPC sessions (online in controller)
+    _wait_for_online_nodes(controller_client, list(approved.values()))
 
     return approved

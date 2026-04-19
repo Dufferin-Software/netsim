@@ -167,13 +167,18 @@ def attached_ingress(graphql_client, server_interface, configure_node_interfaces
 
 
 @pytest.fixture(scope="function")
-def clean_ingress_rules(graphql_client):
+def clean_ingress_rules(graphql_client, server_interface):
     """Flush ingress rules and reset default action before and after each test."""
+    iface = server_interface.if_name
     graphql_client.flush_rules(direction="ingress")
-    graphql_client.set_default_action(PolicyAction.PASS, direction="ingress")
+    graphql_client.set_default_action(
+        PolicyAction.PASS, direction="ingress", interface=iface
+    )
     yield
     graphql_client.flush_rules(direction="ingress")
-    graphql_client.set_default_action(PolicyAction.PASS, direction="ingress")
+    graphql_client.set_default_action(
+        PolicyAction.PASS, direction="ingress", interface=iface
+    )
 
 
 @pytest.fixture(scope="function")

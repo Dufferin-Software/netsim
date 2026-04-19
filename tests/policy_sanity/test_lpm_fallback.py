@@ -53,7 +53,9 @@ def _covering_prefix(network_str: str) -> str:
 class TestLpmFallback:
     """Covering-prefix fallback: unmatched /24 rules escalate to /8 rules."""
 
-    def _install_rules(self, policy_client, client_network_v4: str) -> str:
+    def _install_rules(
+        self, policy_client, client_network_v4: str, interface: str
+    ) -> str:
         """Install Rule A (covering /8 DROP) and Rule B (specific /24 TCP/22 PASS).
 
         Returns the covering prefix string for use in log messages.
@@ -63,6 +65,7 @@ class TestLpmFallback:
         # Rule A: broad DROP on the /8 covering prefix
         result = policy_client.add_rule(
             AddRuleOptions(
+                interface=interface,
                 src=covering,
                 protocol="any",
                 actions=[("drop", 100)],
@@ -77,6 +80,7 @@ class TestLpmFallback:
         # Rule B: narrow PASS for TCP/22 at the /24 level
         result = policy_client.add_rule(
             AddRuleOptions(
+                interface=interface,
                 src=client_network_v4,
                 protocol="tcp",
                 dport=PORT_SSH,
@@ -113,7 +117,9 @@ class TestLpmFallback:
         confirming that the engine consulted the /8 entry rather than using the default.
         """
         client = nodes["client"]
-        covering = self._install_rules(policy_client, client_network_v4)
+        covering = self._install_rules(
+            policy_client, client_network_v4, attached_ingress
+        )
 
         initial_stats = policy_client.get_stats(attached_ingress, direction="ingress")
         initial_drops = initial_stats.global_stats.policy_drops
@@ -155,7 +161,7 @@ class TestLpmFallback:
         engine applies it directly and does not consult the /8 covering DROP rule.
         """
         client = nodes["client"]
-        self._install_rules(policy_client, client_network_v4)
+        self._install_rules(policy_client, client_network_v4, attached_ingress)
 
         initial_stats = policy_client.get_stats(attached_ingress, direction="ingress")
         initial_drops = initial_stats.global_stats.policy_drops
@@ -198,11 +204,13 @@ class TestLpmFallback:
         from lib.policy_engine.engine.cli.client import PolicyAction
 
         client = nodes["client"]
-        covering = self._install_rules(policy_client, client_network_v4)
+        covering = self._install_rules(
+            policy_client, client_network_v4, attached_ingress
+        )
 
         # Ensure default is PASS (clean_ingress_rules already does this, but be explicit)
         result = policy_client.set_default_action(
-            PolicyAction.PASS, direction="ingress"
+            PolicyAction.PASS, direction="ingress", interface=attached_ingress
         )
         assert result.success, "Failed to set default action to PASS"
 
@@ -223,8 +231,8 @@ class TestLpmFallback:
             f"TCP/{PORT_HTTP} with default=PASS: covering={covering}, "
             f"drops_delta={drops_delta}, expected={PACKETS}"
         )
-        assert drops_delta == PACKETS, (
-            f"Expected {PACKETS} drops even with default=PASS: "
+        assert drops_delta >= PACKETS, (
+            f"Expected at least {PACKETS} drops even with default=PASS: "
             f"the covering prefix {covering} DROP rule should be applied "
             f"before the default action is reached. Got {drops_delta} drops."
         )

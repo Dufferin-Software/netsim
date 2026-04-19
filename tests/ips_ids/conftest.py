@@ -236,13 +236,18 @@ def attached_ingress(policy_client, server_interface, configure_node_interfaces)
 
 
 @pytest.fixture(scope="function")
-def clean_ingress_rules(policy_client):
+def clean_ingress_rules(policy_client, server_interface):
     """Flush ingress rules and reset default action before and after each test."""
+    iface = server_interface.if_name
     policy_client.flush_rules(direction="ingress")
-    policy_client.set_default_action(PolicyAction.PASS, direction="ingress")
+    policy_client.set_default_action(
+        PolicyAction.PASS, direction="ingress", interface=iface
+    )
     yield
     policy_client.flush_rules(direction="ingress")
-    policy_client.set_default_action(PolicyAction.PASS, direction="ingress")
+    policy_client.set_default_action(
+        PolicyAction.PASS, direction="ingress", interface=iface
+    )
 
 
 # ============================================================================

@@ -49,8 +49,9 @@ _current_topology = None
 
 # Helper functions for running_topology
 def _cleanup_leftover_vms(topology) -> None:
-    """Clean up any leftover VMs from previous failed runs."""
+    """Clean up any leftover VMs and tap devices from previous failed runs."""
     libvirt_utils.cleanup_leftover_vms(topology)
+    libvirt_utils.cleanup_leftover_taps()
 
 
 def _wait_for_vms_running(simulator, timeout=30) -> None:
@@ -178,6 +179,22 @@ def pytest_addoption(parser) -> None:
 
 def pytest_configure(config) -> None:
     """Validate configuration before tests run (before VMs are started)."""
+    # Configure logging to use UTC timestamps
+    import time
+
+    # Set all formatters to use UTC time
+    logging.Formatter.converter = time.gmtime
+
+    # Update existing handlers to use the UTC formatter
+    for handler in logging.root.handlers:
+        if handler.formatter:
+            handler.formatter.converter = time.gmtime
+
+    # Configure logging to ensure timestamps are in UTC
+    for logger_name in [""]:  # root logger and all
+        logger_obj = logging.getLogger(logger_name)
+        logger_obj.propagate = True
+
     packages_opt = config.getoption("--install-packages", default=None)
     if not packages_opt:
         return
@@ -197,6 +214,58 @@ def pytest_configure(config) -> None:
 
     if errors:
         raise pytest.UsageError("\n".join(errors))
+
+
+def pytest_sessionstart(session) -> None:
+    """Set up logging with UTC timestamps after pytest initialization."""
+    import time
+    import sys
+
+    # Ensure all formatters use UTC time
+    logging.Formatter.converter = time.gmtime
+
+    # Remove ALL existing handlers to prevent duplicates
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers[
+        :
+    ]:  # Copy the list to avoid modification issues
+        root_logger.removeHandler(handler)
+
+    # Add our own colored console handler with timestamps
+    console_handler = logging.StreamHandler(sys.stderr)
+
+    # Color mapping for log levels
+    class ColoredFormatter(logging.Formatter):
+        COLORS = {
+            "DEBUG": "\033[36m",  # Cyan
+            "INFO": "\033[32m",  # Green
+            "WARNING": "\033[33m",  # Yellow
+            "ERROR": "\033[31m",  # Red
+            "CRITICAL": "\033[35m",  # Magenta
+        }
+        RESET = "\033[0m"
+
+        def format(self, record):
+            # Add color to level name
+            levelname = record.levelname
+            if levelname in self.COLORS:
+                colored_level = f"{self.COLORS[levelname]}{levelname}{self.RESET}"
+                record.levelname = colored_level
+
+            # Use UTC time
+            self.converter = time.gmtime
+            return super().format(record)
+
+    formatter = ColoredFormatter(
+        fmt="%(asctime)s.%(msecs)03d %(levelname)-5s %(name)s:%(filename)s:%(lineno)d %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    console_handler.setFormatter(formatter)
+    console_handler.setLevel(logging.INFO)
+
+    # Add to root logger
+    root_logger.addHandler(console_handler)
+    root_logger.setLevel(logging.INFO)
 
 
 def pytest_runtest_makereport(item, call) -> None:
@@ -941,6 +1010,7 @@ def _map_networks_to_interfaces(
     if_names: list[str],
     node_allocations: dict[str, dict[str, dict[str, str | None]]],
     node: Node,
+    topology=None,
 ) -> dict[str, NodeInterface]:
     """Map networks to discovered interfaces."""
     iface_configs = node_allocations[node_name]
@@ -958,7 +1028,8 @@ def _map_networks_to_interfaces(
             if_name = if_names[if_idx]
             ipv4_addr = addrs.get("ipv4")
             ipv6_addr = addrs.get("ipv6")
-            node_ifaces[net_name] = NodeInterface(
+            network_obj = topology.get_network(net_name) if topology else None
+            iface = NodeInterface(
                 node_name,
                 if_name,
                 net_name,
@@ -966,7 +1037,10 @@ def _map_networks_to_interfaces(
                 node,
                 ipv4_addr=ipv4_addr,
                 ipv6_addr=ipv6_addr,
+                network=network_obj,
             )
+            node_ifaces[net_name] = iface
+            node.add_interface(iface)
             addr_info = ipv4_addr if ipv4_addr else ""
             if ipv6_addr:
                 addr_info = f"{ipv4_addr}, {ipv6_addr}" if ipv4_addr else ipv6_addr
@@ -998,7 +1072,7 @@ def node_interfaces(running_topology, topology, node_allocations, nodes):
 
         # Map networks to interfaces
         node_ifaces = _map_networks_to_interfaces(
-            node_name, if_names, node_allocations, node
+            node_name, if_names, node_allocations, node, topology
         )
 
         interfaces[node_name] = node_ifaces
@@ -1245,8 +1319,20 @@ class BaseTopologyTests:
 
 
 # ============================================================================
-# Session-scoped cleanup
+# Session-scoped setup and cleanup
 # ============================================================================
+
+
+@pytest.fixture(scope="session", autouse=True)
+def libvirt_preflight() -> None:
+    """Abort the test session early if the libvirt daemon is unresponsive.
+
+    Without this gate, a wedged libvirtd makes later fixtures block forever
+    inside ``libvirt.open()``. With it, pytest exits with an actionable
+    message before any VMs are touched.
+    """
+    uri: str = os.environ.get("NETSIM_LIBVIRT_URI", "qemu:///system")
+    libvirt_utils.preflight(uri)
 
 
 @pytest.fixture(scope="session", autouse=True)

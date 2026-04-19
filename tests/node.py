@@ -362,6 +362,7 @@ class NodeInterface:
         node: Node,
         ipv4_addr: Optional[str] = None,
         ipv6_addr: Optional[str] = None,
+        network=None,
     ):
         """
         Initialize a NodeInterface.
@@ -374,6 +375,7 @@ class NodeInterface:
             node: Reference to the Node object
             ipv4_addr: IPv4 address in CIDR format
             ipv6_addr: IPv6 address in CIDR format
+            network: Network object from topology (has .name attribute)
         """
         self.node_name = node_name
         self.if_name = if_name
@@ -382,6 +384,7 @@ class NodeInterface:
         self.node = node
         self.ipv4_addr = ipv4_addr
         self.ipv6_addr = ipv6_addr
+        self.network = network
 
     def _ssh(self, cmd: str, timeout: int = 10) -> str:
         """Execute SSH command via the associated node."""

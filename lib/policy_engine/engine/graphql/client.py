@@ -386,14 +386,20 @@ class GraphQLPolicyClient:
         # Map direction string to GraphQL enum
         gql_direction: str = "INGRESS" if direction == "ingress" else "EGRESS"
 
-        input_data = {
+        input_data: dict[str, Any] = {
+            "interface": options.interface,
             "direction": gql_direction,
             "protocol": gql_protocol,
-            "sport": options.sport,
-            "dport": options.dport,
             "actions": gql_actions,
         }
 
+        # Only include sport/dport when explicitly set — omitting them means "any
+        # port", matching how the CLI omits --sport/--dport flags when the value
+        # is zero.  Sending 0 would ask the server to match only port-0 traffic.
+        if options.sport:
+            input_data["sport"] = options.sport
+        if options.dport:
+            input_data["dport"] = options.dport
         if options.src:
             input_data["src"] = options.src
         if options.dst:
@@ -428,12 +434,15 @@ class GraphQLPolicyClient:
             message=result.get("message", ""),
         )
 
-    def managed_rules(self, direction: str = "ingress") -> List[ManagedRule]:
+    def managed_rules(
+        self, direction: str = "ingress", interface: Optional[str] = None
+    ) -> List[ManagedRule]:
         """
         List rules with a TTL or schedule.
 
         Args:
             direction: Traffic direction ("ingress" or "egress")
+            interface: Optional interface name to filter results
 
         Returns:
             List of ManagedRule objects
@@ -443,6 +452,7 @@ class GraphQLPolicyClient:
             managedRules(direction: $direction) {
                 ruleId
                 direction
+                interface
                 ruleState
                 expiresAtMs
                 schedule {
@@ -460,7 +470,10 @@ class GraphQLPolicyClient:
         if "__error__" in data:
             return []
         raw = data.get("managedRules", [])
-        return [ManagedRule.from_json(r) for r in raw]
+        rules = [ManagedRule.from_json(r) for r in raw]
+        if interface is not None:
+            rules = [r for r in rules if r.interface == interface]
+        return rules
 
     def add_rules_batch(
         self, rules: List[AddRuleOptions], direction: str = "ingress"
@@ -533,14 +546,17 @@ class GraphQLPolicyClient:
 
             gql_protocol: str = proto_map.get(options.protocol.lower(), "any")
 
-            input_data = {
+            input_data: dict[str, Any] = {
+                "interface": options.interface,
                 "direction": gql_direction,
                 "protocol": gql_protocol,
-                "sport": options.sport,
-                "dport": options.dport,
                 "actions": gql_actions,
             }
 
+            if options.sport:
+                input_data["sport"] = options.sport
+            if options.dport:
+                input_data["dport"] = options.dport
             if options.src:
                 input_data["src"] = options.src
             if options.dst:
@@ -575,12 +591,13 @@ class GraphQLPolicyClient:
         return BatchAddRulesResult.from_json(result)
 
     def delete_rules_batch(
-        self, ids: List[int], direction: str = "ingress"
+        self, interface: str, ids: List[int], direction: str = "ingress"
     ) -> "BatchDeleteRulesResult":
         """
         Delete multiple rules in a single batch operation via GraphQL.
 
         Args:
+            interface: Interface the rules are scoped to (required)
             ids: List of rule IDs to delete
             direction: Traffic direction ("ingress" or "egress")
 
@@ -610,7 +627,9 @@ class GraphQLPolicyClient:
 
         gql_rules = []
         for i, rid in enumerate(ids):
-            gql_rules.append({"id": str(rid), "direction": gql_direction})
+            gql_rules.append(
+                {"interface": interface, "id": str(rid), "direction": gql_direction}
+            )
 
         variables = {"rules": gql_rules}
         data = self._execute_graphql(mutation, variables)
@@ -630,6 +649,7 @@ class GraphQLPolicyClient:
 
     def delete_rule(
         self,
+        interface: str,
         rule_id: Optional[int] = None,
         src: Optional[str] = None,
         dst: Optional[str] = None,
@@ -642,6 +662,7 @@ class GraphQLPolicyClient:
         Delete a policy rule.
 
         Args:
+            interface: Interface the rule is scoped to (required)
             rule_id: Rule ID to delete
             src: Source prefix (alternative to id)
             dst: Destination prefix
@@ -665,7 +686,10 @@ class GraphQLPolicyClient:
         # Map direction string to GraphQL enum
         gql_direction: str = "INGRESS" if direction == "ingress" else "EGRESS"
 
-        input_data: dict[str, Any] = {"direction": gql_direction}
+        input_data: dict[str, Any] = {
+            "interface": interface,
+            "direction": gql_direction,
+        }
         if rule_id is not None:
             input_data["id"] = str(rule_id)
         if src:
@@ -697,12 +721,15 @@ class GraphQLPolicyClient:
             message=result.get("message", ""),
         )
 
-    def list_rules(self, direction: str = "ingress") -> List[LpmRule]:
+    def list_rules(
+        self, direction: str = "ingress", interface: Optional[str] = None
+    ) -> List[LpmRule]:
         """
         List all policy rules.
 
         Args:
             direction: Traffic direction ("ingress" or "egress")
+            interface: Optional interface name to filter results
 
         Returns:
             List of LpmRule objects
@@ -713,6 +740,7 @@ class GraphQLPolicyClient:
         query ListRules($direction: GqlDirection!) {
             rules(direction: $direction) {
                 ruleId
+                interface
                 srcPrefix
                 dstPrefix
                 sport
@@ -738,6 +766,8 @@ class GraphQLPolicyClient:
         rules_data = data.get("rules", [])
         rules = []
         for r in rules_data:
+            if interface is not None and r.get("interface", "") != interface:
+                continue
             # Convert GraphQL protocol enum to Protocol enum
             proto_str = r.get("protocol", "ANY")
             protocol: Protocol = Protocol.from_string(proto_str)
@@ -773,20 +803,40 @@ class GraphQLPolicyClient:
                     quic_version=r.get("quicVersion"),
                     src_mac=r.get("srcMac"),
                     dst_mac=r.get("dstMac"),
+                    interface=r.get("interface", ""),
                 )
             )
         return rules
 
-    def flush_rules(self, direction: str = "ingress") -> OperationResult:
+    def flush_rules(
+        self, direction: str = "ingress", interface: Optional[str] = None
+    ) -> OperationResult:
         """
-        Flush all policy rules.
+        Flush policy rules.
 
         Args:
             direction: Traffic direction ("ingress" or "egress")
+            interface: Optional interface name; when given, only rules on that
+                interface are flushed. All rules in the direction are flushed
+                when omitted.
 
         Returns:
             OperationResult indicating success/failure
         """
+        if interface is not None:
+            rules = self.list_rules(direction=direction, interface=interface)
+            count = len(rules)
+            for rule in rules:
+                self.delete_rule(
+                    interface=interface,
+                    rule_id=rule.rule_id,
+                    direction=direction,
+                )
+            return OperationResult(
+                success=True,
+                message=f"Flushed {count} {direction} rules for {interface}",
+            )
+
         gql_direction: str = "INGRESS" if direction == "ingress" else "EGRESS"
 
         mutation = """
@@ -1125,7 +1175,7 @@ class GraphQLPolicyClient:
     # ========================================================================
 
     def set_default_action(
-        self, action: PolicyAction, direction: str = "ingress"
+        self, action: PolicyAction, direction: str = "ingress", interface: str = ""
     ) -> OperationResult:
         """
         Set the default action for unmatched packets.
@@ -1133,6 +1183,7 @@ class GraphQLPolicyClient:
         Args:
             action: Default action
             direction: Traffic direction ("ingress" or "egress")
+            interface: Interface name (required by server)
 
         Returns:
             OperationResult indicating success/failure
@@ -1155,7 +1206,7 @@ class GraphQLPolicyClient:
         gql_action: str = action_map.get(action, "PASS")
         gql_direction: str = "INGRESS" if direction == "ingress" else "EGRESS"
 
-        variables: dict[str, dict[str, str]] = {"input": {"action": gql_action, "direction": gql_direction}}
+        variables: dict[str, dict[str, str]] = {"input": {"interface": interface, "action": gql_action, "direction": gql_direction}}
         data = self._execute_graphql(mutation, variables)
 
         if "__error__" in data:
@@ -1166,6 +1217,24 @@ class GraphQLPolicyClient:
             success=result.get("success", False),
             message=result.get("message", ""),
         )
+
+    def get_default_action(self, interface: str, direction: str = "ingress") -> str:
+        """
+        Query the current default action for a specific interface+direction.
+
+        Returns "PASS" or "DROP". Returns "PASS" when no explicit default has been set,
+        or on error.
+        """
+        gql_direction: str = "INGRESS" if direction == "ingress" else "EGRESS"
+        query = """
+        query DefaultAction($interface: String!, $direction: GqlDirection!) {
+            defaultAction(interface: $interface, direction: $direction)
+        }
+        """
+        data = self._execute_graphql(query, {"interface": interface, "direction": gql_direction})
+        if "__error__" in data:
+            return "PASS"
+        return data.get("defaultAction", "PASS")
 
     def register_tail_call(
         self, slot: int, program: str, direction: str = "ingress"
@@ -1542,11 +1611,12 @@ class GraphQLPolicyClient:
     # FIB forwarding
     # ========================================================================
 
-    def set_fib_forwarding(self, enabled: bool) -> OperationResult:
+    def set_fib_forwarding(self, interface: str, enabled: bool) -> OperationResult:
         """
-        Enable or disable XDP FIB forwarding (line-rate packet forwarding).
+        Enable or disable XDP FIB forwarding on an ingress interface.
 
         Args:
+            interface: Name of the ingress interface
             enabled: True to enable FIB forwarding, False to disable
         """
         mutation = """
@@ -1557,7 +1627,7 @@ class GraphQLPolicyClient:
             }
         }
         """
-        variables: dict[str, dict[str, bool]] = {"input": {"enabled": enabled}}
+        variables = {"input": {"interface": interface, "enabled": enabled}}
         data = self._execute_graphql(mutation, variables)
 
         if "__error__" in data:
@@ -1569,24 +1639,33 @@ class GraphQLPolicyClient:
             message=result.get("message", ""),
         )
 
-    def get_fib_forwarding(self) -> bool:
+    def get_fib_forwarding(self, interface: str) -> bool:
         """
-        Query whether XDP FIB forwarding is currently enabled.
+        Query whether XDP FIB forwarding is enabled on a specific interface.
+        """
+        entries = self.list_fib_forwarding()
+        for iface, enabled in entries:
+            if iface == interface:
+                return enabled
+        return False
 
-        Returns:
-            True if FIB forwarding is enabled, False otherwise
-        """
+    def list_fib_forwarding(self) -> list[tuple[str, bool]]:
+        """Return [(interface, enabled), ...] for every interface with a FIB config."""
         query = """
         query {
-            fibForwarding
+            fibForwarding {
+                interface
+                enabled
+            }
         }
         """
         data = self._execute_graphql(query)
-
         if "__error__" in data:
-            return False
-
-        return data.get("fibForwarding", False)
+            return []
+        return [
+            (entry.get("interface", ""), entry.get("enabled", False))
+            for entry in data.get("fibForwarding", [])
+        ]
 
     # ========================================================================
     # Suricata commands

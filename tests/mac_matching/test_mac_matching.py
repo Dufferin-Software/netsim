@@ -48,6 +48,7 @@ class TestMacRuleManagement:
     ):
         """Adding an ingress rule with src_mac should succeed."""
         options = AddRuleOptions(
+            interface=attached_ingress,
             actions=[("drop", 0)],
             src_mac=client_mac,
         )
@@ -63,6 +64,7 @@ class TestMacRuleManagement:
     ):
         """Adding an ingress rule with dst_mac should succeed."""
         options = AddRuleOptions(
+            interface=attached_ingress,
             actions=[("drop", 0)],
             dst_mac=server_mac,
         )
@@ -79,6 +81,7 @@ class TestMacRuleManagement:
     ):
         """Adding a rule with both src_mac and dst_mac should succeed."""
         options = AddRuleOptions(
+            interface=attached_ingress,
             actions=[("log", 0)],
             src_mac=client_mac,
             dst_mac=server_mac,
@@ -97,6 +100,7 @@ class TestMacRuleManagement:
         """A MAC rule should appear in the rule list with correct MAC fields."""
         rule_id = 98001
         options = AddRuleOptions(
+            interface=attached_ingress,
             actions=[("log", 0)],
             rule_id=rule_id,
             src_mac=client_mac,
@@ -124,6 +128,7 @@ class TestMacRuleManagement:
         """A rule without MAC fields should have null src_mac and dst_mac."""
         rule_id = 98002
         options = AddRuleOptions(
+            interface=attached_ingress,
             protocol="tcp",
             dport=80,
             actions=[("log", 0)],
@@ -163,6 +168,7 @@ class TestIngressMacMatching:
 
         rule_id = 98010
         options = AddRuleOptions(
+            interface=attached_ingress,
             src=client_network_v4,
             actions=[("drop", 0)],
             rule_id=rule_id,
@@ -217,6 +223,7 @@ class TestIngressMacMatching:
 
         rule_id = 98011
         options = AddRuleOptions(
+            interface=attached_ingress,
             src=client_network_v4,
             actions=[("drop", 0)],
             rule_id=rule_id,
@@ -270,6 +277,7 @@ class TestIngressMacMatching:
 
         rule_id = 98012
         options = AddRuleOptions(
+            interface=attached_ingress,
             src=client_network_v4,
             actions=[("drop", 0)],
             rule_id=rule_id,
@@ -328,6 +336,7 @@ class TestEgressMacMatching:
 
         rule_id = 98020
         options = AddRuleOptions(
+            interface=attached_egress,
             src=server_network_v4,
             actions=[("drop", 0)],
             rule_id=rule_id,
@@ -385,6 +394,7 @@ class TestEgressMacMatching:
 
         rule_id = 98021
         options = AddRuleOptions(
+            interface=attached_egress,
             src=server_network_v4,
             actions=[("drop", 0)],
             rule_id=rule_id,
@@ -439,6 +449,7 @@ class TestEgressMacMatching:
 
         rule_id = 98022
         options = AddRuleOptions(
+            interface=attached_egress,
             src=server_network_v4,
             actions=[("drop", 0)],
             rule_id=rule_id,
@@ -501,6 +512,7 @@ class TestCombinedMacMatching:
 
         rule_id = 98030
         options = AddRuleOptions(
+            interface=attached_ingress,
             src=client_network_v4,
             actions=[("drop", 0)],
             rule_id=rule_id,
@@ -562,6 +574,7 @@ class TestCombinedMacMatching:
 
         rule_id = 98031
         options = AddRuleOptions(
+            interface=attached_ingress,
             src=client_network_v4,
             actions=[("drop", 0)],
             rule_id=rule_id,
@@ -622,6 +635,7 @@ class TestMacRuleStats:
 
         rule_id = 98040
         options = AddRuleOptions(
+            interface=attached_ingress,
             src=client_network_v4,
             actions=[("log", 0)],
             rule_id=rule_id,
@@ -673,6 +687,7 @@ class TestMacRuleStats:
 
         rule_id = 98041
         options = AddRuleOptions(
+            interface=attached_ingress,
             src=client_network_v4,
             actions=[("log", 0)],
             rule_id=rule_id,

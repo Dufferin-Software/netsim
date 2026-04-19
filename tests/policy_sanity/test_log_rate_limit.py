@@ -340,6 +340,7 @@ class TestLogRateLimitConfig:
     ):
         """A LOG rule with a non-zero rate-limit param must be accepted."""
         options = AddRuleOptions(
+            interface=attached_ingress,
             src="10.0.0.0/8",
             protocol="icmp",
             actions=[("log", 0, RATE_LIMIT_MS)],
@@ -353,6 +354,7 @@ class TestLogRateLimitConfig:
     ):
         """The rate-limit param must round-trip correctly through the BPF map."""
         options = AddRuleOptions(
+            interface=attached_ingress,
             src="10.0.0.0/8",
             protocol="icmp",
             actions=[("log", 0, RATE_LIMIT_MS)],
@@ -378,6 +380,7 @@ class TestLogRateLimitConfig:
     ):
         """A LOG rule without a rate-limit param must store param=0."""
         options = AddRuleOptions(
+            interface=attached_ingress,
             src="10.0.0.0/8",
             protocol="icmp",
             actions=[("log", 0)],  # 2-tuple: no param
@@ -403,6 +406,7 @@ class TestLogRateLimitConfig:
     ):
         """A LOG+PASS multi-action rule with a rate-limit param is accepted and stored."""
         options = AddRuleOptions(
+            interface=attached_ingress,
             src="10.0.0.0/8",
             protocol="tcp",
             dport=443,
@@ -461,6 +465,7 @@ class TestLogRateLimitBehavior:
         client = nodes["client"]
 
         options = AddRuleOptions(
+            interface=attached_ingress,
             src=client_network_v4,
             protocol="icmp",
             actions=[("log", 0, RATE_LIMIT_MS), ("pass", 1)],
@@ -499,6 +504,7 @@ class TestLogRateLimitBehavior:
         client = nodes["client"]
 
         options = AddRuleOptions(
+            interface=attached_ingress,
             src=client_network_v4,
             protocol="icmp",
             actions=[("log", 0, RATE_LIMIT_MS)],
@@ -543,6 +549,7 @@ class TestLogRateLimitBehavior:
         client = nodes["client"]
 
         options = AddRuleOptions(
+            interface=attached_ingress,
             src=client_network_v4,
             protocol="icmp",
             actions=[("log", 0, RATE_LIMIT_MS)],
@@ -611,6 +618,7 @@ class TestLogRateLimitBehavior:
         client = nodes["client"]
 
         options = AddRuleOptions(
+            interface=attached_ingress,
             src=client_network_v4,
             protocol="icmp",
             actions=[("log", 0)],  # no rate limit
@@ -674,6 +682,7 @@ class TestLogRateLimitBehavior:
         client = nodes["client"]
 
         options = AddRuleOptions(
+            interface=attached_ingress,
             src=client_network_v4,
             protocol="icmp",
             actions=[("log", 0, RATE_LIMIT_MS)],
