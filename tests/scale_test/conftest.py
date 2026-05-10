@@ -1,0 +1,593 @@
+# Copyright (c) Dufferin Software
+
+"""
+Fixtures for scale testing: many policy-engine + policy-node-agent container
+pairs enrolling against a single policy-controller.
+
+Topology: 1 controller VM + 1 docker-host VM (both on mgmt network).
+
+The docker-host VM runs N engine+agent container pairs on an internal Docker
+bridge network.  Because policy-engine only needs --network host when attaching
+XDP/TC programs to real NICs, and these tests never attach BPF programs, the
+engines run on a bridge network with unique IPs.  Each agent shares its engine's
+network namespace via --network container:<engine>, so localhost:8080 resolves
+correctly without port conflicts.
+
+Fixture hierarchy (all package-scoped unless noted):
+  running_topology → nodes → install_user_packages
+    controller_service  — starts policy-controller on controller VM (systemd)
+    controller_client   — ControllerClient bound to the controller VM
+    docker_ready        — installs Docker on docker-host, loads engine/agent images
+    scale_containers    — starts N engine+agent container pairs, yields names list
+    enrolled_scale_nodes — approves all N enrollments, waits for Active + online
+
+CLI options (registered in tests/conftest.py):
+  --scale-nodes     int   number of node pairs to create (default 10)
+  --engine-image    str   local Docker image name for policy-engine
+  --agent-image     str   local Docker image name for policy-node-agent
+"""
+
+import ipaddress
+import logging
+import subprocess
+import time
+from dataclasses import dataclass
+from typing import Callable, Dict, Generator, List
+
+import pytest
+
+from tests.node import Node
+from tests.parallel_utils import run_parallel_simple
+from tests.systemd_utils import ServiceStatus, restart_service, stop_service
+from lib.policy_engine.controller.graphql.client import ControllerClient
+from lib.policy_engine.engine.graphql.client import GraphQLPolicyClient
+
+logger = logging.getLogger(__name__)
+
+_CONTROLLER_HTTP_TIMEOUT = 60
+_ENROLLMENT_TIMEOUT = 300  # longer than multi_node — N agents start in parallel
+_ACTIVE_TIMEOUT = 120
+_POLL_INTERVAL = 2
+_DOCKER_BRIDGE = "scale_net"
+_DOCKER_DATA_BRIDGE = "scale_data"
+_SCALE_BASE_DIR = "/tmp/scale"
+
+
+# ── Data types ────────────────────────────────────────────────────────────────
+
+
+@dataclass
+class ContainerPair:
+    """Names, bridge IP, and data interface for one engine+agent pair."""
+
+    index: int
+    engine_name: str
+    agent_name: str
+    engine_ip: str  # IP on scale_net — for reaching the engine GraphQL API
+    data_iface: str  # interface name inside the container for BPF attachment
+
+
+@dataclass
+class EnrollmentResult:
+    """Outcome of the full enrollment sequence."""
+
+    node_map: Dict[str, str]  # label → controller node ID
+    seconds_to_active: float  # wall time: first container start → last Active
+    seconds_to_online: float  # wall time: first container start → last online
+
+
+# ── Internal helpers ──────────────────────────────────────────────────────────
+
+
+def _get_mgmt_ip(node: Node, topology) -> str:
+    topo_node = topology.get_node(node.name)
+    mgmt_net_name = topo_node.networks[0]
+    mgmt_network = topology.get_network(mgmt_net_name)
+    net = ipaddress.IPv4Network(mgmt_network.subnet, strict=False)
+    out = node.ssh_command(
+        "ip -4 addr show | awk '/inet / {print $2}' | cut -d/ -f1",
+        timeout=10,
+    ).strip()
+    for addr_str in out.splitlines():
+        try:
+            addr = ipaddress.IPv4Address(addr_str.strip())
+            if addr in net:
+                return str(addr)
+        except ValueError:
+            continue
+    pytest.fail(f"Could not determine management IP for {node.name}")
+
+
+def _wait_for_controller_http(
+    controller: Node, timeout: int = _CONTROLLER_HTTP_TIMEOUT
+) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            out = controller.ssh_command(
+                "curl -s -o /dev/null -w '%{http_code}' "
+                "--max-time 2 http://127.0.0.1:8443/health 2>/dev/null || true",
+                timeout=10,
+            )
+            if out.strip() == "200":
+                logger.info("policy-controller HTTP API ready")
+                return
+        except Exception:
+            pass
+        time.sleep(_POLL_INTERVAL)
+    pytest.fail(f"policy-controller did not become ready within {timeout}s")
+
+
+def _wait_for_pending_enrollments(
+    client: ControllerClient,
+    expected_count: int,
+    timeout: int = _ENROLLMENT_TIMEOUT,
+) -> List:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            pending = client.pending_enrollments()
+            if len(pending) >= expected_count:
+                logger.info(f"Found {len(pending)} pending enrollments")
+                return pending
+        except Exception as e:
+            logger.debug(f"Polling enrollments: {e}")
+        time.sleep(_POLL_INTERVAL)
+    pytest.fail(
+        f"Expected {expected_count} pending enrollments, timed out after {timeout}s"
+    )
+
+
+def _wait_for_active_nodes(
+    client: ControllerClient,
+    node_ids: List[str],
+    timeout: int = _ACTIVE_TIMEOUT,
+) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            active = {n.id for n in client.list_nodes(status="active")}
+            if all(nid in active for nid in node_ids):
+                logger.info(f"All {len(node_ids)} nodes active")
+                return
+            waiting = sum(1 for nid in node_ids if nid not in active)
+            logger.debug(f"{waiting}/{len(node_ids)} nodes still waiting for Active")
+        except Exception as e:
+            logger.debug(f"Polling active nodes: {e}")
+        time.sleep(_POLL_INTERVAL)
+    pytest.fail(f"{len(node_ids)} nodes did not reach Active within {timeout}s")
+
+
+def _wait_for_online_nodes(
+    client: ControllerClient,
+    node_ids: List[str],
+    timeout: int = _ACTIVE_TIMEOUT,
+) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            online = set(client.online_nodes())
+            if all(nid in online for nid in node_ids):
+                logger.info(f"All {len(node_ids)} nodes online")
+                return
+            waiting = sum(1 for nid in node_ids if nid not in online)
+            logger.debug(f"{waiting}/{len(node_ids)} nodes still waiting for online")
+        except Exception as e:
+            logger.debug(f"Polling online nodes: {e}")
+        time.sleep(_POLL_INTERVAL)
+    pytest.fail(f"{len(node_ids)} nodes did not come online within {timeout}s")
+
+
+def _save_and_load_image(node: Node, image_name: str) -> None:
+    """Stream a Docker image from the local daemon into the VM's Docker daemon via SSH pipe."""
+    logger.info(f"Streaming Docker image {image_name} to docker-host")
+    # Pipe docker save directly into docker load over SSH — no temp file, no
+    # ownership issues from sudo docker save writing a root-owned tarball.
+    cmd = (
+        f"sudo docker save {image_name} | "
+        f"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+        f"-p {node.ssh_port} netsim@localhost sudo docker load"
+    )
+    result = subprocess.run(cmd, shell=True, capture_output=True)
+    if result.returncode == 0:
+        logger.info(f"Loaded {image_name} into docker-host")
+        return
+    pytest.fail(
+        f"Could not transfer Docker image '{image_name}' to docker-host. "
+        f"Verify it exists: docker images | grep {image_name.split(':')[0]}"
+    )
+
+
+def _install_docker(node: Node) -> None:
+    """Install docker.io on the VM if not already present."""
+    check = node.ssh_command(
+        "command -v docker >/dev/null 2>&1 && echo PRESENT || echo MISSING",
+        timeout=10,
+    )
+    if "PRESENT" in check:
+        logger.info("Docker already installed on docker-host")
+        return
+
+    logger.info("Installing docker.io on docker-host")
+    node.ssh_command(
+        "sudo apt-get install -y docker.io",
+        timeout=300,
+    )
+    node.ssh_command("sudo systemctl enable --now docker", timeout=30)
+    # Verify
+    node.ssh_command("sudo docker info >/dev/null", timeout=30)
+    logger.info("Docker installed successfully")
+
+
+def _ensure_scale_network(node: Node) -> None:
+    """Create both Docker bridge networks used by scale containers."""
+    existing = node.ssh_command(
+        "sudo docker network ls --format '{{.Name}}'",
+        timeout=10,
+    )
+    for bridge in (_DOCKER_BRIDGE, _DOCKER_DATA_BRIDGE):
+        if bridge not in existing:
+            node.ssh_command(f"sudo docker network create {bridge}", timeout=30)
+            logger.info(f"Created Docker network {bridge}")
+
+
+def _connect_engine_to_data_network(node: Node, idx: int) -> str:
+    """Connect engine container to the data bridge; return the interface name inside it."""
+    node.ssh_command(
+        f"sudo docker network connect {_DOCKER_DATA_BRIDGE} pe-{idx}",
+        timeout=15,
+    )
+    # Discover the newly added interface from the host's perspective using
+    # nsenter — the engine image may not have iproute2.  Strip the @ifN
+    # peer suffix that ip -br appends.
+    iface = node.ssh_command(
+        f"pid=$(sudo docker inspect -f '{{{{.State.Pid}}}}' pe-{idx}) && "
+        f"sudo nsenter -n -t $pid ip -br link show "
+        f"| awk '$1 != \"lo\" {{print $1}}' | sed 's/@.*//' | sort | tail -1",
+        timeout=15,
+    ).strip()
+    if not iface:
+        pytest.fail(f"Could not discover data interface for pe-{idx}")
+    return iface
+
+
+def _write_engine_config(node: Node, idx: int) -> str:
+    """Write engine config.toml; return the config directory path."""
+    cfg_dir = f"{_SCALE_BASE_DIR}/node-{idx}/engine"
+    node.ssh_command(f"sudo mkdir -p {cfg_dir}/state", timeout=10)
+    config = '[server]\nhost = "0.0.0.0"\nport = 8080\n'
+    node.ssh_command(
+        f"printf '%s' '{config}' | sudo tee {cfg_dir}/config.toml > /dev/null",
+        timeout=10,
+    )
+    return cfg_dir
+
+
+def _write_agent_config(node: Node, idx: int, ca_pem: str) -> str:
+    """Write agent config.toml and CA cert; return the config directory path."""
+    cfg_dir = f"{_SCALE_BASE_DIR}/node-{idx}/agent"
+    node.ssh_command(f"sudo mkdir -p {cfg_dir}", timeout=10)
+    # Use the DNS name "policy-controller" — the controller's TLS cert has this
+    # as its SAN.  The actual IP→hostname mapping is injected via --add-host
+    # on the agent container's docker run command.
+    config = (
+        'enrollment_url = "https://policy-controller:7776"\n'
+        'controller_url = "https://policy-controller:7777"\n'
+        'local_server_url = "http://127.0.0.1:8080/graphql"\n'
+    )
+    node.ssh_command(
+        f"printf '%s' '{config}' | sudo tee {cfg_dir}/config.toml > /dev/null",
+        timeout=10,
+    )
+    node.ssh_command_with_stdin(
+        f"sudo tee {cfg_dir}/controller-ca.crt > /dev/null",
+        ca_pem,
+        timeout=10,
+    )
+    return cfg_dir
+
+
+def _start_engine_container(
+    node: Node, idx: int, engine_cfg_dir: str, controller_ip: str, image: str
+) -> str:
+    name = f"pe-{idx}"
+    # A fresh bpffs mount per engine gives the container a real bpf filesystem
+    # so BPF_OBJ_PIN succeeds, and instances don't conflict on pin paths.
+    bpf_dir = f"{_SCALE_BASE_DIR}/bpf/node-{idx}"
+    node.ssh_command(f"sudo mkdir -p {bpf_dir}", timeout=10)
+    node.ssh_command(f"sudo mount -t bpf bpf {bpf_dir}", timeout=15)
+    # bpffs root is 0700 by default; the engine needs to mkdir inside it.
+    node.ssh_command(f"sudo chmod 0777 {bpf_dir}", timeout=10)
+
+    # Remove any leftover container with the same name
+    node.ssh_command(
+        f"sudo docker rm -f {name} 2>/dev/null || true",
+        timeout=15,
+    )
+
+    # --add-host goes on the engine container because it owns the network
+    # namespace; the agent uses --network container:pe-N and inherits /etc/hosts.
+    cmd = (
+        f"sudo docker run -d "
+        f"--name {name} "
+        f"--network {_DOCKER_BRIDGE} "
+        f"--add-host policy-controller:{controller_ip} "
+        f"--privileged "
+        f"-v {engine_cfg_dir}:/etc/policy-engine:ro "
+        f"-v {engine_cfg_dir}/state:/var/lib/policy-engine "
+        f"-v {bpf_dir}:/sys/fs/bpf "
+        f"-e 'RUST_LOG=warn,policy_engine::server::event_stream=error,policy_engine::server::bpf_manager=error' "
+        f"{image}"
+    )
+    node.ssh_command(cmd, timeout=30)
+    return name
+
+
+def _start_agent_container(node: Node, idx: int, agent_cfg_dir: str, image: str) -> str:
+    name = f"pna-{idx}"
+    node.ssh_command(
+        f"sudo docker rm -f {name} 2>/dev/null || true",
+        timeout=15,
+    )
+    cmd = (
+        f"sudo docker run -d "
+        f"--name {name} "
+        f"--network container:pe-{idx} "
+        f"-v {agent_cfg_dir}:/etc/policy-node-agent "
+        f"-e RUST_LOG=warn "
+        f"{image}"
+    )
+    node.ssh_command(cmd, timeout=30)
+    return name
+
+
+def _get_container_bridge_ip(node: Node, container_name: str) -> str:
+    ip = node.ssh_command(
+        f"sudo docker inspect "
+        f"-f '{{{{.NetworkSettings.Networks.{_DOCKER_BRIDGE}.IPAddress}}}}' "
+        f"{container_name}",
+        timeout=10,
+    ).strip()
+    if not ip:
+        pytest.fail(f"Could not get bridge IP for container {container_name}")
+    return ip
+
+
+def _stop_and_remove_containers(node: Node, pairs: List[ContainerPair]) -> None:
+    names = [f"pe-{p.index}" for p in pairs] + [f"pna-{p.index}" for p in pairs]
+    if not names:
+        return
+    name_list = " ".join(names)
+    try:
+        node.ssh_command(
+            f"sudo docker rm -f {name_list} 2>/dev/null || true", timeout=60
+        )
+    except Exception as e:
+        logger.warning(f"Error removing scale containers: {e}")
+
+
+def _start_one_pair(
+    node: Node,
+    idx: int,
+    controller_ip: str,
+    ca_pem: str,
+    engine_image: str,
+    agent_image: str,
+) -> ContainerPair:
+    """Start engine then agent for one node index. Runs in a thread."""
+    engine_cfg = _write_engine_config(node, idx)
+    agent_cfg = _write_agent_config(node, idx, ca_pem)
+    _start_engine_container(node, idx, engine_cfg, controller_ip, engine_image)
+    _start_agent_container(node, idx, agent_cfg, agent_image)
+    data_iface = _connect_engine_to_data_network(node, idx)
+    engine_ip = _get_container_bridge_ip(node, f"pe-{idx}")
+    return ContainerPair(
+        index=idx,
+        engine_name=f"pe-{idx}",
+        agent_name=f"pna-{idx}",
+        engine_ip=engine_ip,
+        data_iface=data_iface,
+    )
+
+
+# ── Package-scoped fixtures ───────────────────────────────────────────────────
+
+
+@pytest.fixture(scope="package")
+def scale_node_count(request) -> int:
+    return request.config.getoption("--scale-nodes")
+
+
+@pytest.fixture(scope="package")
+def engine_image(request) -> str:
+    return request.config.getoption("--engine-image")
+
+
+@pytest.fixture(scope="package")
+def agent_image(request) -> str:
+    return request.config.getoption("--agent-image")
+
+
+@pytest.fixture(scope="package")
+def controller_service(
+    nodes, install_user_packages
+) -> Generator[ServiceStatus, None, None]:
+    """Start policy-controller on the controller VM."""
+    controller = nodes["controller"]
+    check = controller.ssh_command(
+        "systemctl cat policy-controller.service >/dev/null 2>&1 && echo EXISTS || echo MISSING"
+    )
+    if "MISSING" in check:
+        pytest.skip("policy-controller.service not installed (use --install-packages)")
+
+    status = restart_service(controller, "policy-controller")
+    if not status.is_healthy:
+        pytest.fail(f"Failed to start policy-controller: {status.status_text}")
+
+    logger.info(f"policy-controller running PID={status.main_pid}")
+    _wait_for_controller_http(controller)
+
+    yield status
+
+    try:
+        stop_service(controller, "policy-controller")
+    except Exception as e:
+        logger.warning(f"Failed to stop policy-controller: {e}")
+
+
+@pytest.fixture(scope="package")
+def controller_client(nodes, controller_service) -> ControllerClient:
+    return ControllerClient(nodes["controller"])
+
+
+@pytest.fixture(scope="package")
+def docker_ready(
+    nodes, apt_updated, engine_image, agent_image
+) -> Generator[None, None, None]:
+    """
+    Ensure Docker is installed on docker-host and both images are loaded.
+
+    Images are saved from the local Docker daemon on the netsim host (trying
+    plain docker then sudo docker), copied to the docker-host VM via SCP, and
+    loaded there.  Fails with a clear message if either image cannot be saved.
+    """
+    docker_host = nodes["docker-host"]
+    _install_docker(docker_host)
+
+    for img in (engine_image, agent_image):
+        _save_and_load_image(docker_host, img)
+
+    logger.info("docker_ready: images loaded into docker-host")
+    yield
+
+
+@pytest.fixture(scope="package")
+def scale_containers(
+    nodes,
+    topology,
+    controller_client,
+    docker_ready,
+    configure_node_interfaces,
+    scale_node_count,
+    engine_image,
+    agent_image,
+) -> Generator[List[ContainerPair], None, None]:
+    """
+    Spin up scale_node_count engine+agent container pairs on docker-host.
+
+    All pairs are started in parallel.  The fixture yields the list of
+    ContainerPair objects and tears down all containers on exit.
+    """
+    docker_host = nodes["docker-host"]
+    controller_ip = _get_mgmt_ip(nodes["controller"], topology)
+    ca_pem = controller_client.ca_cert_pem()
+
+    _ensure_scale_network(docker_host)
+
+    # Clear any leftover state from a previous run
+    docker_host.ssh_command(
+        f"sudo rm -rf {_SCALE_BASE_DIR} && sudo mkdir -p {_SCALE_BASE_DIR}",
+        timeout=15,
+    )
+
+    # Limit concurrency: each pair makes several SSH calls on the same
+    # docker-host connection; too many concurrent channels destabilises the
+    # paramiko transport.  4 workers keeps throughput reasonable while staying
+    # well below paramiko's default channel limit.
+    _CONTAINER_WORKERS = 4
+    logger.info(
+        f"Starting {scale_node_count} engine+agent pairs "
+        f"({_CONTAINER_WORKERS} at a time)"
+    )
+    args = [
+        (docker_host, idx, controller_ip, ca_pem, engine_image, agent_image)
+        for idx in range(scale_node_count)
+    ]
+    pairs: List[ContainerPair] = run_parallel_simple(
+        _start_one_pair, args, max_workers=_CONTAINER_WORKERS
+    )
+    logger.info(f"All {scale_node_count} container pairs started")
+
+    yield pairs
+
+    logger.info("Tearing down scale containers")
+    _stop_and_remove_containers(docker_host, pairs)
+    # Unmount per-engine bpffs mounts before removing directories
+    for pair in pairs:
+        docker_host.ssh_command(
+            f"sudo umount {_SCALE_BASE_DIR}/bpf/node-{pair.index} 2>/dev/null || true",
+            timeout=10,
+        )
+    docker_host.ssh_command(
+        f"sudo docker network rm {_DOCKER_BRIDGE} {_DOCKER_DATA_BRIDGE} 2>/dev/null || true",
+        timeout=15,
+    )
+    docker_host.ssh_command(f"sudo rm -rf {_SCALE_BASE_DIR}", timeout=15)
+
+
+@pytest.fixture(scope="package")
+def enrolled_scale_nodes(
+    scale_containers, controller_client, scale_node_count
+) -> EnrollmentResult:
+    """
+    Wait for all container pairs to submit enrollment requests, approve them,
+    then wait for Active status and online (management gRPC) connections.
+
+    Returns an EnrollmentResult with the label→node_id map and timing metrics.
+    """
+    t_start = time.monotonic()
+
+    pending = _wait_for_pending_enrollments(
+        controller_client, expected_count=scale_node_count
+    )
+
+    node_map: Dict[str, str] = {}
+    for i, enrollment in enumerate(pending):
+        label = f"scale-node-{i}"
+        result = controller_client.approve_enrollment(enrollment.id, label=label)
+        assert result.status in ("active", "pending"), (
+            f"Unexpected status after approval: {result.status}"
+        )
+        node_map[label] = enrollment.id
+        logger.debug(f"Approved {label} → {enrollment.id}")
+
+    logger.info(f"Approved {len(node_map)} enrollments, waiting for Active")
+    _wait_for_active_nodes(controller_client, list(node_map.values()))
+    t_active = time.monotonic()
+
+    logger.info("All nodes Active, waiting for online (management gRPC)")
+    _wait_for_online_nodes(controller_client, list(node_map.values()))
+    t_online = time.monotonic()
+
+    result = EnrollmentResult(
+        node_map=node_map,
+        seconds_to_active=t_active - t_start,
+        seconds_to_online=t_online - t_start,
+    )
+    logger.info(
+        f"Enrollment complete: {len(node_map)} nodes, "
+        f"active in {result.seconds_to_active:.1f}s, "
+        f"online in {result.seconds_to_online:.1f}s"
+    )
+    return result
+
+
+@pytest.fixture(scope="package")
+def engine_client_for(
+    nodes, scale_containers
+) -> "Callable[[int], GraphQLPolicyClient]":
+    """
+    Return a factory that gives a GraphQLPolicyClient aimed at container index N.
+
+    Queries are run as curl from the docker-host VM targeting the engine's
+    bridge IP, so no port-mapping is required.
+    """
+    docker_host = nodes["docker-host"]
+    pair_by_idx = {p.index: p for p in scale_containers}
+
+    def _factory(idx: int) -> GraphQLPolicyClient:
+        pair = pair_by_idx[idx]
+        url = f"http://{pair.engine_ip}:8080/graphql"
+        return GraphQLPolicyClient(docker_host, server_url=url)
+
+    return _factory

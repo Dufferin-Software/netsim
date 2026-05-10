@@ -183,7 +183,9 @@ class TestAttachDetachController:
 
         ifaces = controller_client.node_interfaces(node1_id)
         match = next((i for i in ifaces if i.name == iface), None)
-        assert match is not None, f"Interface {iface} not found in nodeInterfaces"
+        assert match is not None, (
+            f"Interface {iface} not found in nodeInterfaces, interfaces={ifaces}"
+        )
         assert match.xdp_attached, (
             f"Expected xdpAttached=True on {iface} after attach, got {match.xdp_attached}"
         )
