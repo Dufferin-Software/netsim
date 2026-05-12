@@ -28,6 +28,7 @@ class VMConfig:
     disk_size_gb: int = 10  # Size for COW overlay disk
     mgmt_ssh_port: Optional[int] = None  # Host port forwarded to guest ssh
     cloudinit_iso: Optional[str] = None  # Path to cloud-init ISO
+    enable_tpm: bool = True  # Attach an emulated TPM 2.0 via swtpm
 
     def __post_init__(self) -> None:
         # Ensure tap_devices is always a list for mypy and runtime safety
@@ -81,8 +82,15 @@ class LibvirtVM:
 
         # OS boot
         os_elem: ET.Element[str] = ET.SubElement(domain, "os")
-        ET.SubElement(os_elem, "type", arch="x86_64", machine="pc").text = "hvm"
+        ET.SubElement(os_elem, "type", arch="x86_64", machine="q35").text = "hvm"
         ET.SubElement(os_elem, "boot", dev="hd")
+
+        # Features: ACPI is required for the guest kernel to discover the TPM-TIS
+        # device (via ACPI HID MSFT0101).  Without it libvirt starts QEMU with
+        # acpi=off and /dev/tpm0 never appears in the guest.
+        features: ET.Element[str] = ET.SubElement(domain, "features")
+        ET.SubElement(features, "acpi")
+        ET.SubElement(features, "apic")
 
         # Devices
         devices: ET.Element[str] = ET.SubElement(domain, "devices")
@@ -90,36 +98,13 @@ class LibvirtVM:
         # Emulator
         ET.SubElement(devices, "emulator").text = "/usr/bin/qemu-system-x86_64"
 
-        # Controller for CD-ROM (SATA)
-        controller: ET.Element[str] = ET.SubElement(
-            devices, "controller", type="sata", index="0"
-        )
-        ET.SubElement(
-            controller,
-            "address",
-            type="pci",
-            domain="0x0000",
-            bus="0x00",
-            slot="0x04",
-            function="0x0",
-        )
-
-        # Disk
+        # Disk — let libvirt auto-assign the PCIe address on q35.
         disk: ET.Element[str] = ET.SubElement(
             devices, "disk", type="file", device="disk"
         )
         ET.SubElement(disk, "driver", name="qemu", type="qcow2")
         ET.SubElement(disk, "source", file=str(disk_path))
         ET.SubElement(disk, "target", dev="vda", bus="virtio")
-        ET.SubElement(
-            disk,
-            "address",
-            type="pci",
-            domain="0x0000",
-            bus="0x00",
-            slot="0x02",
-            function="0x0",
-        )
 
         # Cloud-init ISO (if provided)
         if self.config.cloudinit_iso:
@@ -172,7 +157,7 @@ class LibvirtVM:
             ET.SubElement(
                 qemu_cmd,
                 "{http://libvirt.org/schemas/domain/qemu/1.0}arg",
-                value=f"virtio-net-pci,netdev=mgmt,mac={self._generate_mac(0)},bus=pci.0,addr=0x5",
+                value=f"virtio-net-pci,netdev=mgmt,mac={self._generate_mac(0)},bus=pcie.0,addr=0x10",
             )
 
         # Data interfaces: native libvirt ethernet interfaces backed by
@@ -186,17 +171,12 @@ class LibvirtVM:
             ET.SubElement(iface, "mac", address=self._generate_mac(idx))
             ET.SubElement(iface, "target", dev=tap_dev, managed="no")
             ET.SubElement(iface, "model", type="virtio")
-            # Offset PCI addresses to avoid collision with disk (0x2) and mgmt NIC (0x5)
-            pci_addr: str = hex(5 + idx)
-            ET.SubElement(
-                iface,
-                "address",
-                type="pci",
-                domain="0x0000",
-                bus="0x00",
-                slot=pci_addr,
-                function="0x0",
-            )
+
+        # Emulated TPM 2.0 — libvirt manages the swtpm process automatically.
+        # Requires swtpm installed on the host.
+        if self.config.enable_tpm:
+            tpm: ET.Element = ET.SubElement(devices, "tpm", model="tpm-tis")
+            ET.SubElement(tpm, "backend", type="emulator", version="2.0")
 
         # Convert to string
         return ET.tostring(domain, encoding="unicode")

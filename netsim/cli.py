@@ -119,6 +119,20 @@ def main():
         type=str,
         help="Image cache directory (default: ~/.netsim/images)",
     )
+    tpm_group = start_parser.add_mutually_exclusive_group()
+    tpm_group.add_argument(
+        "--tpm",
+        action="store_true",
+        default=True,
+        dest="tpm",
+        help="Attach an emulated TPM 2.0 (via swtpm) to each VM (default)",
+    )
+    tpm_group.add_argument(
+        "--no-tpm",
+        action="store_false",
+        dest="tpm",
+        help="Disable TPM emulation for all VMs",
+    )
 
     # Stop command
     stop_parser = subparsers.add_parser("stop", help="Suspend topology")
@@ -278,6 +292,7 @@ def main():
         topology,
         runtime_dir=runtime_dir,
         image_cache_dir=args.__dict__.get("image_cache_dir"),
+        enable_tpm=args.__dict__.get("tpm", True),
     )
 
     try:

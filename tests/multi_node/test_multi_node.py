@@ -134,6 +134,31 @@ def _wait_for_online(
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
 
+class TestTPMSupport:
+    """Verify that the controller reports tpm_backed=True for all enrolled nodes."""
+
+    def test_enrolled_nodes_are_tpm_backed(
+        self,
+        request,
+        controller_client: ControllerClient,
+        enrolled_nodes: Dict[str, str],
+    ) -> None:
+        """All enrolled nodes must report tpm_backed=True when --tpm is active."""
+        if not request.config.getoption("--tpm"):
+            pytest.skip("TPM not enabled (--no-tpm)")
+
+        all_nodes = {n.id: n for n in controller_client.list_nodes()}
+        for vm_name, node_id in enrolled_nodes.items():
+            assert node_id in all_nodes, (
+                f"{vm_name} (id={node_id}) not found in controller"
+            )
+            assert all_nodes[node_id].tpm_backed, (
+                f"{vm_name} (id={node_id}) has tpm_backed=False — "
+                "check that swtpm is installed and the agent detected the TPM"
+            )
+            logger.info(f"{vm_name} (id={node_id}): tpm_backed=True")
+
+
 class TestEnrollment:
     """Scenario 1: all 3 nodes enroll and reach Active status."""
 

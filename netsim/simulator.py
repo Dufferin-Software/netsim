@@ -34,6 +34,7 @@ class TopologySimulator:
         topology: Topology,
         runtime_dir: str = "/tmp/netsim",
         image_cache_dir: Optional[str] = None,
+        enable_tpm: bool = True,
     ) -> None:
         """
         Initialize simulator.
@@ -42,9 +43,11 @@ class TopologySimulator:
             topology: Parsed topology definition
             runtime_dir: Directory for VM runtime data
             image_cache_dir: Directory for image caching. Defaults to ~/.netsim/images
+            enable_tpm: Attach an emulated TPM 2.0 (via swtpm) to each VM
         """
         self.topology: Topology = topology
         self.runtime_dir: str = runtime_dir
+        self.enable_tpm: bool = enable_tpm
         self.image_manager = ImageManager(cache_dir=image_cache_dir)
         self.vms: Dict[str, LibvirtVM] = {}
         self.tap_devices: Dict[
@@ -148,6 +151,7 @@ class TopologySimulator:
                 tap_devices=tap_devices,
                 mgmt_ssh_port=2200 + idx,
                 cloudinit_iso=cloudinit_iso,
+                enable_tpm=self.enable_tpm,
             )
 
             # Create VM instance

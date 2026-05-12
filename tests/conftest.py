@@ -194,6 +194,19 @@ def pytest_addoption(parser) -> None:
         default="policy-node-agent:0.1.0",
         help="Docker image name for policy-node-agent (must exist in local daemon)",
     )
+    parser.addoption(
+        "--tpm",
+        action="store_true",
+        default=True,
+        dest="tpm",
+        help="Attach an emulated TPM 2.0 (via swtpm) to each VM (default: enabled)",
+    )
+    parser.addoption(
+        "--no-tpm",
+        action="store_false",
+        dest="tpm",
+        help="Disable TPM emulation for all VMs",
+    )
 
 
 def pytest_configure(config) -> None:
@@ -358,7 +371,10 @@ def running_topology(topology, request) -> Generator[TopologySimulator, Any, Non
     logger.info("=" * 60)
 
     with tempfile.TemporaryDirectory(prefix="netsim-test-") as runtime_dir:
-        simulator = TopologySimulator(topology, runtime_dir=runtime_dir)
+        enable_tpm: bool = request.config.getoption("--tpm")
+        simulator = TopologySimulator(
+            topology, runtime_dir=runtime_dir, enable_tpm=enable_tpm
+        )
 
         try:
             # Pre-flight cleanup

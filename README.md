@@ -20,7 +20,8 @@ Lightweight libvirt/QEMU topology runner with cloud-init user provisioning and a
     qemu-system-x86 \
     python3-libvirt \
     genisoimage \
-    bridge-utils
+    bridge-utils \
+    swtpm
   ```
 - Python 3.9+
 - SSH key at `~/.ssh/id_rsa.pub` (generate with `ssh-keygen -t rsa -N "" -f ~/.ssh/id_rsa` if missing)
