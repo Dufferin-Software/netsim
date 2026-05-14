@@ -25,9 +25,20 @@ class ControlledNode:
     id: str
     status: str
     label: Optional[str] = None
+    hostname: Optional[str] = None
     dmi_uuid: Optional[str] = None
     tpm_backed: bool = False
     agent_version: Optional[str] = None
+
+
+@dataclass
+class IssuedEnrollmentToken:
+    """Result of minting a ZTP bootstrap token. The bundle is shown exactly once."""
+
+    token_id: str
+    bundle: str  # base64-encoded bootstrap bundle written to /etc/policy-node-agent/bootstrap.bundle
+    expires_at: str
+    uses_remaining: int
 
 
 @dataclass
@@ -139,7 +150,7 @@ class ControllerClient:
         query = """
         query ListNodes($status: String) {
             nodes(status: $status) {
-                id status label dmiUuid tpmBacked agentVersion
+                id status label hostname dmiUuid tpmBacked agentVersion
             }
         }
         """
@@ -149,6 +160,7 @@ class ControllerClient:
                 id=n["id"],
                 status=n["status"],
                 label=n.get("label"),
+                hostname=n.get("hostname"),
                 dmi_uuid=n.get("dmiUuid"),
                 tpm_backed=n.get("tpmBacked", False),
                 agent_version=n.get("agentVersion"),
@@ -160,7 +172,7 @@ class ControllerClient:
         """Return nodes in pending-enrollment state."""
         query = """
         query {
-            pendingEnrollments { id status label dmiUuid tpmBacked agentVersion }
+            pendingEnrollments { id status label hostname dmiUuid tpmBacked agentVersion }
         }
         """
         data = self._execute(query)
@@ -169,6 +181,7 @@ class ControllerClient:
                 id=n["id"],
                 status=n["status"],
                 label=n.get("label"),
+                hostname=n.get("hostname"),
                 dmi_uuid=n.get("dmiUuid"),
                 tpm_backed=n.get("tpmBacked", False),
                 agent_version=n.get("agentVersion"),
@@ -718,6 +731,56 @@ class ControllerClient:
         """
         data = self._execute(query, {"nodeId": node_id})
         return data.get("pendingGeneration")
+
+    # ── ZTP enrollment tokens ─────────────────────────────────────────────────
+
+    def create_enrollment_token(
+        self,
+        enrollment_url: str,
+        controller_url: str,
+        ttl_seconds: int,
+        max_uses: int,
+        cidr_scope: Optional[str] = None,
+        fleet_label: Optional[str] = None,
+    ) -> IssuedEnrollmentToken:
+        """Mint a ZTP bootstrap token; the bundle is returned exactly once."""
+        query = """
+        mutation CreateEnrollmentToken(
+            $enrollmentUrl: String!
+            $controllerUrl: String!
+            $ttlSeconds: Int!
+            $maxUses: Int!
+            $cidrScope: String
+            $fleetLabel: String
+        ) {
+            createEnrollmentToken(
+                enrollmentUrl: $enrollmentUrl
+                controllerUrl: $controllerUrl
+                ttlSeconds: $ttlSeconds
+                maxUses: $maxUses
+                cidrScope: $cidrScope
+                fleetLabel: $fleetLabel
+            ) { tokenId bundle expiresAt usesRemaining }
+        }
+        """
+        data = self._execute(
+            query,
+            {
+                "enrollmentUrl": enrollment_url,
+                "controllerUrl": controller_url,
+                "ttlSeconds": ttl_seconds,
+                "maxUses": max_uses,
+                "cidrScope": cidr_scope,
+                "fleetLabel": fleet_label,
+            },
+        )
+        t = data["createEnrollmentToken"]
+        return IssuedEnrollmentToken(
+            token_id=t["tokenId"],
+            bundle=t["bundle"],
+            expires_at=t["expiresAt"],
+            uses_remaining=t["usesRemaining"],
+        )
 
     # ── CA cert ───────────────────────────────────────────────────────────────
 

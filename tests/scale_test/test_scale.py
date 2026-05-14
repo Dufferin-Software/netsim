@@ -205,8 +205,6 @@ class TestScalePolicyDistribution:
             except Exception as e:
                 logger.warning(f"Failed to delete rule {rule_id}: {e}")
 
-        assert False
-
     def test_policy_removed_from_all_nodes(
         self,
         attached_programs: Dict[str, str],

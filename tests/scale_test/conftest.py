@@ -18,8 +18,9 @@ Fixture hierarchy (all package-scoped unless noted):
     controller_service  — starts policy-controller on controller VM (systemd)
     controller_client   — ControllerClient bound to the controller VM
     docker_ready        — installs Docker on docker-host, loads engine/agent images
-    scale_containers    — starts N engine+agent container pairs, yields names list
-    enrolled_scale_nodes — approves all N enrollments, waits for Active + online
+    scale_containers    — mints a single ZTP bundle, starts N engine+agent
+                          container pairs each carrying the bundle
+    enrolled_scale_nodes — waits for all N nodes to auto-enrol (Active + online)
 
 CLI options (registered in tests/conftest.py):
   --scale-nodes     int   number of node pairs to create (default 10)
@@ -123,6 +124,7 @@ def _wait_for_pending_enrollments(
     expected_count: int,
     timeout: int = _ENROLLMENT_TIMEOUT,
 ) -> List:
+    """Negative-path helper: ZTP happy path never transits Pending."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
@@ -135,6 +137,31 @@ def _wait_for_pending_enrollments(
         time.sleep(_POLL_INTERVAL)
     pytest.fail(
         f"Expected {expected_count} pending enrollments, timed out after {timeout}s"
+    )
+
+
+def _wait_for_active_nodes_by_hostname(
+    client: ControllerClient,
+    expected_hostnames: List[str],
+    timeout: int = _ENROLLMENT_TIMEOUT,
+) -> Dict[str, str]:
+    """Wait until every expected hostname has an Active node entry; return hostname → node_id."""
+    deadline = time.monotonic() + timeout
+    needed = set(expected_hostnames)
+    while time.monotonic() < deadline:
+        try:
+            active = client.list_nodes(status="active")
+            by_host = {n.hostname: n.id for n in active if n.hostname in needed}
+            if needed.issubset(by_host.keys()):
+                logger.info(f"All {len(by_host)} nodes active (matched by hostname)")
+                return by_host
+            waiting = len(needed) - len(by_host)
+            logger.debug(f"{waiting}/{len(needed)} nodes still waiting for Active")
+        except Exception as e:
+            logger.debug(f"Polling active nodes: {e}")
+        time.sleep(_POLL_INTERVAL)
+    pytest.fail(
+        f"Active nodes for {len(expected_hostnames)} hostnames did not appear within {timeout}s"
     )
 
 
@@ -263,27 +290,29 @@ def _write_engine_config(node: Node, idx: int) -> str:
     return cfg_dir
 
 
-def _write_agent_config(node: Node, idx: int, ca_pem: str) -> str:
-    """Write agent config.toml and CA cert; return the config directory path."""
+def _write_agent_config(node: Node, idx: int, bundle_b64: str) -> str:
+    """
+    Write agent config.toml and the ZTP bootstrap bundle; return the config dir.
+
+    The bundle carries the controller URLs and pinned CA fingerprint, so
+    config.toml only needs `local_server_url` (agent → local policy-engine).
+    """
     cfg_dir = f"{_SCALE_BASE_DIR}/node-{idx}/agent"
     node.ssh_command(f"sudo mkdir -p {cfg_dir}", timeout=10)
-    # Use the DNS name "policy-controller" — the controller's TLS cert has this
-    # as its SAN.  The actual IP→hostname mapping is injected via --add-host
-    # on the agent container's docker run command.
-    config = (
-        'enrollment_url = "https://policy-controller:7776"\n'
-        'controller_url = "https://policy-controller:7777"\n'
-        'local_server_url = "http://127.0.0.1:8080/graphql"\n'
-    )
+    config = 'local_server_url = "http://127.0.0.1:8080/graphql"\n'
     node.ssh_command(
         f"printf '%s' '{config}' | sudo tee {cfg_dir}/config.toml > /dev/null",
         timeout=10,
     )
     node.ssh_command_with_stdin(
-        f"sudo tee {cfg_dir}/controller-ca.crt > /dev/null",
-        ca_pem,
+        f"sudo tee {cfg_dir}/bootstrap.bundle > /dev/null",
+        bundle_b64,
         timeout=10,
     )
+    # Containers don't use systemd DynamicUser, but the agent image likely
+    # runs as non-root. Keep the bundle world-readable for the same reason as
+    # the VM-based multi_node tests; it's short-lived and consumed on first use.
+    node.ssh_command(f"sudo chmod 0644 {cfg_dir}/bootstrap.bundle", timeout=10)
     return cfg_dir
 
 
@@ -307,9 +336,13 @@ def _start_engine_container(
 
     # --add-host goes on the engine container because it owns the network
     # namespace; the agent uses --network container:pe-N and inherits /etc/hosts.
+    # --hostname is set to pna-N (not pe-N) because the agent shares this UTS
+    # namespace and reports gethostname() to the controller during enrollment;
+    # the scale fixture identifies nodes by their pna-N hostname.
     cmd = (
         f"sudo docker run -d "
         f"--name {name} "
+        f"--hostname pna-{idx} "
         f"--network {_DOCKER_BRIDGE} "
         f"--add-host policy-controller:{controller_ip} "
         f"--privileged "
@@ -370,13 +403,13 @@ def _start_one_pair(
     node: Node,
     idx: int,
     controller_ip: str,
-    ca_pem: str,
+    bundle_b64: str,
     engine_image: str,
     agent_image: str,
 ) -> ContainerPair:
     """Start engine then agent for one node index. Runs in a thread."""
     engine_cfg = _write_engine_config(node, idx)
-    agent_cfg = _write_agent_config(node, idx, ca_pem)
+    agent_cfg = _write_agent_config(node, idx, bundle_b64)
     _start_engine_container(node, idx, engine_cfg, controller_ip, engine_image)
     _start_agent_container(node, idx, agent_cfg, agent_image)
     data_iface = _connect_engine_to_data_network(node, idx)
@@ -480,7 +513,19 @@ def scale_containers(
     """
     docker_host = nodes["docker-host"]
     controller_ip = _get_mgmt_ip(nodes["controller"], topology)
-    ca_pem = controller_client.ca_cert_pem()
+
+    # Mint a single ZTP bundle for all N agents. The bundle is shown once and
+    # gets baked into each agent's config dir at /etc/policy-node-agent/bootstrap.bundle.
+    issued = controller_client.create_enrollment_token(
+        enrollment_url="https://policy-controller:7776",
+        controller_url="https://policy-controller:7777",
+        ttl_seconds=3600,
+        max_uses=scale_node_count,
+        fleet_label="netsim-scale",
+    )
+    logger.info(
+        f"Minted ZTP bundle (token_id={issued.token_id}, max_uses={scale_node_count})"
+    )
 
     _ensure_scale_network(docker_host)
 
@@ -500,7 +545,7 @@ def scale_containers(
         f"({_CONTAINER_WORKERS} at a time)"
     )
     args = [
-        (docker_host, idx, controller_ip, ca_pem, engine_image, agent_image)
+        (docker_host, idx, controller_ip, issued.bundle, engine_image, agent_image)
         for idx in range(scale_node_count)
     ]
     pairs: List[ContainerPair] = run_parallel_simple(
@@ -530,30 +575,23 @@ def enrolled_scale_nodes(
     scale_containers, controller_client, scale_node_count
 ) -> EnrollmentResult:
     """
-    Wait for all container pairs to submit enrollment requests, approve them,
-    then wait for Active status and online (management gRPC) connections.
+    Wait for all container pairs to ZTP-auto-enrol, then wait for Active + online.
+
+    Each agent container is started with `--hostname pna-N` so the agent
+    reports that hostname during enrollment. We map it back to "scale-node-N"
+    labels for test consumption.
 
     Returns an EnrollmentResult with the label→node_id map and timing metrics.
     """
     t_start = time.monotonic()
 
-    pending = _wait_for_pending_enrollments(
-        controller_client, expected_count=scale_node_count
-    )
-
-    node_map: Dict[str, str] = {}
-    for i, enrollment in enumerate(pending):
-        label = f"scale-node-{i}"
-        result = controller_client.approve_enrollment(enrollment.id, label=label)
-        assert result.status in ("active", "pending"), (
-            f"Unexpected status after approval: {result.status}"
-        )
-        node_map[label] = enrollment.id
-        logger.debug(f"Approved {label} → {enrollment.id}")
-
-    logger.info(f"Approved {len(node_map)} enrollments, waiting for Active")
-    _wait_for_active_nodes(controller_client, list(node_map.values()))
+    expected_hostnames = [f"pna-{p.index}" for p in scale_containers]
+    by_host = _wait_for_active_nodes_by_hostname(controller_client, expected_hostnames)
     t_active = time.monotonic()
+
+    node_map: Dict[str, str] = {
+        f"scale-node-{p.index}": by_host[f"pna-{p.index}"] for p in scale_containers
+    }
 
     logger.info("All nodes Active, waiting for online (management gRPC)")
     _wait_for_online_nodes(controller_client, list(node_map.values()))

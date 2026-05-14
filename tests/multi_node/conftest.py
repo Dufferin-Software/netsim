@@ -8,9 +8,11 @@ Topology: 1 controller VM + 3 node VMs, all on a shared management network.
 Fixture hierarchy (all package-scoped unless noted):
   running_topology → nodes → install_user_packages
     controller_service  — starts policy-controller on controller VM
-    node_services       — starts policy-engine + policy-node-agent on node1/2/3
-    enrolled_nodes      — waits for all nodes to appear as Pending, approves them,
-                          waits for Active status
+    node_services       — mints a ZTP bootstrap bundle, drops it on each managed
+                          node, starts policy-engine + policy-node-agent
+    enrolled_nodes      — waits for all 3 nodes to appear Active+online (ZTP
+                          auto-approves) and maps VM name → controller node ID
+                          by agent-reported hostname
     controller_client   — ControllerClient bound to the controller VM
 """
 
@@ -68,6 +70,10 @@ def _wait_for_pending_enrollments(
     """
     Wait until at least `expected_count` pending enrollments appear.
     Returns the list of pending node IDs.
+
+    Only used by negative-path tests that intentionally enroll with a
+    rejected/expired token. The happy path uses ZTP auto-approval and never
+    transits Pending.
     """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -82,6 +88,37 @@ def _wait_for_pending_enrollments(
         time.sleep(_POLL_INTERVAL)
     pytest.fail(
         f"Expected {expected_count} pending enrollments but timed out after {timeout}s"
+    )
+
+
+def _wait_for_active_nodes_by_hostname(
+    client: ControllerClient,
+    expected_hostnames: List[str],
+    timeout: int = _ENROLLMENT_TIMEOUT,
+) -> Dict[str, str]:
+    """
+    Wait until each expected hostname has an Active node entry on the controller.
+
+    Returns hostname → node_id. Used by the ZTP happy path: agents are
+    auto-approved by their bootstrap token and land directly in Active, so the
+    fixture identifies them by the hostname the agent reports during enrollment.
+    """
+    deadline = time.monotonic() + timeout
+    needed = set(expected_hostnames)
+    while time.monotonic() < deadline:
+        try:
+            active = client.list_nodes(status="active")
+            by_host = {n.hostname: n.id for n in active if n.hostname in needed}
+            if needed.issubset(by_host.keys()):
+                logger.info(f"Found {len(by_host)} active nodes by hostname: {by_host}")
+                return by_host
+            missing = sorted(needed - by_host.keys())
+            logger.debug(f"Still waiting for active nodes with hostnames: {missing}")
+        except Exception as e:
+            logger.debug(f"Error polling active nodes: {e}")
+        time.sleep(_POLL_INTERVAL)
+    pytest.fail(
+        f"Expected active nodes for hostnames {expected_hostnames}, timed out after {timeout}s"
     )
 
 
@@ -131,26 +168,44 @@ def _write_agent_config(node: Node) -> None:
     """
     Write /etc/policy-node-agent/config.toml on the managed node.
 
-    Writes both enrollment_url (port 7776, TLS-only) and controller_url
-    (port 7777, mTLS management stream). The agent CA cert must be pre-seeded
-    separately via _write_ca_cert_on_node().
+    Under ZTP, the bootstrap bundle carries `enrollment_url`, `controller_url`,
+    and the pinned CA fingerprint. Only `local_server_url` (the agent → local
+    policy-engine GraphQL endpoint) needs to live in config.toml.
 
     The agent identity key is auto-generated on first run if absent.
-
-    Note: This uses the DNS name "policy-controller" which must be configured
-    in /etc/hosts (see _write_hosts_entry).
     """
     config = (
         "# Written by netsim multi-node conftest\n"
-        'enrollment_url = "https://policy-controller:7776"\n'
-        'controller_url = "https://policy-controller:7777"\n'
         'local_server_url = "http://127.0.0.1:8080/graphql"\n'
     )
     node.ssh_command("sudo mkdir -p /etc/policy-node-agent", timeout=10)
-    # Write via printf to avoid shell escaping issues with double-quotes
     node.ssh_command(
         f"printf '%s' '{config}' | sudo tee /etc/policy-node-agent/config.toml > /dev/null",
         timeout=10,
+    )
+
+
+def _write_bootstrap_bundle(node: Node, bundle_b64: str) -> None:
+    """
+    Drop the ZTP bootstrap bundle at /etc/policy-node-agent/bootstrap.bundle (mode 0600).
+
+    The agent reads this file on startup, pins the controller CA fingerprint it
+    carries, presents the embedded token during enrollment, and deletes the
+    bundle from disk on first successful use. Without a bundle the agent
+    refuses to start.
+    """
+    node.ssh_command("sudo mkdir -p /etc/policy-node-agent", timeout=10)
+    node.ssh_command_with_stdin(
+        "sudo tee /etc/policy-node-agent/bootstrap.bundle > /dev/null",
+        bundle_b64,
+        timeout=10,
+    )
+    # The unit has DynamicUser=yes, so the agent's runtime UID/GID is only
+    # allocated once systemd starts the service. Pre-allocation we can't chown
+    # to that group, so leave the bundle world-readable. Bundle is short-lived
+    # (TTL'd token, deleted on first successful use) and this is a test rig.
+    node.ssh_command(
+        "sudo chmod 0644 /etc/policy-node-agent/bootstrap.bundle", timeout=10
     )
 
 
@@ -173,14 +228,6 @@ def _write_hosts_entry(node: Node, controller_ip: str) -> None:
             f"echo '{entry}' | sudo tee -a {target} > /dev/null",
             timeout=10,
         )
-
-
-def _write_ca_cert_on_node(node: Node, ca_pem: str) -> None:
-    """Write the controller CA certificate to the expected path on the node."""
-    node.ssh_command("sudo mkdir -p /etc/policy-node-agent", timeout=10)
-    # Use heredoc via tee to avoid length/escaping issues with PEM data
-    cmd = f"sudo tee /etc/policy-node-agent/controller-ca.crt > /dev/null << 'CAPEM'\n{ca_pem}\nCAPEM"
-    node.ssh_command(cmd, timeout=10)
 
 
 def _get_mgmt_ip(node: Node, topology) -> str:
@@ -273,9 +320,20 @@ def node_services(
     controller_ip = _get_mgmt_ip(nodes["controller"], topology)
     logger.info(f"Controller management IP: {controller_ip}")
 
-    # Fetch the controller CA certificate so agents can verify the server cert
-    ca_pem = controller_client.ca_cert_pem()
-    logger.info("Retrieved controller CA certificate")
+    # Mint a ZTP bootstrap bundle that will auto-approve all three nodes.
+    # The bundle carries the controller URLs and the pinned CA fingerprint, so
+    # nothing else needs to be distributed for enrollment.
+    issued = controller_client.create_enrollment_token(
+        enrollment_url="https://policy-controller:7776",
+        controller_url="https://policy-controller:7777",
+        ttl_seconds=3600,
+        max_uses=len(_MANAGED_NODES),
+        fleet_label="netsim-multi-node",
+    )
+    logger.info(
+        f"Minted ZTP bundle (token_id={issued.token_id}, "
+        f"uses_remaining={issued.uses_remaining})"
+    )
 
     for node_name in _MANAGED_NODES:
         node = nodes[node_name]
@@ -290,10 +348,10 @@ def node_services(
                     f"{svc}.service not installed on {node_name} (use --install-packages)"
                 )
 
-        # Distribute CA cert, configure /etc/hosts, and write agent config before starting
-        _write_ca_cert_on_node(node, ca_pem)
+        # /etc/hosts entry resolves the "policy-controller" SAN used in the bundle URLs.
         _write_hosts_entry(node, controller_ip)
         _write_agent_config(node)
+        _write_bootstrap_bundle(node, issued.bundle)
 
         # Start policy-engine first (agent depends on it for local GraphQL)
         pe_status = restart_service(node, "policy-engine")
@@ -329,31 +387,37 @@ def node_services(
 @pytest.fixture(scope="package")
 def enrolled_nodes(nodes, controller_client, node_services) -> Dict[str, str]:
     """
-    Wait for all managed nodes to submit enrollment requests, approve them all,
-    then wait for them to reach Active status.
+    Wait for all managed nodes to auto-enrol via ZTP, then map VM name → node ID.
 
-    Returns a dict mapping node VM name (node1/node2/node3) to controller node ID.
-    Because agents send their ID in the enrollment CSR we can only map by order
-    of appearance (nodes all appear in pending at roughly the same time).
+    With ZTP, the agent presents the bundle's token during enrollment and is
+    auto-approved; nodes land directly in Active and never transit Pending. We
+    map VM name (node1/node2/node3) to controller node ID by matching the
+    agent-reported hostname.
+
+    Returns a dict mapping VM name to controller node ID.
     """
-    # Wait for 3 pending enrollments
-    pending_ids = _wait_for_pending_enrollments(controller_client, expected_count=3)
+    # Discover each VM's actual hostname so we can match against what the agent reports.
+    vm_hostnames: Dict[str, str] = {}
+    for node_name in _MANAGED_NODES:
+        hostname = nodes[node_name].ssh_command("hostname", timeout=10).strip()
+        vm_hostnames[node_name] = hostname
+        logger.debug(f"{node_name}: hostname={hostname}")
 
-    # Approve all of them with labels matching their position
-    approved: Dict[str, str] = {}
-    for i, node_id in enumerate(pending_ids):
-        node_name = _MANAGED_NODES[i]
-        result = controller_client.approve_enrollment(node_id, label=node_name)
-        assert result.status in ("active", "pending"), (
-            f"Unexpected status after approval: {result.status}"
-        )
-        approved[node_name] = node_id
-        logger.info(f"Approved {node_name} → controller ID {node_id}")
+    by_host = _wait_for_active_nodes_by_hostname(
+        controller_client, list(vm_hostnames.values())
+    )
 
-    # Wait for all to reach Active
-    _wait_for_active_nodes(controller_client, list(approved.values()))
+    approved: Dict[str, str] = {
+        vm_name: by_host[hostname] for vm_name, hostname in vm_hostnames.items()
+    }
 
-    # Wait for agents to establish management gRPC sessions (online in controller)
+    # Apply per-VM labels so tests/operators can still identify nodes by VM name.
+    for vm_name, node_id in approved.items():
+        result = controller_client.label_node(node_id, vm_name)
+        if not result.success:
+            logger.warning(f"label_node({vm_name}) returned: {result.message}")
+        logger.info(f"ZTP-enrolled {vm_name} → controller ID {node_id}")
+
     _wait_for_online_nodes(controller_client, list(approved.values()))
 
     return approved
