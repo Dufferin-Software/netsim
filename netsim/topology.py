@@ -110,11 +110,23 @@ class TopologyParser:
     @staticmethod
     def _validate(networks: List[Network], nodes: List[Node]) -> None:
         """Validate topology consistency."""
-        network_names: set = {n.name for n in networks}
+        # Duplicate names cause silent collisions downstream (IPs, libvirt
+        # domain names, bridges), so reject them up front.
+        seen_networks: set[str] = set()
+        for net in networks:
+            if net.name in seen_networks:
+                raise ValueError(f"Duplicate network name: {net.name}")
+            seen_networks.add(net.name)
+
+        seen_nodes: set[str] = set()
+        for node in nodes:
+            if node.name in seen_nodes:
+                raise ValueError(f"Duplicate node name: {node.name}")
+            seen_nodes.add(node.name)
 
         for node in nodes:
             for net_name in node.networks:
-                if net_name not in network_names:
+                if net_name not in seen_networks:
                     raise ValueError(
                         f"Node {node.name} references unknown network {net_name}"
                     )

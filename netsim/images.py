@@ -157,7 +157,7 @@ class ImageManager:
                 sha512.update(chunk)
 
         actual: str = sha512.hexdigest()
-        valid: bool = actual.lower() == expected_checksum.lower()
+        valid: bool = actual.lower() == expected_checksum.strip().lower()
 
         if valid:
             logger.debug(f"Checksum valid for {path.name}: {actual}")
@@ -190,7 +190,12 @@ class ImageManager:
 
     def remove_cached_image(self, name: str) -> bool:
         """Remove an image from cache."""
-        image_path: Path = self.cache_dir / name
+        # Reject names that would escape the cache dir (e.g. "../etc/passwd").
+        # Use the resolved path and verify it lives under cache_dir.
+        image_path: Path = (self.cache_dir / name).resolve()
+        cache_root: Path = self.cache_dir.resolve()
+        if cache_root != image_path and cache_root not in image_path.parents:
+            raise ValueError(f"Image name escapes cache directory: {name!r}")
 
         if not image_path.exists():
             logger.warning(f"Image not found in cache: {name}")

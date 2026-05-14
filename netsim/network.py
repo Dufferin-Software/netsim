@@ -275,7 +275,8 @@ class NetworkManager:
             bridges = []
             for line in result.stdout.decode().split("\n"):
                 # Lines like "2: br0: <BROADCAST,MULTICAST,UP,LOWER_UP>..."
-                match: re.Match[str] | None = re.match(r"\d+:\s+(\w+):", line)
+                # Bridge names may contain '-', '.' or '_'; \w alone misses those.
+                match: re.Match[str] | None = re.match(r"\d+:\s+([\w.-]+):", line)
                 if match:
                     bridges.append(match.group(1))
             return bridges

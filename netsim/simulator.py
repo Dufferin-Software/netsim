@@ -115,7 +115,10 @@ class TopologySimulator:
             for net_idx, net_name in enumerate(node.networks):
                 # Generate tap name (use index-based naming to keep it under 15 chars)
                 if_name: str = f"eth{net_idx}"
-                tap_name: str = f"tap{idx}{net_idx}"
+                # Zero-pad indices so tap names remain unique even with >9
+                # nodes or >9 networks per node. f"tap{idx}{net_idx}" was
+                # ambiguous (e.g. idx=1/net_idx=10 collided with idx=11/net_idx=0).
+                tap_name: str = f"tap{idx:02d}{net_idx:02d}"
                 logger.debug(f"Creating tap interface: {tap_name} for {net_name}")
 
                 NetworkManager.create_tap(tap_name)
@@ -412,11 +415,18 @@ class TopologySimulator:
         return status
 
     def _get_gateway_cidr(self, subnet_ip: str, prefix: str) -> str:
-        """Convert subnet to gateway IP with CIDR."""
-        # For simplicity, assume .1 is the gateway
-        parts: List[str] = subnet_ip.split(".")
-        parts[-1] = "1"
-        return f"{'.'.join(parts)}/{prefix}"
+        """Convert subnet to gateway IP with CIDR.
+
+        Uses the first usable host in the subnet, which is correct for any
+        prefix length. The previous implementation hard-coded the last octet
+        to "1", which produced addresses outside the subnet for non-/24
+        aligned subnets (e.g. 192.168.1.128/25 -> 192.168.1.1/25).
+        """
+        net: ipaddress.IPv4Network = ipaddress.IPv4Network(
+            f"{subnet_ip}/{prefix}", strict=False
+        )
+        gateway: ipaddress.IPv4Address = next(iter(net.hosts()))
+        return f"{gateway}/{prefix}"
 
     def _allocate_ip(self, net_name: str) -> str:
         """Allocate next IP address from a network.
