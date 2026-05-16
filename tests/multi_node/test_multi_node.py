@@ -411,10 +411,34 @@ class TestDecommission:
 
         node3 = nodes["node3"]
 
+        # Sanity: an approved node must have a non-empty cert serial recorded.
+        # This is what the controller will mark as revoked on decommission.
+        nodes_by_id = {n.id: n for n in controller_client.list_nodes()}
+        pre = nodes_by_id.get(node3_id)
+        assert pre is not None, f"node3 ({node3_id}) missing from list_nodes"
+        assert pre.cert_serial, (
+            f"node3 ({node3_id}) has no cert_serial recorded — controller "
+            f"failed to capture the issued cert serial at approval time, so "
+            f"revocation has nothing to target"
+        )
+        node3_serial: str = pre.cert_serial
+        logger.info(f"node3 cert_serial pre-decommission: {node3_serial}")
+
         # Decommission
         result = controller_client.decommission_node(node3_id)
         assert result.success, f"decommissionNode failed: {result.message}"
         logger.info(f"Decommissioned node3 (id={node3_id})")
+
+        # The recorded cert_serial must be unchanged after decommission — the
+        # serial is what `revoke_cert` keys on, so it must persist on the row.
+        nodes_by_id = {n.id: n for n in controller_client.list_nodes()}
+        post = nodes_by_id.get(node3_id)
+        if post is not None:
+            assert post.cert_serial == node3_serial, (
+                f"cert_serial changed across decommission "
+                f"(pre={node3_serial}, post={post.cert_serial}) — "
+                f"the revoked serial would no longer match the row"
+            )
 
         # Verify status changed in controller
         time.sleep(2)

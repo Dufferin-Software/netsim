@@ -1,4 +1,1 @@
-# Linting.
-
-On any change, please ensure type annotations are added/updated. Verify type annotations
-are correct via ```make type-check```.
+Next task in this repo is to implement a new cert revocation test suite, you can base in on the multi node suite.

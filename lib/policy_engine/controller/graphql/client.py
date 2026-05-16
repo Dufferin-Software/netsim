@@ -29,6 +29,16 @@ class ControlledNode:
     dmi_uuid: Optional[str] = None
     tpm_backed: bool = False
     agent_version: Optional[str] = None
+    # Hex-encoded mTLS client cert serial. Populated once the node is approved;
+    # None for pending nodes.
+    cert_serial: Optional[str] = None
+    # ISO-8601 timestamp of cert expiry; populated alongside cert_serial.
+    cert_expiry: Optional[str] = None
+    # ISO-8601 timestamp of the most recent successful RenewClientCert.
+    # None until the first renewal — used by the rotation suite to detect that
+    # the agent-side renewal task fired (the cert_serial flip is the canonical
+    # signal, but last_renewed_at is more readable in logs/asserts).
+    last_renewed_at: Optional[str] = None
 
 
 @dataclass
@@ -151,6 +161,7 @@ class ControllerClient:
         query ListNodes($status: String) {
             nodes(status: $status) {
                 id status label hostname dmiUuid tpmBacked agentVersion
+                certSerial certExpiry lastRenewedAt
             }
         }
         """
@@ -164,6 +175,9 @@ class ControllerClient:
                 dmi_uuid=n.get("dmiUuid"),
                 tpm_backed=n.get("tpmBacked", False),
                 agent_version=n.get("agentVersion"),
+                cert_serial=n.get("certSerial"),
+                cert_expiry=n.get("certExpiry"),
+                last_renewed_at=n.get("lastRenewedAt"),
             )
             for n in data.get("nodes", [])
         ]

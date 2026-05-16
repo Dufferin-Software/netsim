@@ -1,0 +1,32 @@
+name: "rotation"
+version: "1.0"
+
+networks:
+  - name: "mgmt"
+    subnet: "10.11.0.0/24"
+    mtu: 1500
+
+nodes:
+  # Controller node — runs policy-controller daemon
+  - name: "controller"
+    image:
+      name: "debian-13-genericcloud"
+      url: "https://cloud.debian.org/images/cloud/trixie/20260413-2447/debian-13-genericcloud-amd64-20260413-2447.qcow2"
+      checksum: "3d020c868339c8387f6f40f63e6b5ccb6174e6f2963510cb51cacfd6618244e96549d1b60b3d629df3963cb5350c6dfaf5cf34998301aa578b9d455a76d3c434"
+    memory: 512
+    vcpus: 1
+    networks:
+      - "mgmt"
+
+  # Single managed node — runs policy-engine + policy-node-agent.
+  # The rotation suite exercises credential lifecycle (revocation at the TLS
+  # handshake; later: renewal, CA rotation), all of which need only one agent.
+  - name: "node1"
+    image:
+      name: "debian-13-genericcloud"
+      url: "https://cloud.debian.org/images/cloud/trixie/20260413-2447/debian-13-genericcloud-amd64-20260413-2447.qcow2"
+      checksum: "3d020c868339c8387f6f40f63e6b5ccb6174e6f2963510cb51cacfd6618244e96549d1b60b3d629df3963cb5350c6dfaf5cf34998301aa578b9d455a76d3c434"
+    memory: 1024
+    vcpus: 2
+    networks:
+      - "mgmt"
