@@ -65,6 +65,11 @@ class Ruleset:
 class NodeInterface:
     node_id: str
     name: str
+    # Linux interface index. 0 if the controller has not yet received an
+    # interface report from the agent that carried it (older controllers/agents
+    # also report 0). Matches `ifindex` on persisted flow events so callers can
+    # join (node_id, ifindex) → name.
+    ifindex: int = 0
     mac_address: Optional[str] = None
     link_state: str = "unknown"
     addresses_json: str = "[]"
@@ -74,6 +79,27 @@ class NodeInterface:
     fib_forwarding: bool = False
     ingress_default_action: Optional[str] = None
     egress_default_action: Optional[str] = None
+
+
+@dataclass
+class PersistedEvent:
+    """One row from the controller's persisted policy-event store."""
+
+    id: str
+    timestamp: str  # ISO-8601 from the controller
+    node_id: str
+    rule_id: str
+    action: str
+    verdict: str
+    direction: str
+    ifindex: int
+    proto: int
+    src_ip: str
+    dst_ip: str
+    sport: int
+    dport: int
+    pkt_len: int
+    sni: Optional[str] = None
 
 
 @dataclass
@@ -495,7 +521,7 @@ class ControllerClient:
         query = """
         query NodeInterfaces($nodeId: ID!) {
             nodeInterfaces(nodeId: $nodeId) {
-                nodeId name macAddress linkState addressesJson tag
+                nodeId name ifindex macAddress linkState addressesJson tag
                 xdpAttached tcAttached fibForwarding
                 ingressDefaultAction egressDefaultAction
             }
@@ -506,6 +532,7 @@ class ControllerClient:
             NodeInterface(
                 node_id=i["nodeId"],
                 name=i["name"],
+                ifindex=int(i.get("ifindex") or 0),
                 mac_address=i.get("macAddress"),
                 link_state=i.get("linkState", "unknown"),
                 addresses_json=i.get("addressesJson", "[]"),
@@ -517,6 +544,63 @@ class ControllerClient:
                 egress_default_action=i.get("egressDefaultAction"),
             )
             for i in data.get("nodeInterfaces", [])
+        ]
+
+    def events(
+        self,
+        node_id: Optional[str] = None,
+        rule_id: Optional[str] = None,
+        action: Optional[str] = None,
+        since_iso: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[PersistedEvent]:
+        """Query the controller's persisted policy-event store.
+
+        `action` is a GraphQL `EventAction` enum value (e.g. "LOG", "DROP",
+        "PASS"). `since_iso` accepts any ISO-8601 timestamp the server parses
+        as DateTime. Returns newest-first; capped at `limit`.
+        """
+        query = """
+        query Events($filter: EventFilterInput, $limit: Int) {
+            events(filter: $filter, limit: $limit) {
+                items {
+                    id timestamp nodeId ruleId action verdict direction
+                    ifindex proto srcIp dstIp sport dport pktLen sni
+                }
+            }
+        }
+        """
+        filt: dict[str, Any] = {}
+        if node_id is not None:
+            filt["nodeId"] = node_id
+        if rule_id is not None:
+            filt["ruleId"] = rule_id
+        if action is not None:
+            filt["action"] = action
+        if since_iso is not None:
+            filt["since"] = since_iso
+        data = self._execute(
+            query, {"filter": filt if filt else None, "limit": limit}
+        )
+        return [
+            PersistedEvent(
+                id=e["id"],
+                timestamp=e["timestamp"],
+                node_id=e["nodeId"],
+                rule_id=e["ruleId"],
+                action=e["action"],
+                verdict=e["verdict"],
+                direction=e["direction"],
+                ifindex=int(e.get("ifindex") or 0),
+                proto=int(e.get("proto") or 0),
+                src_ip=e["srcIp"],
+                dst_ip=e["dstIp"],
+                sport=int(e.get("sport") or 0),
+                dport=int(e.get("dport") or 0),
+                pkt_len=int(e.get("pktLen") or 0),
+                sni=e.get("sni"),
+            )
+            for e in data.get("events", {}).get("items", [])
         ]
 
     # ── Single-rule (gated) operations ────────────────────────────────────────
