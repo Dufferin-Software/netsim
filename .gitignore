@@ -1,3 +1,4 @@
 __pycache__
 ssh_commands.log
 pytest.log
+pytest-logs
