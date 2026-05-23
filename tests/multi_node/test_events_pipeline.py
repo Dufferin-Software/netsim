@@ -401,10 +401,11 @@ _CONTROLLER_DB = "/var/lib/policy-controller/controller.db"
 _RETENTION_SWEEP_SECS = 60  # hardcoded in event_pipeline/retention.rs
 
 
-def _controller_curl(controller_node, path: str) -> str:
+def _controller_curl(controller_node, path: str, api_token: str | None = None) -> str:
     """GET a controller HTTP path over loopback via curl-on-ssh."""
+    auth = f"-H 'Authorization: Bearer {api_token}' " if api_token else ""
     return controller_node.ssh_command(
-        f"curl -s --max-time 10 'http://127.0.0.1:8443{path}'",
+        f"curl -s --max-time 10 {auth}'http://127.0.0.1:8443{path}'",
         timeout=20,
     )
 
@@ -530,6 +531,7 @@ class TestEventsGraphqlQuery:
         self,
         nodes,
         controller_client: ControllerClient,
+        controller_api_token: str,
         enrolled_nodes: Dict[str, str],
     ) -> None:
         node1 = nodes["node1"]
@@ -589,6 +591,7 @@ class TestEventsGraphqlQuery:
             rest_body = _controller_curl(
                 nodes["controller"],
                 f"/api/v1/events?node_id={node1_id}&since={since_iso}&limit=500",
+                api_token=controller_api_token,
             )
             rest = json.loads(rest_body)
             assert "columns" in rest and "rows" in rest, (

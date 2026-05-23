@@ -20,6 +20,36 @@ logger: logging.Logger = logging.getLogger(__name__)
 _CONTROLLER_URL = "http://127.0.0.1:8443/graphql"
 
 
+def mint_api_token(controller_node: Node, name: str) -> str:
+    """
+    Mint a bearer token on the controller VM via SSH.
+
+    The plaintext is printed to stdout by `policy-controller-mint-token` (the
+    confirmation prose goes to stderr), so capturing stdout gives the token
+    cleanly. Subsequent test runs will reuse the same controller DB; we add
+    a per-call epoch suffix to `name` upstream when collisions matter.
+    """
+    # Capture stderr alongside stdout so a failed mint surfaces a useful
+    # message ("command not found", "database is locked", etc.) instead of
+    # an opaque CalledProcessError.
+    out: str = controller_node.ssh_command(
+        f"sudo policy-controller-mint-token --name '{name}' 2>&1",
+        timeout=15,
+    )
+    token: str = ""
+    for line in out.strip().splitlines():
+        line = line.strip()
+        if line.startswith("dsw_"):
+            token = line
+            break
+    if not token:
+        raise RuntimeError(
+            f"policy-controller-mint-token did not return a dsw_ token; "
+            f"output was: {out!r}"
+        )
+    return token
+
+
 @dataclass
 class ControlledNode:
     id: str
@@ -133,9 +163,25 @@ class ControllerClient:
     consistent with the netsim test infrastructure pattern.
     """
 
-    def __init__(self, node: Node, url: str = _CONTROLLER_URL) -> None:
+    def __init__(
+        self,
+        node: Node,
+        url: str = _CONTROLLER_URL,
+        api_token: Optional[str] = None,
+    ) -> None:
         self.node: Node = node
         self.url: str = url
+        # Bearer token for the controller's REST + GraphQL surface (see
+        # policy-engine/docs/event-pipeline-todo.md). If unset, requests go
+        # out unauthenticated — which only works against a pre-auth
+        # controller build.
+        self.api_token: Optional[str] = api_token
+
+    def _auth_header_arg(self) -> str:
+        """`-H 'Authorization: Bearer …'` fragment, or empty if no token."""
+        if not self.api_token:
+            return ""
+        return f"-H 'Authorization: Bearer {self.api_token}' "
 
     def _execute(self, query: str, variables: Optional[dict] = None) -> dict:
         """Run a GraphQL query/mutation via curl on the controller VM."""
@@ -153,17 +199,19 @@ class ControllerClient:
         # side, so 60 s leaves comfortable headroom without any risk of the
         # SSH channel timing out before the controller responds.
         _SSH_TIMEOUT = 60
+        auth = self._auth_header_arg()
 
         if len(payload_json) > 10000:
             cmd = (
-                f"curl -s -X POST -H 'Content-Type: application/json' -d @- {self.url}"
+                f"curl -s -X POST -H 'Content-Type: application/json' "
+                f"{auth}-d @- {self.url}"
             )
             output = self.node.ssh_command_with_stdin(cmd, payload_json, timeout=_SSH_TIMEOUT)
         else:
             payload_escaped: str = payload_json.replace("'", "'\\''")
             cmd = (
                 f"curl -s -X POST -H 'Content-Type: application/json' "
-                f"-d '{payload_escaped}' {self.url}"
+                f"{auth}-d '{payload_escaped}' {self.url}"
             )
             output = self.node.ssh_command(cmd, timeout=_SSH_TIMEOUT)
 

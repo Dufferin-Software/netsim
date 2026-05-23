@@ -31,8 +31,14 @@ def _run_controller_cli(controller: Node, *args: str, timeout: int = 15) -> str:
     """
     Run the policy-controller-client binary on the controller node and return
     its stdout. The --json flag is always passed for reliable parsing.
+
+    Reads the bearer token from `/tmp/netsim-controller-token` (written by
+    the `controller_api_token` fixture in conftest.py); enrolled_nodes
+    depends on controller_client → controller_api_token, so the file exists
+    by the time any test in this module runs.
     """
     cmd_parts = [
+        "POLICY_CONTROLLER_TOKEN=$(sudo cat /tmp/netsim-controller-token)",
         "policy-controller-client",
         f"--url={_CONTROLLER_URL}",
         "--json",

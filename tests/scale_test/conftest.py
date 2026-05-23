@@ -40,7 +40,10 @@ import pytest
 from tests.node import Node
 from tests.parallel_utils import run_parallel_simple
 from tests.systemd_utils import ServiceStatus, restart_service, stop_service
-from lib.policy_engine.controller.graphql.client import ControllerClient
+from lib.policy_engine.controller.graphql.client import (
+    ControllerClient,
+    mint_api_token,
+)
 from lib.policy_engine.engine.graphql.client import GraphQLPolicyClient
 
 logger = logging.getLogger(__name__)
@@ -469,8 +472,18 @@ def controller_service(
 
 
 @pytest.fixture(scope="package")
-def controller_client(nodes, controller_service) -> ControllerClient:
-    return ControllerClient(nodes["controller"])
+def controller_api_token(nodes, controller_service) -> str:
+    """Mint a bearer token for this test package via SSH."""
+    import time
+
+    return mint_api_token(nodes["controller"], f"netsim-scale-{int(time.time())}")
+
+
+@pytest.fixture(scope="package")
+def controller_client(
+    nodes, controller_service, controller_api_token
+) -> ControllerClient:
+    return ControllerClient(nodes["controller"], api_token=controller_api_token)
 
 
 @pytest.fixture(scope="package")

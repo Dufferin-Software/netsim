@@ -25,7 +25,10 @@ import pytest
 
 from tests.node import Node
 from tests.systemd_utils import restart_service, stop_service
-from lib.policy_engine.controller.graphql.client import ControllerClient
+from lib.policy_engine.controller.graphql.client import (
+    ControllerClient,
+    mint_api_token,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -299,9 +302,30 @@ def controller_service(nodes, install_user_packages):
 
 
 @pytest.fixture(scope="package")
-def controller_client(nodes, controller_service) -> ControllerClient:
-    """ControllerClient bound to the controller VM."""
-    return ControllerClient(nodes["controller"])
+def controller_api_token(nodes, controller_service) -> str:
+    """
+    Mint a bearer token for this test package via SSH. Also writes the
+    plaintext to `/tmp/netsim-controller-token` on the controller VM so
+    `_run_controller_cli` in test_controller_cli.py can pick it up via
+    `--token=$(cat …)` without threading the token through every test fn.
+    """
+    import time
+
+    token = mint_api_token(nodes["controller"], f"netsim-multi-node-{int(time.time())}")
+    nodes["controller"].ssh_command(
+        f"echo '{token}' | sudo tee /tmp/netsim-controller-token >/dev/null "
+        f"&& sudo chmod 600 /tmp/netsim-controller-token",
+        timeout=10,
+    )
+    return token
+
+
+@pytest.fixture(scope="package")
+def controller_client(
+    nodes, controller_service, controller_api_token
+) -> ControllerClient:
+    """ControllerClient bound to the controller VM, with bearer token."""
+    return ControllerClient(nodes["controller"], api_token=controller_api_token)
 
 
 @pytest.fixture(scope="package")
