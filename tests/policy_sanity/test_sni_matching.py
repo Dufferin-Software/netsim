@@ -4,8 +4,9 @@
 SNI matching tests for policy-engine.
 
 Tests:
-- SNI rule creation succeeds with TCP protocol
-- SNI rule creation is rejected with non-TCP protocols (UDP, ICMP, any)
+- SNI rule creation succeeds with TCP protocol (TLS handshake, parsed in-kernel)
+- SNI rule creation succeeds with UDP protocol (QUIC Initial, parsed in userspace)
+- SNI rule creation is rejected with ICMP / 'any' protocols
 - TCP traffic matching with an SNI rule (verifies the rule matches TCP traffic)
 """
 
@@ -21,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 class TestSniRuleValidation:
-    """Tests that SNI rules are only accepted with TCP protocol."""
+    """Tests that SNI rules are accepted on TCP and UDP, rejected elsewhere."""
 
     def test_add_rule_with_sni_tcp_succeeds(
         self,
@@ -59,13 +60,13 @@ class TestSniRuleValidation:
             f"TCP rule with wildcard SNI should succeed: {result.message}"
         )
 
-    def test_add_rule_with_sni_udp_rejected(
+    def test_add_rule_with_sni_udp_succeeds(
         self,
         policy_client,
         attached_egress,
         clean_egress_rules,
     ):
-        """Adding a rule with SNI and UDP protocol should fail."""
+        """UDP + SNI is the QUIC Initial inspection path and must be accepted."""
         options = AddRuleOptions(
             interface=attached_egress,
             protocol="udp",
@@ -74,9 +75,25 @@ class TestSniRuleValidation:
             sni="example.com",
         )
         result = policy_client.add_rule(options, direction="egress")
-        assert not result.success, "UDP rule with SNI should be rejected"
-        assert "tcp" in result.message.lower() or "sni" in result.message.lower(), (
-            f"Error should mention TCP/SNI requirement: {result.message}"
+        assert result.success, f"UDP rule with SNI should succeed: {result.message}"
+
+    def test_add_rule_with_sni_wildcard_udp_succeeds(
+        self,
+        policy_client,
+        attached_egress,
+        clean_egress_rules,
+    ):
+        """Wildcard SNI on UDP (QUIC) is accepted, same as the TCP path."""
+        options = AddRuleOptions(
+            interface=attached_egress,
+            protocol="udp",
+            dport=443,
+            actions=[("drop", 0)],
+            sni="*.example.com",
+        )
+        result = policy_client.add_rule(options, direction="egress")
+        assert result.success, (
+            f"UDP rule with wildcard SNI should succeed: {result.message}"
         )
 
     def test_add_rule_with_sni_icmp_rejected(
@@ -94,8 +111,9 @@ class TestSniRuleValidation:
         )
         result = policy_client.add_rule(options, direction="egress")
         assert not result.success, "ICMP rule with SNI should be rejected"
-        assert "tcp" in result.message.lower() or "sni" in result.message.lower(), (
-            f"Error should mention TCP/SNI requirement: {result.message}"
+        msg = result.message.lower()
+        assert "tcp" in msg or "udp" in msg or "sni" in msg, (
+            f"Error should mention TCP/UDP/SNI requirement: {result.message}"
         )
 
     def test_add_rule_with_sni_any_protocol_rejected(
@@ -114,8 +132,9 @@ class TestSniRuleValidation:
         )
         result = policy_client.add_rule(options, direction="egress")
         assert not result.success, "Rule with 'any' protocol and SNI should be rejected"
-        assert "tcp" in result.message.lower() or "sni" in result.message.lower(), (
-            f"Error should mention TCP/SNI requirement: {result.message}"
+        msg = result.message.lower()
+        assert "tcp" in msg or "udp" in msg or "sni" in msg, (
+            f"Error should mention TCP/UDP/SNI requirement: {result.message}"
         )
 
     def test_sni_rule_listed_after_creation(
