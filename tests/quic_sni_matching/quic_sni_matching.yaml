@@ -1,0 +1,33 @@
+name: "quic-sni-matching"
+version: "1.0"
+
+networks:
+  - name: "net1"
+    subnet: "10.1.1.0/24"
+    ipv6_subnet: "2001:db8:1::/64"
+    mtu: 1500
+
+nodes:
+  # Server: runs policy-engine with UDP+SNI rules, receives QUIC Initials.
+  - name: "server"
+    image:
+      name: "debian-13-genericcloud"
+      url: "https://cloud.debian.org/images/cloud/trixie/20260413-2447/debian-13-genericcloud-amd64-20260413-2447.qcow2"
+      checksum: "3d020c868339c8387f6f40f63e6b5ccb6174e6f2963510cb51cacfd6618244e96549d1b60b3d629df3963cb5350c6dfaf5cf34998301aa578b9d455a76d3c434"
+    memory: 1024
+    vcpus: 2
+    networks:
+      - "net1"
+
+  # Client: fires a single real QUIC v1 Initial packet with a chosen SNI
+  # via aioquic.  The server never replies — we only care that the Initial
+  # crosses the policy-engine ingress and is inspected.
+  - name: "client"
+    image:
+      name: "debian-13-genericcloud"
+      url: "https://cloud.debian.org/images/cloud/trixie/20260413-2447/debian-13-genericcloud-amd64-20260413-2447.qcow2"
+      checksum: "3d020c868339c8387f6f40f63e6b5ccb6174e6f2963510cb51cacfd6618244e96549d1b60b3d629df3963cb5350c6dfaf5cf34998301aa578b9d455a76d3c434"
+    memory: 512
+    vcpus: 1
+    networks:
+      - "net1"
