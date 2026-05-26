@@ -33,7 +33,7 @@ _ENROLLMENT_TIMEOUT = 120
 _ACTIVE_TIMEOUT = 60
 _POLL_INTERVAL = 2
 
-_MANAGED_NODES = ["node1"]
+_MANAGED_NODES = ["node1", "node2", "node3"]
 
 # Short cert TTL used across the rotation suite so renewal e2e tests complete
 # in seconds rather than days. The minimum the controller's config validator

@@ -22,6 +22,7 @@ declare -A PKG_MAP=(
   [ips_ids]="policy-engine-ips_*.deb"
   [ipfix]="policy-engine-ipfix_*.deb"
   [multi_node]="policy-engine_*.deb policy-node-agent_*.deb policy-controller_*.deb policy-controller-client_*.deb"
+  [rotation]="policy-engine_*.deb policy-node-agent_*.deb policy-controller_*.deb policy-controller-client_*.deb"
   # scale_test runs engine + agent as Docker containers (built locally as
   # policy-engine:0.1.0 / policy-node-agent:0.1.0); only the controller is
   # installed on a VM.
