@@ -971,13 +971,6 @@ class TestRapidRuleChurn:
             _wait_for_node_ready(controller_client, node1_id)
             del_a = controller_client.delete_rule(rule_a["id"])
             assert del_a.success, f"deleteRule(A) failed: {del_a.message}"
-            pe.flush_rules(direction="ingress")
-            time.sleep(_SETTLE_SECS)
-
-            # Push rule B back since flush cleared the local engine
-            _wait_for_node_ready(controller_client, node1_id)
-            controller_client.push_config(node1_id)
-            _wait_for_node_ready(controller_client, node1_id)
             time.sleep(_SETTLE_SECS)
 
             # Rule B (TCP) remains — ICMP must now pass

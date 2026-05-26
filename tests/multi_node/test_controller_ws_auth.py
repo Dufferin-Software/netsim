@@ -28,15 +28,26 @@ _WS_PATHS = ["/ws/events", "/ws/rule-events"]
 def _ws_upgrade_status(controller: Node, url: str) -> str:
     """
     Send a WebSocket upgrade request via curl and return the HTTP status
-    code. We don't actually drive the WS protocol — just observe what the
-    server answers to the upgrade handshake.
+    code. We don't actually drive the WS protocol — just observe the
+    status line on the upgrade handshake.
+
+    Implementation note: on a successful upgrade the server sends `101
+    Switching Protocols` and then keeps the TCP connection open forever
+    waiting for WS frames. The old `-o /dev/null -w '%{http_code}'` form
+    relied on curl exiting 0 after --max-time, which curl >= 7.85 no
+    longer does (it always exits 28 on timeout). Instead, pipe `-i`
+    output through `head -1` so the pipe closes as soon as the status
+    line lands, curl gets SIGPIPE, and we get the code with no timeout
+    games. `set +o pipefail` keeps the shell pipeline's exit status from
+    surfacing curl's death from SIGPIPE.
     """
     cmd = (
-        "curl -s -o /dev/null -w '%{http_code}' "
+        "set +o pipefail; "
+        "curl -s -i --max-time 5 "
         "-H 'Connection: Upgrade' -H 'Upgrade: websocket' "
         "-H 'Sec-WebSocket-Version: 13' "
         "-H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' "
-        f"--max-time 3 {url!r}"
+        f"{url!r} | head -1 | awk '{{print $2}}'"
     )
     return controller.ssh_command(cmd, timeout=10).strip()
 
