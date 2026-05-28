@@ -19,31 +19,47 @@ mkdir -p "$LOG_DIR"
 # Suite -> comma-separated .deb glob list. Anything not listed defaults to
 # the base policy-engine package.
 declare -A PKG_MAP=(
-  [ips_ids]="policy-engine-ips_*.deb"
-  [ipfix]="policy-engine-ipfix_*.deb"
-  [multi_node]="policy-engine_*.deb policy-node-agent_*.deb policy-controller_*.deb policy-controller-client_*.deb"
-  [rotation]="policy-engine_*.deb policy-node-agent_*.deb policy-controller_*.deb policy-controller-client_*.deb"
+  [ips_ids]="policy-engine-ips_*.deb policy-engine-client_*.deb"
+  [ipfix]="policy-engine-ipfix_*.deb policy-engine-client_*.deb"
+  [multi_node]="policy-engine_*.deb policy-engine-client_*.deb policy-node-agent_*.deb policy-controller_*.deb policy-controller-client_*.deb"
+  [rotation]="policy-engine_*.deb policy-engine-client_*.deb policy-node-agent_*.deb policy-controller_*.deb policy-controller-client_*.deb"
   # scale_test runs engine + agent as Docker containers (built locally as
   # policy-engine:0.1.0 / policy-node-agent:0.1.0); only the controller is
   # installed on a VM.
-  [scale_test]="policy-controller_*.deb"
+  [scale_test]="policy-controller_*.deb policy-controller-client_*.deb"
 )
-DEFAULT_PKG="policy-engine_*.deb"
+# Default: base engine + CLI client. The CLI client is needed by most
+# test helpers (lib/policy_engine/engine/cli/client.py shells out to it).
+DEFAULT_PKG="policy-engine_*.deb policy-engine-client_*.deb"
+
+# Debug-symbol and -dev/-doc packages we never want pulled into a test VM,
+# even if a glob accidentally matches them.
+_pkg_excluded() {
+  case "$1" in
+    *-dbgsym_*.deb|*-dev_*.deb|*-doc_*.deb) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 # Expand space-separated globs (relative to PKG_DIR) into a comma-separated
 # list of real paths. Errors if any glob matches nothing.
 expand_pkgs() {
-  local globs="$1" out="" pat matches m
+  local globs="$1" out="" pat matches kept m
   shopt -s nullglob
   for pat in $globs; do
     matches=( "$PKG_DIR"/$pat )
-    if (( ${#matches[@]} == 0 )); then
+    # Drop dbgsym/dev/doc variants so a loose glob can't drag them in.
+    kept=()
+    for m in "${matches[@]}"; do
+      _pkg_excluded "$(basename "$m")" || kept+=( "$m" )
+    done
+    if (( ${#kept[@]} == 0 )); then
       shopt -u nullglob
       echo "ERROR: no .deb matched $PKG_DIR/$pat" >&2
       return 1
     fi
     # If multiple match (e.g. older versions left behind), take the newest.
-    m=$(ls -1t "${matches[@]}" | head -n1)
+    m=$(ls -1t "${kept[@]}" | head -n1)
     out+="${out:+,}$m"
   done
   shopt -u nullglob
