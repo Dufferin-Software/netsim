@@ -62,6 +62,21 @@ fi
 declare -A RESULT
 declare -A DURATION
 overall=0
+current_topo=""
+interrupted=0
+
+on_interrupt() {
+  interrupted=1
+  echo
+  echo "=== interrupted, cleaning up..." >&2
+  if [[ -n "$current_topo" ]]; then
+    netsim destroy "$current_topo" >>"${current_log:-/dev/null}" 2>&1 || true
+  fi
+  trap - INT
+  # Re-raise so the exit status reflects the signal.
+  kill -INT $$
+}
+trap on_interrupt INT
 
 for suite in $SUITES; do
   if [[ " $SKIP " == *" $suite "* ]]; then
@@ -72,6 +87,8 @@ for suite in $SUITES; do
   topo="tests/$suite/$suite.yaml"
   pkg_globs="${PKG_MAP[$suite]:-$DEFAULT_PKG}"
   log="$LOG_DIR/$suite.log"
+  current_topo="$topo"
+  current_log="$log"
 
   echo
   echo "================================================================"
@@ -105,6 +122,8 @@ for suite in $SUITES; do
 
   DURATION[$suite]=$((SECONDS - start))
   RESULT[$suite]=$status
+  current_topo=""
+  current_log=""
   [[ $status == PASS ]] || overall=1
 done
 

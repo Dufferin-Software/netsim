@@ -1,4 +1,4 @@
-name: "quic-sni-matching"
+name: "sni-matching"
 version: "1.0"
 
 networks:
@@ -8,7 +8,8 @@ networks:
     mtu: 1500
 
 nodes:
-  # Server: runs policy-engine with UDP+SNI rules, receives QUIC Initials.
+  # Server: runs policy-engine with TCP+SNI and UDP+SNI rules; receives both
+  # scapy-crafted TLS ClientHellos and aioquic v1/v2 Initials.
   - name: "server"
     image:
       name: "debian-13-genericcloud"
@@ -19,9 +20,9 @@ nodes:
     networks:
       - "net1"
 
-  # Client: fires a single real QUIC v1 Initial packet with a chosen SNI
-  # via aioquic.  The server never replies — we only care that the Initial
-  # crosses the policy-engine ingress and is inspected.
+  # Client: fires scapy-built TLS ClientHellos (TCP/443) and aioquic Initials
+  # (UDP/443) at the server.  The server never replies meaningfully — we only
+  # care that the handshake byte reaches policy-engine's BPF/userspace path.
   - name: "client"
     image:
       name: "debian-13-genericcloud"
