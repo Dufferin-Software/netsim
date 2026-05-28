@@ -268,6 +268,157 @@ class TestConfigDistribution:
             logger.info(f"push_config to {vm_name}: ok")
 
 
+class TestFlushRules:
+    """Controller `flushRules` mutation: bulk-delete every rule scoped to
+    a single (node, interface, direction) in one gated agent push."""
+
+    def test_flush_rules_via_controller(
+        self,
+        nodes,
+        controller_client: ControllerClient,
+        enrolled_nodes: Dict[str, str],
+    ):
+        """
+        Seed multiple ingress rules on node1 and a control rule on node2,
+        flush node1's ingress, and verify:
+          - node1's local engine reports zero ingress rules
+          - node2's rule is untouched (scoping is per-node)
+          - the controller store agrees
+        """
+        # Ingress must be attached on the nodes we touch.
+        for vm_name in ("node1", "node2"):
+            _attach_ingress_on_node(
+                nodes[vm_name], controller_client, enrolled_nodes[vm_name]
+            )
+
+        node1 = nodes["node1"]
+        node2 = nodes["node2"]
+        node1_id = enrolled_nodes["node1"]
+        node2_id = enrolled_nodes["node2"]
+
+        # All managed nodes share the same topology — pick the first non-mgmt
+        # interface as the data interface (matches what _attach_ingress_on_node
+        # used).
+        def _data_iface(node) -> str:
+            for iface in node.interfaces.values():
+                if iface.network.name != "mgmt":
+                    return iface.if_name
+            pytest.fail(f"No data interface found on {node.name}")
+
+        data_iface = _data_iface(node1)
+
+        # Start clean — earlier tests in this class may have left rules behind.
+        for nid in (node1_id, node2_id):
+            controller_client.flush_rules(
+                node_id=nid, interface_name=data_iface, direction="ingress"
+            )
+
+        # Seed 3 distinct rules on node1 and 1 on node2 (the control).
+        node1_seed_srcs = ["10.10.0.0/16", "10.20.0.0/16", "10.30.0.0/16"]
+        for src in node1_seed_srcs:
+            controller_client.create_rule(
+                node_id=node1_id,
+                interface_name=data_iface,
+                direction="ingress",
+                src_cidr=src,
+            )
+        controller_client.create_rule(
+            node_id=node2_id,
+            interface_name=data_iface,
+            direction="ingress",
+            src_cidr="10.99.0.0/16",
+        )
+
+        # Wait for the agents to actually install them locally.
+        _wait_for_rules_on_node(node1, expected_rule_count=len(node1_seed_srcs))
+        _wait_for_rules_on_node(node2, expected_rule_count=1)
+
+        # Sanity: controller store agrees on the pre-flush counts.
+        pre_node1 = controller_client.list_rules_for_node(
+            node1_id, interface_name=data_iface, direction="ingress"
+        )
+        pre_node2 = controller_client.list_rules_for_node(
+            node2_id, interface_name=data_iface, direction="ingress"
+        )
+        assert len(pre_node1) == len(node1_seed_srcs), (
+            f"Controller store has {len(pre_node1)} ingress rule(s) on node1, "
+            f"expected {len(node1_seed_srcs)}"
+        )
+        assert len(pre_node2) == 1, (
+            f"Controller store has {len(pre_node2)} ingress rule(s) on node2, expected 1"
+        )
+
+        # Flush node1's ingress only — this is the new gated mutation.
+        result = controller_client.flush_rules(
+            node_id=node1_id,
+            interface_name=data_iface,
+            direction="ingress",
+        )
+        assert result.success, f"flushRules failed: {result.message}"
+        logger.info(f"flushRules on node1: {result.message}")
+
+        # The mutation is gated — by the time it returns, the agent has
+        # applied the deletes and the controller has committed. Poll briefly
+        # anyway in case the local engine takes a moment to update its view.
+        deadline = time.monotonic() + 30
+        node1_local = None
+        while time.monotonic() < deadline:
+            node1_local = _list_rules_on_node(node1)
+            if len(node1_local) == 0:
+                break
+            time.sleep(_POLL_INTERVAL)
+        assert node1_local == [], (
+            f"[node1] Expected 0 ingress rules after flush, got: {node1_local}"
+        )
+
+        # Node2 must be untouched.
+        node2_local = _list_rules_on_node(node2)
+        assert len(node2_local) == 1, (
+            f"[node2] Expected 1 ingress rule (untouched), got: {node2_local}"
+        )
+
+        # Controller store must agree.
+        post_node1 = controller_client.list_rules_for_node(
+            node1_id, interface_name=data_iface, direction="ingress"
+        )
+        post_node2 = controller_client.list_rules_for_node(
+            node2_id, interface_name=data_iface, direction="ingress"
+        )
+        assert post_node1 == [], (
+            f"Controller store still lists {len(post_node1)} rule(s) on node1 after flush"
+        )
+        assert len(post_node2) == 1, (
+            f"Controller store dropped node2's rule unexpectedly (got {len(post_node2)})"
+        )
+
+    def test_flush_rules_empty_scope_is_noop(
+        self,
+        nodes,
+        controller_client: ControllerClient,
+        enrolled_nodes: Dict[str, str],
+    ):
+        """Flushing a (node, interface, direction) with no rules must succeed."""
+        node1 = nodes["node1"]
+        _attach_ingress_on_node(node1, controller_client, enrolled_nodes["node1"])
+        for iface in node1.interfaces.values():
+            if iface.network.name != "mgmt":
+                data_iface = iface.if_name
+                break
+        # Pre-clean.
+        controller_client.flush_rules(
+            node_id=enrolled_nodes["node1"],
+            interface_name=data_iface,
+            direction="ingress",
+        )
+        # Second flush on an already-empty scope must still succeed.
+        result = controller_client.flush_rules(
+            node_id=enrolled_nodes["node1"],
+            interface_name=data_iface,
+            direction="ingress",
+        )
+        assert result.success, f"flushRules on empty scope failed: {result.message}"
+
+
 class TestMetricsVisibility:
     """Scenario 3: BPF drop stats visible via controller Prometheus metrics endpoint."""
 

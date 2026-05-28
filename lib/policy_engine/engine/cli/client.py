@@ -950,23 +950,26 @@ class PolicyClient:
         return []
 
     def flush_rules(
-        self, direction: str = "ingress", interface: Optional[str] = None
+        self, direction: str, interface: str
     ) -> OperationResult:
         """
-        Flush policy rules.
+        Flush policy rules scoped to a single (interface, direction).
 
         Args:
             direction: Traffic direction ("ingress" or "egress")
-            interface: Optional interface name; when given, only rules on that
-                interface are flushed. All rules in the direction are flushed
-                when omitted.
+            interface: Interface name to flush
 
         Returns:
             OperationResult indicating success/failure
         """
-        args = ["rule", "flush", "--direction", direction]
-        if interface is not None:
-            args.extend(["--interface", interface])
+        args = [
+            "rule",
+            "flush",
+            "--direction",
+            direction,
+            "--interface",
+            interface,
+        ]
         data = self._run_command_json(args)
         return OperationResult.from_json(data)
 

@@ -812,42 +812,49 @@ class GraphQLPolicyClient:
         self, direction: str = "ingress", interface: Optional[str] = None
     ) -> OperationResult:
         """
-        Flush policy rules.
+        Flush policy rules scoped to a single (interface, direction).
 
         Args:
             direction: Traffic direction ("ingress" or "egress")
-            interface: Optional interface name; when given, only rules on that
-                interface are flushed. All rules in the direction are flushed
-                when omitted.
+            interface: Interface name to flush. If omitted, the helper
+                enumerates every interface attached in this direction and
+                flushes each — convenient for tests that just want a clean
+                slate on a single-interface node.
 
         Returns:
             OperationResult indicating success/failure
         """
-        if interface is not None:
-            rules = self.list_rules(direction=direction, interface=interface)
-            count = len(rules)
-            for rule in rules:
-                self.delete_rule(
-                    interface=interface,
-                    rule_id=rule.rule_id,
-                    direction=direction,
-                )
-            return OperationResult(
-                success=True,
-                message=f"Flushed {count} {direction} rules for {interface}",
-            )
-
         gql_direction: str = "INGRESS" if direction == "ingress" else "EGRESS"
 
+        if interface is None:
+            attachments = self.list_interfaces()
+            ifaces = [
+                a.interface
+                for a in attachments
+                if a.direction.lower() == direction.lower()
+            ]
+            total = 0
+            for iface in ifaces:
+                r = self.flush_rules(direction=direction, interface=iface)
+                if not r.success:
+                    return r
+                total += 1
+            return OperationResult(
+                success=True,
+                message=f"Flushed {direction} rules on {total} interface(s)",
+            )
+
         mutation = """
-        mutation FlushRules($direction: GqlDirection!) {
-            flushRules(direction: $direction) {
+        mutation FlushRules($interface: String!, $direction: GqlDirection!) {
+            flushRules(interface: $interface, direction: $direction) {
                 success
                 message
             }
         }
         """
-        data = self._execute_graphql(mutation, {"direction": gql_direction})
+        data = self._execute_graphql(
+            mutation, {"interface": interface, "direction": gql_direction}
+        )
 
         if "__error__" in data:
             return OperationResult(success=False, message=data["__error__"])

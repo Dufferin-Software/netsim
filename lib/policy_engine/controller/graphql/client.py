@@ -753,6 +753,33 @@ class ControllerClient:
         r = data["deleteRule"]
         return OperationResult(success=r["success"], message=r.get("message"))
 
+    def flush_rules(
+        self, node_id: str, interface_name: str, direction: str
+    ) -> OperationResult:
+        """Delete every rule on a single (node, interface, direction).
+
+        Gated — the controller bundles the delete into a single agent push and
+        blocks until the agent confirms.
+        """
+        query = """
+        mutation FlushRules($nodeId: ID!, $iface: String!, $dir: String!) {
+            flushRules(nodeId: $nodeId, interfaceName: $iface, direction: $dir) {
+                success
+                message
+            }
+        }
+        """
+        data = self._execute(
+            query,
+            {
+                "nodeId": node_id,
+                "iface": interface_name,
+                "dir": direction,
+            },
+        )
+        r = data["flushRules"]
+        return OperationResult(success=r["success"], message=r.get("message"))
+
     def list_rules_for_node(
         self,
         node_id: str,
