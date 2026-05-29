@@ -20,20 +20,35 @@ logger: logging.Logger = logging.getLogger(__name__)
 _CONTROLLER_URL = "http://127.0.0.1:8443/graphql"
 
 
-def mint_api_token(controller_node: Node, name: str) -> str:
+def mint_api_token(
+    controller_node: Node,
+    name: str,
+    *,
+    tenant_id: int = 1,
+    roles: tuple = ("admin",),
+) -> str:
     """
     Mint a bearer token on the controller VM via SSH.
 
-    The plaintext is printed to stdout by `policy-controller-mint-token` (the
-    confirmation prose goes to stderr), so capturing stdout gives the token
-    cleanly. Subsequent test runs will reuse the same controller DB; we add
-    a per-call epoch suffix to `name` upstream when collisions matter.
+    `policy-controller-mint-token` defaults to **no roles** — a freshly minted
+    static token has zero permissions until the caller explicitly opts in (see
+    `mint_token.rs` for the reasoning). Netsim's integration tests always want
+    a fully-permissioned token to drive the GraphQL surface, so this helper
+    defaults `roles=("admin",)`. Pass `tenant_id=` to bind the token to a
+    non-default tenant (e.g. the second tenant created by `bootstrap_tenant`).
+
+    The plaintext is printed to stdout by the binary (the confirmation prose
+    goes to stderr), so capturing stdout gives the token cleanly. Subsequent
+    test runs will reuse the same controller DB; we add a per-call epoch
+    suffix to `name` upstream when collisions matter.
     """
+    role_args = " ".join(f"--role {r}" for r in roles)
     # Capture stderr alongside stdout so a failed mint surfaces a useful
     # message ("command not found", "database is locked", etc.) instead of
     # an opaque CalledProcessError.
     out: str = controller_node.ssh_command(
-        f"sudo policy-controller-mint-token --name '{name}' 2>&1",
+        f"sudo policy-controller-mint-token --name '{name}' "
+        f"--tenant-id {tenant_id} {role_args} 2>&1",
         timeout=15,
     )
     token: str = ""
@@ -48,6 +63,30 @@ def mint_api_token(controller_node: Node, name: str) -> str:
             f"output was: {out!r}"
         )
     return token
+
+
+def bootstrap_tenant(controller_node: Node, slug: str, name: str) -> int:
+    """
+    Provision a tenant on the controller and return its numeric id.
+
+    Wraps `policy-controller-bootstrap-tenant`, which inserts a `tenants` row
+    (idempotent on slug) and seeds the six built-in roles for the new id.
+    The id is printed to stdout on its own line so we can pipe it into a
+    subsequent `mint_api_token(tenant_id=…)` call.
+    """
+    out: str = controller_node.ssh_command(
+        f"sudo policy-controller-bootstrap-tenant "
+        f"--slug '{slug}' --name '{name}' 2>&1",
+        timeout=15,
+    )
+    for line in out.strip().splitlines():
+        line = line.strip()
+        if line.isdigit():
+            return int(line)
+    raise RuntimeError(
+        f"policy-controller-bootstrap-tenant did not print a tenant id; "
+        f"output was: {out!r}"
+    )
 
 
 @dataclass
