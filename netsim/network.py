@@ -251,34 +251,3 @@ class NetworkManager:
             NetworkManager._run_cmd(["ip", "addr", "add", ip_cidr, "dev", bridge_name])
         except subprocess.CalledProcessError:
             pass  # Address might already be assigned
-
-    @staticmethod
-    def bridge_exists(name: str) -> bool:
-        """Check if bridge exists."""
-        try:
-            result: subprocess.CompletedProcess[bytes] = subprocess.run(
-                ["ip", "link", "show", name], check=True, capture_output=True
-            )
-            return "bridge" in result.stdout.decode()
-        except subprocess.CalledProcessError:
-            return False
-
-    @staticmethod
-    def get_existing_bridges() -> List[str]:
-        """Get list of existing bridges."""
-        try:
-            result: subprocess.CompletedProcess[bytes] = subprocess.run(
-                ["ip", "link", "show", "type", "bridge"],
-                check=True,
-                capture_output=True,
-            )
-            bridges = []
-            for line in result.stdout.decode().split("\n"):
-                # Lines like "2: br0: <BROADCAST,MULTICAST,UP,LOWER_UP>..."
-                # Bridge names may contain '-', '.' or '_'; \w alone misses those.
-                match: re.Match[str] | None = re.match(r"\d+:\s+([\w.-]+):", line)
-                if match:
-                    bridges.append(match.group(1))
-            return bridges
-        except subprocess.CalledProcessError:
-            return []

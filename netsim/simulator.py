@@ -20,12 +20,6 @@ from netsim.images import ImageManager
 logger: logging.Logger = logging.getLogger(__name__)
 
 
-class SimulatorError(Exception):
-    """Simulator-related errors."""
-
-    pass
-
-
 class TopologySimulator:
     """Orchestrate a network topology of KVM/QEMU VMs via libvirt."""
 

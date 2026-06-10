@@ -218,15 +218,3 @@ class ImageManager:
 
         logger.info(f"Cleared {count} images from cache")
         return count
-
-    def get_cache_size(self) -> int:
-        """Get total size of cache in bytes."""
-        if not self.cache_dir.exists():
-            return 0
-
-        total = 0
-        for image_file in self.cache_dir.iterdir():
-            if image_file.is_file():
-                total += image_file.stat().st_size
-
-        return total

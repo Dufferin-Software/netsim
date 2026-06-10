@@ -418,51 +418,9 @@ class LibvirtVM:
             except Exception:
                 pass
 
-    def get_info(self) -> dict:
-        """Get VM information."""
-        conn: libvirt.virConnect = self._get_conn()
-        try:
-            try:
-                dom: libvirt.virDomain[libvirt.virConnect] = conn.lookupByName(
-                    self.config.name
-                )
-            except libvirt.libvirtError:
-                return {"state": "undefined"}
-
-            info = dom.info()
-            state = info[0]
-            return {
-                "name": self.config.name,
-                "state": self._state_to_str(state),
-                "memory_mb": int(info[2] / 1024),
-                "max_memory_mb": int(info[1] / 1024),
-                "vcpus": int(info[3]),
-            }
-        except Exception:
-            return {"state": "error"}
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
-
     def _get_conn(self) -> libvirt.virConnect:
         """Open a libvirt connection."""
         from netsim.libvirt_utils import open_with_timeout
 
         uri: str = os.environ.get("NETSIM_LIBVIRT_URI", "qemu:///system")
         return open_with_timeout(uri)
-
-    @staticmethod
-    def _state_to_str(state: int) -> str:
-        mapping: dict[int, str] = {
-            libvirt.VIR_DOMAIN_NOSTATE: "nostate",
-            libvirt.VIR_DOMAIN_RUNNING: "running",
-            libvirt.VIR_DOMAIN_BLOCKED: "blocked",
-            libvirt.VIR_DOMAIN_PAUSED: "paused",
-            libvirt.VIR_DOMAIN_SHUTDOWN: "shutdown",
-            libvirt.VIR_DOMAIN_SHUTOFF: "shutoff",
-            libvirt.VIR_DOMAIN_CRASHED: "crashed",
-            libvirt.VIR_DOMAIN_PMSUSPENDED: "pmsuspended",
-        }
-        return mapping.get(state, "unknown")

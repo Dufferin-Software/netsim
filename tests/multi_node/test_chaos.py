@@ -23,11 +23,6 @@ Scenarios
 6. Add/remove rules interleaved with traffic — alternating rule install,
    traffic check (dropped), rule removal, traffic check (passes).
 
-Run with:
-  netsim start tests/multi_node/multi_node.yaml
-  python3 -m pytest tests/multi_node/test_chaos.py -v \\
-      --install-packages policy-engine.deb,policy-node-agent.deb,policy-controller.deb
-  netsim destroy tests/multi_node/multi_node.yaml
 """
 
 import logging

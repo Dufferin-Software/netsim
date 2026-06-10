@@ -65,35 +65,6 @@ def _wait_for_controller_http(
     pytest.fail(f"policy-controller HTTP API did not become ready within {timeout}s")
 
 
-def _wait_for_pending_enrollments(
-    client: ControllerClient,
-    expected_count: int,
-    timeout: int = _ENROLLMENT_TIMEOUT,
-) -> List[str]:
-    """
-    Wait until at least `expected_count` pending enrollments appear.
-    Returns the list of pending node IDs.
-
-    Only used by negative-path tests that intentionally enroll with a
-    rejected/expired token. The happy path uses ZTP auto-approval and never
-    transits Pending.
-    """
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            pending = client.pending_enrollments()
-            if len(pending) >= expected_count:
-                ids = [n.id for n in pending]
-                logger.info(f"Found {len(pending)} pending enrollments: {ids}")
-                return ids
-        except Exception as e:
-            logger.debug(f"Error polling enrollments: {e}")
-        time.sleep(_POLL_INTERVAL)
-    pytest.fail(
-        f"Expected {expected_count} pending enrollments but timed out after {timeout}s"
-    )
-
-
 def _wait_for_active_nodes_by_hostname(
     client: ControllerClient,
     expected_hostnames: List[str],
@@ -123,27 +94,6 @@ def _wait_for_active_nodes_by_hostname(
     pytest.fail(
         f"Expected active nodes for hostnames {expected_hostnames}, timed out after {timeout}s"
     )
-
-
-def _wait_for_active_nodes(
-    client: ControllerClient,
-    node_ids: List[str],
-    timeout: int = _ACTIVE_TIMEOUT,
-) -> None:
-    """Wait until all given node IDs reach 'active' status."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            active = {n.id for n in client.list_nodes(status="active")}
-            if all(nid in active for nid in node_ids):
-                logger.info(f"All nodes active: {node_ids}")
-                return
-            pending_ids = [nid for nid in node_ids if nid not in active]
-            logger.debug(f"Still waiting for nodes to become active: {pending_ids}")
-        except Exception as e:
-            logger.debug(f"Error polling node status: {e}")
-        time.sleep(_POLL_INTERVAL)
-    pytest.fail(f"Nodes {node_ids} did not reach Active status within {timeout}s")
 
 
 def _wait_for_online_nodes(
