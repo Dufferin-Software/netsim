@@ -36,6 +36,7 @@ from tests.systemd_utils import (
 )
 from lib.policy_engine.controller.graphql.client import ControllerClient
 from lib.policy_engine.engine.graphql.client import GraphQLPolicyClient
+from tests.multi_node.helpers import data_iface
 
 logger = logging.getLogger(__name__)
 
@@ -299,18 +300,12 @@ class TestFlushRules:
         # All managed nodes share the same topology — pick the first non-mgmt
         # interface as the data interface (matches what _attach_ingress_on_node
         # used).
-        def _data_iface(node) -> str:
-            for iface in node.interfaces.values():
-                if iface.network.name != "mgmt":
-                    return iface.if_name
-            pytest.fail(f"No data interface found on {node.name}")
-
-        data_iface = _data_iface(node1)
+        iface = data_iface(node1)
 
         # Start clean — earlier tests in this class may have left rules behind.
         for nid in (node1_id, node2_id):
             controller_client.flush_rules(
-                node_id=nid, interface_name=data_iface, direction="ingress"
+                node_id=nid, interface_name=iface, direction="ingress"
             )
 
         # Seed 3 distinct rules on node1 and 1 on node2 (the control).
@@ -318,13 +313,13 @@ class TestFlushRules:
         for src in node1_seed_srcs:
             controller_client.create_rule(
                 node_id=node1_id,
-                interface_name=data_iface,
+                interface_name=iface,
                 direction="ingress",
                 src_cidr=src,
             )
         controller_client.create_rule(
             node_id=node2_id,
-            interface_name=data_iface,
+            interface_name=iface,
             direction="ingress",
             src_cidr="10.99.0.0/16",
         )
@@ -335,10 +330,10 @@ class TestFlushRules:
 
         # Sanity: controller store agrees on the pre-flush counts.
         pre_node1 = controller_client.list_rules_for_node(
-            node1_id, interface_name=data_iface, direction="ingress"
+            node1_id, interface_name=iface, direction="ingress"
         )
         pre_node2 = controller_client.list_rules_for_node(
-            node2_id, interface_name=data_iface, direction="ingress"
+            node2_id, interface_name=iface, direction="ingress"
         )
         assert len(pre_node1) == len(node1_seed_srcs), (
             f"Controller store has {len(pre_node1)} ingress rule(s) on node1, "
@@ -351,7 +346,7 @@ class TestFlushRules:
         # Flush node1's ingress only — this is the new gated mutation.
         result = controller_client.flush_rules(
             node_id=node1_id,
-            interface_name=data_iface,
+            interface_name=iface,
             direction="ingress",
         )
         assert result.success, f"flushRules failed: {result.message}"
@@ -379,10 +374,10 @@ class TestFlushRules:
 
         # Controller store must agree.
         post_node1 = controller_client.list_rules_for_node(
-            node1_id, interface_name=data_iface, direction="ingress"
+            node1_id, interface_name=iface, direction="ingress"
         )
         post_node2 = controller_client.list_rules_for_node(
-            node2_id, interface_name=data_iface, direction="ingress"
+            node2_id, interface_name=iface, direction="ingress"
         )
         assert post_node1 == [], (
             f"Controller store still lists {len(post_node1)} rule(s) on node1 after flush"

@@ -32,23 +32,11 @@ import time
 import pytest
 
 from lib.policy_engine.engine.cli.client import AddRuleOptions
+from tests.sni_matching.helpers import policy_drops, rule_packets
 
 logger = logging.getLogger(__name__)
 
 _DPORT = 443
-
-
-def _rule_packets(policy_client, rule_id: int) -> int:
-    stats = policy_client.get_rule_stats(rule_id=rule_id, direction="egress")
-    if not stats.rules or not stats.rules[0].stats:
-        return 0
-    return stats.rules[0].stats.packets
-
-
-def _policy_drops(policy_client, interface: str) -> int:
-    return policy_client.get_stats(
-        interface, direction="egress"
-    ).global_stats.policy_drops
 
 
 @pytest.mark.usefixtures("tcp_sni_listener")
@@ -89,15 +77,15 @@ class TestActionLoop:
         assert result.success, f"add_rule failed: {result.message}"
         policy_client.clear_rule_stats(rule_id=rule_id, direction="egress")
 
-        drops_before = _policy_drops(policy_client, attached_egress)
+        drops_before = policy_drops(policy_client, attached_egress)
 
         tls_sender(str(client_ip_v4), _DPORT, sni)
         time.sleep(0.3)
 
-        assert _rule_packets(policy_client, rule_id) >= 1, (
+        assert rule_packets(policy_client, rule_id) >= 1, (
             "rule_stats did not advance — SNI inspector never matched"
         )
-        drops_delta = _policy_drops(policy_client, attached_egress) - drops_before
+        drops_delta = policy_drops(policy_client, attached_egress) - drops_before
         assert drops_delta >= 1, (
             f"DROP action did not fire — policy_drops only advanced by {drops_delta}"
         )
@@ -144,8 +132,8 @@ class TestActionLoop:
 
         time.sleep(0.5)
 
-        count_alpha = _rule_packets(policy_client, rule_alpha)
-        count_beta = _rule_packets(policy_client, rule_beta)
+        count_alpha = rule_packets(policy_client, rule_alpha)
+        count_beta = rule_packets(policy_client, rule_beta)
         logger.info(f"alpha rule={count_alpha} packets, beta rule={count_beta} packets")
         assert count_alpha >= 1, (
             f"alpha rule did not count its own handshake (got {count_alpha})"

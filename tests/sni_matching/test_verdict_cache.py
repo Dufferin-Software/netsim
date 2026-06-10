@@ -29,23 +29,11 @@ import time
 import pytest
 
 from lib.policy_engine.engine.cli.client import AddRuleOptions
+from tests.sni_matching.helpers import wait_verdicts
 
 logger = logging.getLogger(__name__)
 
 _DPORT = 443
-_POLL_BUDGET_S = 5.0
-_POLL_INTERVAL_S = 0.25
-
-
-def _wait_verdicts(policy_client, baseline: int, want: int) -> int:
-    deadline = time.monotonic() + _POLL_BUDGET_S
-    last = baseline
-    while time.monotonic() < deadline:
-        last = policy_client.get_flow_verdicts(direction="egress").active_verdicts
-        if last >= baseline + want:
-            return last
-        time.sleep(_POLL_INTERVAL_S)
-    return last
 
 
 class TestQuicVerdictCacheFastPath:
@@ -79,7 +67,7 @@ class TestQuicVerdictCacheFastPath:
             quic_sender(str(client_ip_v4), _DPORT, sni, src_port=src)
             time.sleep(0.15)
 
-        after = _wait_verdicts(policy_client, before, want=3)
+        after = wait_verdicts(policy_client, before, want=3)
         grew = after - before
         logger.info(f"distinct-5tuple verdicts: before={before} after={after}")
         assert grew >= 3, (
@@ -141,7 +129,7 @@ class TestTcpVerdictCacheFastPath:
             tls_sender(str(client_ip_v4), _DPORT, sni, src_port=src)
             time.sleep(0.15)
 
-        after = _wait_verdicts(policy_client, before, want=3)
+        after = wait_verdicts(policy_client, before, want=3)
         grew = after - before
         logger.info(f"distinct-5tuple TCP verdicts: before={before} after={after}")
         assert grew >= 3, (

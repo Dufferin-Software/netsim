@@ -37,86 +37,25 @@ from lib.policy_engine.controller.graphql.client import (
     ControllerClient,
     PersistedEvent,
 )
+from tests.multi_node.helpers import (
+    data_iface,
+    delete_controller_rules,
+    flush_ingress_rules,
+    get_data_ip,
+    read_sysfs_ifindex,
+    send_icmp,
+    wait_for_node_ready,
+)
 
 logger = logging.getLogger(__name__)
 
 _SETTLE_SECS = 3
 _POLL_INTERVAL = 1
-_READY_TIMEOUT = 30
 _EVENT_WAIT_TIMEOUT = 30  # controller flushes forwarded events in batches
 _INTERFACE_REPORT_TIMEOUT = 60  # first InterfaceReport after enrollment
 
 
 # ── Shared helpers ────────────────────────────────────────────────────────────
-
-
-def _data_iface(node) -> str:
-    for iface in node.interfaces.values():
-        if iface.network.name != "mgmt":
-            return iface.if_name
-    pytest.fail(f"No data interface found on {node.name}")
-
-
-def _get_data_ip(node) -> str:
-    iface = _data_iface(node)
-    out = node.ssh_command(
-        f"ip -4 addr show {iface} | awk '/inet / {{print $2}}' | cut -d/ -f1",
-        timeout=10,
-    ).strip()
-    for line in out.splitlines():
-        addr = line.strip()
-        if addr:
-            return addr
-    pytest.fail(f"Could not determine data IP for {node.name} on {iface}")
-
-
-def _read_sysfs_ifindex(node, iface: str) -> int:
-    """Read /sys/class/net/<iface>/ifindex on the node."""
-    out = node.ssh_command(f"cat /sys/class/net/{iface}/ifindex", timeout=10).strip()
-    try:
-        return int(out)
-    except ValueError:
-        pytest.fail(
-            f"[{node.name}] /sys/class/net/{iface}/ifindex returned non-int: {out!r}"
-        )
-
-
-def _send_icmp(node, target_ip: str, iface: str, count: int = 5) -> dict:
-    out = node.ssh_command(
-        f"ping -c {count} -I {iface} {target_ip} 2>&1 || true",
-        timeout=30,
-    )
-    match = re.search(
-        r"(\d+) packets transmitted, (\d+) received.*?(\d+(?:\.\d+)?)% packet loss",
-        out,
-    )
-    if match:
-        sent = int(match.group(1))
-        received = int(match.group(2))
-        return {
-            "sent": sent,
-            "received": received,
-            "lost": sent - received,
-            "output": out,
-        }
-    return {"sent": 0, "received": 0, "lost": 0, "output": out}
-
-
-def _wait_for_node_ready(
-    client: ControllerClient, node_id: str, timeout: int = _READY_TIMEOUT
-) -> None:
-    """Block until pendingGeneration is None — required before any gated mutation."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            pending = client.pending_generation(node_id)
-            online = node_id in set(client.online_nodes())
-            if pending is None and online:
-                return
-        except Exception as e:
-            logger.debug(f"node_ready poll error: {e}")
-        time.sleep(_POLL_INTERVAL)
-    pytest.fail(f"Node {node_id} not ready (pending={pending!r}) after {timeout}s")
 
 
 def _wait_for_interfaces_reported(
@@ -171,30 +110,6 @@ def _wait_for_events(
         f"Expected ≥{min_count} events for node {node_id} since {since_iso}, "
         f"got {len(last)} after {timeout}s"
     )
-
-
-def _flush_ingress_rules(node) -> None:
-    """Best-effort cleanup of any leftover ingress rules on the node's local engine."""
-    from lib.policy_engine.engine.graphql.client import GraphQLPolicyClient
-
-    client = GraphQLPolicyClient(node)
-    for r in client.list_rules(direction="ingress"):
-        try:
-            client.delete_rule(r.interface, rule_id=r.rule_id, direction="ingress")
-        except Exception as e:
-            logger.debug(f"[{node.name}] delete_rule({r.rule_id}) failed: {e}")
-
-
-def _delete_controller_rules(
-    client: ControllerClient, node_id: str, iface: str, direction: str
-) -> None:
-    for r in client.list_rules_for_node(
-        node_id=node_id, interface_name=iface, direction=direction
-    ):
-        try:
-            client.delete_rule(r["id"])
-        except Exception as e:
-            logger.debug(f"controller delete_rule({r.get('id')}) failed: {e}")
 
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
@@ -276,8 +191,8 @@ class TestInterfaceIfindex:
         the data NIC must match /sys/class/net/<iface>/ifindex on the host."""
         for vm_name, node_id in enrolled_nodes.items():
             node = nodes[vm_name]
-            iface = _data_iface(node)
-            sysfs_ifindex = _read_sysfs_ifindex(node, iface)
+            iface = data_iface(node)
+            sysfs_ifindex = read_sysfs_ifindex(node, iface)
             controller_ifindex = _wait_for_interfaces_reported(
                 controller_client, node_id, iface
             )
@@ -312,21 +227,21 @@ class TestEventStreamPipeline:
         node1 = nodes["node1"]
         node2 = nodes["node2"]
         node1_id = enrolled_nodes["node1"]
-        iface1 = _data_iface(node1)
-        iface2 = _data_iface(node2)
-        node1_ip = _get_data_ip(node1)
+        iface1 = data_iface(node1)
+        iface2 = data_iface(node2)
+        node1_ip = get_data_ip(node1)
 
         expected_ifindex = _wait_for_interfaces_reported(
             controller_client, node1_id, iface1
         )
 
-        _wait_for_node_ready(controller_client, node1_id)
+        wait_for_node_ready(controller_client, node1_id)
         controller_client.attach_program(
             node_id=node1_id, interface_name=iface1, direction="ingress"
         )
         time.sleep(_SETTLE_SECS)
-        _flush_ingress_rules(node1)
-        _delete_controller_rules(controller_client, node1_id, iface1, "ingress")
+        flush_ingress_rules(node1)
+        delete_controller_rules(controller_client, node1_id, iface1, "ingress")
 
         rule = controller_client.create_rule(
             node_id=node1_id,
@@ -349,7 +264,7 @@ class TestEventStreamPipeline:
         ).rstrip("0").rstrip(".") + "Z"
 
         try:
-            ping = _send_icmp(node2, node1_ip, iface2, count=5)
+            ping = send_icmp(node2, node1_ip, iface2, count=5)
             logger.info(f"[log-rule] ping: sent={ping['sent']} recv={ping['received']}")
             assert ping["received"] > 0, (
                 f"log-only rule must not drop traffic; got {ping}"
@@ -359,7 +274,7 @@ class TestEventStreamPipeline:
 
             # Filter to ICMP-from-node2-to-node1 to ignore unrelated background
             # traffic the agent might also have logged.
-            node2_ip = _get_data_ip(node2)
+            node2_ip = get_data_ip(node2)
             relevant = [e for e in evs if e.src_ip == node2_ip and e.dst_ip == node1_ip]
             assert relevant, (
                 f"No events matching {node2_ip} → {node1_ip} found; got "
@@ -384,9 +299,9 @@ class TestEventStreamPipeline:
                 f"verified {len(relevant)} forwarded events carry ifindex={expected_ifindex}"
             )
         finally:
-            _flush_ingress_rules(node1)
-            _delete_controller_rules(controller_client, node1_id, iface1, "ingress")
-            _wait_for_node_ready(controller_client, node1_id)
+            flush_ingress_rules(node1)
+            delete_controller_rules(controller_client, node1_id, iface1, "ingress")
+            wait_for_node_ready(controller_client, node1_id)
             try:
                 controller_client.detach_program(
                     node_id=node1_id, interface_name=iface1, direction="ingress"
@@ -482,14 +397,14 @@ def _log_ingress_session(controller_client: ControllerClient, node, node_id: str
     tests in this file (#6 retention, #7 GraphQL cursor) don't have to
     duplicate the dance.
     """
-    iface = _data_iface(node)
-    _wait_for_node_ready(controller_client, node_id)
+    iface = data_iface(node)
+    wait_for_node_ready(controller_client, node_id)
     controller_client.attach_program(
         node_id=node_id, interface_name=iface, direction="ingress"
     )
     time.sleep(_SETTLE_SECS)
-    _flush_ingress_rules(node)
-    _delete_controller_rules(controller_client, node_id, iface, "ingress")
+    flush_ingress_rules(node)
+    delete_controller_rules(controller_client, node_id, iface, "ingress")
     rule = controller_client.create_rule(
         node_id=node_id,
         interface_name=iface,
@@ -502,9 +417,9 @@ def _log_ingress_session(controller_client: ControllerClient, node, node_id: str
     try:
         yield rule["id"], iface
     finally:
-        _flush_ingress_rules(node)
-        _delete_controller_rules(controller_client, node_id, iface, "ingress")
-        _wait_for_node_ready(controller_client, node_id)
+        flush_ingress_rules(node)
+        delete_controller_rules(controller_client, node_id, iface, "ingress")
+        wait_for_node_ready(controller_client, node_id)
         try:
             controller_client.detach_program(
                 node_id=node_id, interface_name=iface, direction="ingress"
@@ -537,15 +452,15 @@ class TestEventsGraphqlQuery:
         node1 = nodes["node1"]
         node2 = nodes["node2"]
         node1_id = enrolled_nodes["node1"]
-        node1_ip = _get_data_ip(node1)
-        iface2 = _data_iface(node2)
+        node1_ip = get_data_ip(node1)
+        iface2 = data_iface(node2)
 
         with _log_ingress_session(controller_client, node1, node1_id):
             since_iso = (datetime.now(timezone.utc) - timedelta(seconds=2)).strftime(
                 "%Y-%m-%dT%H:%M:%S.%f"
             ).rstrip("0").rstrip(".") + "Z"
 
-            ping = _send_icmp(node2, node1_ip, iface2, count=8)
+            ping = send_icmp(node2, node1_ip, iface2, count=8)
             assert ping["received"] > 0, f"log rule must not drop traffic: {ping}"
 
             # Need enough events to force pagination at limit=3.
@@ -634,8 +549,8 @@ class TestEventRetention:
         node1 = nodes["node1"]
         node2 = nodes["node2"]
         node1_id = enrolled_nodes["node1"]
-        node1_ip = _get_data_ip(node1)
-        iface2 = _data_iface(node2)
+        node1_ip = get_data_ip(node1)
+        iface2 = data_iface(node2)
 
         _ensure_sqlite3_cli(controller)
 
@@ -654,7 +569,7 @@ class TestEventRetention:
                     datetime.now(timezone.utc) - timedelta(seconds=2)
                 ).strftime("%Y-%m-%dT%H:%M:%S.%f").rstrip("0").rstrip(".") + "Z"
 
-                ping = _send_icmp(node2, node1_ip, iface2, count=10)
+                ping = send_icmp(node2, node1_ip, iface2, count=10)
                 assert ping["received"] > 0, ping
                 _wait_for_events(controller_client, node1_id, since_iso, min_count=3)
 

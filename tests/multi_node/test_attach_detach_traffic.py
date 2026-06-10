@@ -28,7 +28,6 @@ Run with:
 """
 
 import logging
-import re
 import time
 from typing import Dict
 
@@ -36,117 +35,18 @@ import pytest
 
 from lib.policy_engine.controller.graphql.client import ControllerClient
 from lib.policy_engine.engine.graphql.client import GraphQLPolicyClient
+from tests.multi_node.helpers import (
+    data_iface,
+    delete_controller_rules,
+    flush_ingress_rules,
+    get_data_ip,
+    send_icmp,
+    wait_for_node_ready,
+)
 
 logger = logging.getLogger(__name__)
 
 _SETTLE_SECS = 3
-_POLL_INTERVAL = 1
-_READY_TIMEOUT = 30
-
-
-# ── Shared helpers ─────────────────────────────────────────────────────────────
-
-
-def _data_iface(node) -> str:
-    """Return the name of the node's non-management (data) interface."""
-    for iface in node.interfaces.values():
-        if iface.network.name != "mgmt":
-            return iface.if_name
-    pytest.fail(f"No data interface found on {node.name}")
-
-
-def _get_data_ip(node) -> str:
-    """Return the node's IPv4 address on the data network."""
-    iface = _data_iface(node)
-    out = node.ssh_command(
-        f"ip -4 addr show {iface} | awk '/inet / {{print $2}}' | cut -d/ -f1",
-        timeout=10,
-    ).strip()
-    for line in out.splitlines():
-        addr = line.strip()
-        if addr:
-            return addr
-    pytest.fail(f"Could not determine data IP for {node.name} on {iface}")
-
-
-def _send_icmp(node, target_ip: str, iface: str, count: int = 5) -> dict:
-    """
-    Send ICMP echo requests via ping and return packet counts.
-
-    Returns a dict with keys: sent, received, lost, output.
-    """
-    out = node.ssh_command(
-        f"ping -c {count} -I {iface} {target_ip} 2>&1 || true",
-        timeout=30,
-    )
-    match = re.search(
-        r"(\d+) packets transmitted, (\d+) received.*?(\d+(?:\.\d+)?)% packet loss",
-        out,
-    )
-    if match:
-        sent = int(match.group(1))
-        received = int(match.group(2))
-        return {
-            "sent": sent,
-            "received": received,
-            "lost": sent - received,
-            "output": out,
-        }
-    return {"sent": 0, "received": 0, "lost": 0, "output": out}
-
-
-def _wait_for_node_ready(
-    client: ControllerClient,
-    node_id: str,
-    timeout: int = _READY_TIMEOUT,
-) -> None:
-    """Block until pendingGeneration is None and the node is online.
-
-    Must be called before any gated mutation (attachProgram, detachProgram,
-    createRule, setInterfaceDefaultAction) to avoid BLOCKED_PENDING_CONFIRM.
-    """
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            pg = client.pending_generation(node_id)
-            online = set(client.online_nodes())
-            if pg is None and node_id in online:
-                return
-        except Exception as e:
-            logger.debug(f"_wait_for_node_ready poll error: {e}")
-        time.sleep(_POLL_INTERVAL)
-    pg = client.pending_generation(node_id)
-    online = set(client.online_nodes())
-    pytest.fail(
-        f"Node {node_id} did not reach ready state within {timeout}s "
-        f"(pending={pg}, online={node_id in online})"
-    )
-
-
-def _flush_ingress_rules(node) -> None:
-    """Flush all ingress rules from the node's local policy-engine."""
-    GraphQLPolicyClient(node).flush_rules(direction="ingress")
-
-
-def _delete_controller_rules(
-    controller_client: ControllerClient,
-    node_id: str,
-    iface: str,
-    direction: str,
-) -> None:
-    """Delete all rules for node/iface/direction from the controller database.
-
-    Previous tests may leave rules in the controller that are never deleted
-    (only flushed locally).  When the program is detached the controller
-    immediately sends a DeltaConfigPush for those stale rules, which triggers
-    the agent's auto-attach logic and re-loads the BPF program.  Deleting
-    rules from the controller before detaching prevents that push.
-    """
-    _wait_for_node_ready(controller_client, node_id)
-    for rule in controller_client.list_rules_for_node(node_id, iface, direction):
-        result = controller_client.delete_rule(rule["id"])
-        if not result.success:
-            logger.warning(f"deleteRule {rule['id']} failed: {result.message}")
 
 
 # ── TestAttachDetachController ──────────────────────────────────────────────────
@@ -167,9 +67,9 @@ class TestAttachDetachController:
         """
         node1 = nodes["node1"]
         node1_id = enrolled_nodes["node1"]
-        iface = _data_iface(node1)
+        iface = data_iface(node1)
 
-        _wait_for_node_ready(controller_client, node1_id)
+        wait_for_node_ready(controller_client, node1_id)
 
         result = controller_client.attach_program(
             node_id=node1_id,
@@ -203,9 +103,9 @@ class TestAttachDetachController:
         """
         node1 = nodes["node1"]
         node1_id = enrolled_nodes["node1"]
-        iface = _data_iface(node1)
+        iface = data_iface(node1)
 
-        _wait_for_node_ready(controller_client, node1_id)
+        wait_for_node_ready(controller_client, node1_id)
 
         # Ensure ingress is attached before testing detach
         controller_client.attach_program(
@@ -215,7 +115,7 @@ class TestAttachDetachController:
         )
         time.sleep(_SETTLE_SECS)
 
-        _wait_for_node_ready(controller_client, node1_id)
+        wait_for_node_ready(controller_client, node1_id)
         result = controller_client.detach_program(
             node_id=node1_id,
             interface_name=iface,
@@ -246,9 +146,9 @@ class TestAttachDetachController:
         """
         for vm_name, node_id in enrolled_nodes.items():
             node = nodes[vm_name]
-            iface = _data_iface(node)
+            iface = data_iface(node)
 
-            _wait_for_node_ready(controller_client, node_id)
+            wait_for_node_ready(controller_client, node_id)
             res = controller_client.attach_program(
                 node_id=node_id,
                 interface_name=iface,
@@ -260,7 +160,7 @@ class TestAttachDetachController:
 
         for vm_name, node_id in enrolled_nodes.items():
             node = nodes[vm_name]
-            iface = _data_iface(node)
+            iface = data_iface(node)
             ifaces = controller_client.node_interfaces(node_id)
             match = next((i for i in ifaces if i.name == iface), None)
             assert match is not None, f"[{vm_name}] {iface} not in nodeInterfaces"
@@ -271,8 +171,8 @@ class TestAttachDetachController:
         # Detach all
         for vm_name, node_id in enrolled_nodes.items():
             node = nodes[vm_name]
-            iface = _data_iface(node)
-            _wait_for_node_ready(controller_client, node_id)
+            iface = data_iface(node)
+            wait_for_node_ready(controller_client, node_id)
             controller_client.detach_program(
                 node_id=node_id,
                 interface_name=iface,
@@ -283,7 +183,7 @@ class TestAttachDetachController:
 
         for vm_name, node_id in enrolled_nodes.items():
             node = nodes[vm_name]
-            iface = _data_iface(node)
+            iface = data_iface(node)
             ifaces = controller_client.node_interfaces(node_id)
             match = next((i for i in ifaces if i.name == iface), None)
             assert match is not None, (
@@ -306,10 +206,10 @@ class TestAttachDetachController:
         """
         node1 = nodes["node1"]
         node1_id = enrolled_nodes["node1"]
-        iface = _data_iface(node1)
+        iface = data_iface(node1)
         pe = GraphQLPolicyClient(node1)
 
-        _wait_for_node_ready(controller_client, node1_id)
+        wait_for_node_ready(controller_client, node1_id)
 
         # Attach via controller
         controller_client.attach_program(
@@ -328,7 +228,7 @@ class TestAttachDetachController:
         logger.info(f"[node1] Local engine confirms {iface} attached")
 
         # Detach via controller
-        _wait_for_node_ready(controller_client, node1_id)
+        wait_for_node_ready(controller_client, node1_id)
         controller_client.detach_program(
             node_id=node1_id,
             interface_name=iface,
@@ -370,11 +270,11 @@ class TestTrafficEnforcement:
         node1 = nodes["node1"]
         node2 = nodes["node2"]
         node1_id = enrolled_nodes["node1"]
-        iface1 = _data_iface(node1)
-        iface2 = _data_iface(node2)
-        node1_ip = _get_data_ip(node1)
+        iface1 = data_iface(node1)
+        iface2 = data_iface(node2)
+        node1_ip = get_data_ip(node1)
 
-        _wait_for_node_ready(controller_client, node1_id)
+        wait_for_node_ready(controller_client, node1_id)
 
         controller_client.attach_program(
             node_id=node1_id,
@@ -382,16 +282,16 @@ class TestTrafficEnforcement:
             direction="ingress",
         )
         time.sleep(_SETTLE_SECS)
-        _flush_ingress_rules(node1)
+        flush_ingress_rules(node1)
 
         try:
-            result = _send_icmp(node2, node1_ip, iface2, count=5)
+            result = send_icmp(node2, node1_ip, iface2, count=5)
             logger.info(f"[no-rule] ICMP result: {result}")
             assert result["received"] > 0, (
                 f"Expected ICMP to reach node1 with no drop rule; got {result}"
             )
         finally:
-            _wait_for_node_ready(controller_client, node1_id)
+            wait_for_node_ready(controller_client, node1_id)
             controller_client.detach_program(
                 node_id=node1_id,
                 interface_name=iface1,
@@ -411,11 +311,11 @@ class TestTrafficEnforcement:
         node1 = nodes["node1"]
         node2 = nodes["node2"]
         node1_id = enrolled_nodes["node1"]
-        iface1 = _data_iface(node1)
-        iface2 = _data_iface(node2)
-        node1_ip = _get_data_ip(node1)
+        iface1 = data_iface(node1)
+        iface2 = data_iface(node2)
+        node1_ip = get_data_ip(node1)
 
-        _wait_for_node_ready(controller_client, node1_id)
+        wait_for_node_ready(controller_client, node1_id)
 
         controller_client.attach_program(
             node_id=node1_id,
@@ -423,7 +323,7 @@ class TestTrafficEnforcement:
             direction="ingress",
         )
         time.sleep(_SETTLE_SECS)
-        _flush_ingress_rules(node1)
+        flush_ingress_rules(node1)
 
         rule = controller_client.create_rule(
             node_id=node1_id,
@@ -437,16 +337,16 @@ class TestTrafficEnforcement:
         time.sleep(_SETTLE_SECS)
 
         try:
-            result = _send_icmp(node2, node1_ip, iface2, count=5)
+            result = send_icmp(node2, node1_ip, iface2, count=5)
             logger.info(f"[drop-rule] ICMP result: {result}")
             assert result["lost"] > 0, (
                 f"Expected ICMP packets to be dropped; "
                 f"{result['received']}/{result['sent']} received"
             )
         finally:
-            _flush_ingress_rules(node1)
-            _delete_controller_rules(controller_client, node1_id, iface1, "ingress")
-            _wait_for_node_ready(controller_client, node1_id)
+            flush_ingress_rules(node1)
+            delete_controller_rules(controller_client, node1_id, iface1, "ingress")
+            wait_for_node_ready(controller_client, node1_id)
             controller_client.detach_program(
                 node_id=node1_id,
                 interface_name=iface1,
@@ -466,12 +366,12 @@ class TestTrafficEnforcement:
         node1 = nodes["node1"]
         node2 = nodes["node2"]
         node1_id = enrolled_nodes["node1"]
-        iface1 = _data_iface(node1)
-        iface2 = _data_iface(node2)
-        node1_ip = _get_data_ip(node1)
+        iface1 = data_iface(node1)
+        iface2 = data_iface(node2)
+        node1_ip = get_data_ip(node1)
         pe = GraphQLPolicyClient(node1)
 
-        _wait_for_node_ready(controller_client, node1_id)
+        wait_for_node_ready(controller_client, node1_id)
 
         controller_client.attach_program(
             node_id=node1_id,
@@ -479,7 +379,7 @@ class TestTrafficEnforcement:
             direction="ingress",
         )
         time.sleep(_SETTLE_SECS)
-        _flush_ingress_rules(node1)
+        flush_ingress_rules(node1)
 
         rule = controller_client.create_rule(
             node_id=node1_id,
@@ -493,7 +393,7 @@ class TestTrafficEnforcement:
 
         # Clear stats then send 5 matching packets
         pe.clear_all_stats()
-        _send_icmp(node2, node1_ip, iface2, count=5)
+        send_icmp(node2, node1_ip, iface2, count=5)
         time.sleep(_SETTLE_SECS)
 
         try:
@@ -515,9 +415,9 @@ class TestTrafficEnforcement:
                 f"[node1] Rule {rule_id} hit: packets={stats.packets}, bytes={stats.bytes}"
             )
         finally:
-            _flush_ingress_rules(node1)
-            _delete_controller_rules(controller_client, node1_id, iface1, "ingress")
-            _wait_for_node_ready(controller_client, node1_id)
+            flush_ingress_rules(node1)
+            delete_controller_rules(controller_client, node1_id, iface1, "ingress")
+            wait_for_node_ready(controller_client, node1_id)
             controller_client.detach_program(
                 node_id=node1_id,
                 interface_name=iface1,
@@ -537,12 +437,12 @@ class TestTrafficEnforcement:
         node1 = nodes["node1"]
         node2 = nodes["node2"]
         node1_id = enrolled_nodes["node1"]
-        iface1 = _data_iface(node1)
-        iface2 = _data_iface(node2)
-        node1_ip = _get_data_ip(node1)
+        iface1 = data_iface(node1)
+        iface2 = data_iface(node2)
+        node1_ip = get_data_ip(node1)
         pe = GraphQLPolicyClient(node1)
 
-        _wait_for_node_ready(controller_client, node1_id)
+        wait_for_node_ready(controller_client, node1_id)
 
         controller_client.attach_program(
             node_id=node1_id,
@@ -550,7 +450,7 @@ class TestTrafficEnforcement:
             direction="ingress",
         )
         time.sleep(_SETTLE_SECS)
-        _flush_ingress_rules(node1)
+        flush_ingress_rules(node1)
 
         rule = controller_client.create_rule(
             node_id=node1_id,
@@ -563,7 +463,7 @@ class TestTrafficEnforcement:
         time.sleep(_SETTLE_SECS)
 
         pe.clear_global_stats(iface1, direction="ingress")
-        _send_icmp(node2, node1_ip, iface2, count=5)
+        send_icmp(node2, node1_ip, iface2, count=5)
         time.sleep(_SETTLE_SECS)
 
         try:
@@ -574,9 +474,9 @@ class TestTrafficEnforcement:
             )
             logger.info(f"[node1] policyDrops after traffic: {drops}")
         finally:
-            _flush_ingress_rules(node1)
-            _delete_controller_rules(controller_client, node1_id, iface1, "ingress")
-            _wait_for_node_ready(controller_client, node1_id)
+            flush_ingress_rules(node1)
+            delete_controller_rules(controller_client, node1_id, iface1, "ingress")
+            wait_for_node_ready(controller_client, node1_id)
             controller_client.detach_program(
                 node_id=node1_id,
                 interface_name=iface1,
@@ -606,10 +506,10 @@ class TestDetachWithRulesInstalled:
         """
         node1 = nodes["node1"]
         node1_id = enrolled_nodes["node1"]
-        iface = _data_iface(node1)
+        iface = data_iface(node1)
         pe = GraphQLPolicyClient(node1)
 
-        _wait_for_node_ready(controller_client, node1_id)
+        wait_for_node_ready(controller_client, node1_id)
 
         controller_client.attach_program(
             node_id=node1_id,
@@ -617,7 +517,7 @@ class TestDetachWithRulesInstalled:
             direction="ingress",
         )
         time.sleep(_SETTLE_SECS)
-        _flush_ingress_rules(node1)
+        flush_ingress_rules(node1)
 
         rule = controller_client.create_rule(
             node_id=node1_id,
@@ -634,7 +534,7 @@ class TestDetachWithRulesInstalled:
         rule_ids_before = {r.rule_id for r in rules_before}
 
         # Detach BPF program
-        _wait_for_node_ready(controller_client, node1_id)
+        wait_for_node_ready(controller_client, node1_id)
         detach = controller_client.detach_program(
             node_id=node1_id,
             interface_name=iface,
@@ -656,8 +556,8 @@ class TestDetachWithRulesInstalled:
         )
 
         # Clean up
-        _flush_ingress_rules(node1)
-        _delete_controller_rules(controller_client, node1_id, iface, "ingress")
+        flush_ingress_rules(node1)
+        delete_controller_rules(controller_client, node1_id, iface, "ingress")
 
     def test_traffic_passes_after_detach_with_rules(
         self,
@@ -673,19 +573,19 @@ class TestDetachWithRulesInstalled:
         node1 = nodes["node1"]
         node2 = nodes["node2"]
         node1_id = enrolled_nodes["node1"]
-        iface1 = _data_iface(node1)
-        iface2 = _data_iface(node2)
-        node1_ip = _get_data_ip(node1)
+        iface1 = data_iface(node1)
+        iface2 = data_iface(node2)
+        node1_ip = get_data_ip(node1)
 
-        _wait_for_node_ready(controller_client, node1_id)
+        wait_for_node_ready(controller_client, node1_id)
 
         controller_client.attach_program(
             node_id=node1_id,
             interface_name=iface1,
             direction="ingress",
         )
-        _wait_for_node_ready(controller_client, node1_id)
-        _flush_ingress_rules(node1)
+        wait_for_node_ready(controller_client, node1_id)
+        flush_ingress_rules(node1)
 
         result = controller_client.set_interface_default_action(
             node_id=node1_id,
@@ -696,7 +596,7 @@ class TestDetachWithRulesInstalled:
         assert result.success, f"setInterfaceDefaultAction failed: {result.message}"
         logger.info(f"[node1] Set ingress default to pass on {iface1}")
 
-        ping_result = _send_icmp(node2, node1_ip, iface2, count=3)
+        ping_result = send_icmp(node2, node1_ip, iface2, count=3)
         logger.info(f"[attached+rule] ICMP: {ping_result}")
         assert ping_result["received"] == 3, (
             "Expected traffic to pass before rule install"
@@ -713,7 +613,7 @@ class TestDetachWithRulesInstalled:
         time.sleep(_SETTLE_SECS)
 
         # Confirm the rule is currently enforced
-        drop_result = _send_icmp(node2, node1_ip, iface2, count=3)
+        drop_result = send_icmp(node2, node1_ip, iface2, count=3)
         logger.info(f"[attached+rule] ICMP: {drop_result}")
         assert drop_result["lost"] > 0, "Expected drops with BPF attached + rule"
 
@@ -721,28 +621,28 @@ class TestDetachWithRulesInstalled:
         # controller sends a DeltaConfigPush carrying those rules immediately
         # after the detach is committed, which triggers the agent's auto-attach
         # logic and re-loads the BPF program — defeating the point of the test.
-        _delete_controller_rules(controller_client, node1_id, iface1, "ingress")
+        delete_controller_rules(controller_client, node1_id, iface1, "ingress")
 
         # Detach program
-        _wait_for_node_ready(controller_client, node1_id)
+        wait_for_node_ready(controller_client, node1_id)
         controller_client.detach_program(
             node_id=node1_id,
             interface_name=iface1,
             direction="ingress",
         )
-        _wait_for_node_ready(controller_client, node1_id)
+        wait_for_node_ready(controller_client, node1_id)
 
         try:
             # Traffic should now pass (program removed from kernel path)
-            pass_result = _send_icmp(node2, node1_ip, iface2, count=5)
+            pass_result = send_icmp(node2, node1_ip, iface2, count=5)
             logger.info(f"[detached+rule] ICMP: {pass_result}")
             assert pass_result["received"] > 0, (
                 f"Expected traffic to pass after BPF detach (rule still in engine "
                 f"but no enforcement); got {pass_result}"
             )
         finally:
-            _flush_ingress_rules(node1)
-            _delete_controller_rules(controller_client, node1_id, iface1, "ingress")
+            flush_ingress_rules(node1)
+            delete_controller_rules(controller_client, node1_id, iface1, "ingress")
 
     def test_rules_enforced_after_reattach(
         self,
@@ -762,12 +662,12 @@ class TestDetachWithRulesInstalled:
         node1 = nodes["node1"]
         node2 = nodes["node2"]
         node1_id = enrolled_nodes["node1"]
-        iface1 = _data_iface(node1)
-        iface2 = _data_iface(node2)
-        node1_ip = _get_data_ip(node1)
+        iface1 = data_iface(node1)
+        iface2 = data_iface(node2)
+        node1_ip = get_data_ip(node1)
         GraphQLPolicyClient(node1)
 
-        _wait_for_node_ready(controller_client, node1_id)
+        wait_for_node_ready(controller_client, node1_id)
 
         # 1. Attach + drop-ICMP rule
         controller_client.attach_program(
@@ -776,7 +676,7 @@ class TestDetachWithRulesInstalled:
             direction="ingress",
         )
         time.sleep(_SETTLE_SECS)
-        _flush_ingress_rules(node1)
+        flush_ingress_rules(node1)
 
         rule = controller_client.create_rule(
             node_id=node1_id,
@@ -789,14 +689,14 @@ class TestDetachWithRulesInstalled:
         time.sleep(_SETTLE_SECS)
 
         try:
-            drop_result = _send_icmp(node2, node1_ip, iface2, count=3)
+            drop_result = send_icmp(node2, node1_ip, iface2, count=3)
             assert drop_result["lost"] > 0, (
                 f"Expected drops while attached with rule; got {drop_result}"
             )
             logger.info(f"[step1/attached] ICMP dropped: {drop_result}")
 
             # 2. Detach — rule remains in engine
-            _wait_for_node_ready(controller_client, node1_id)
+            wait_for_node_ready(controller_client, node1_id)
             controller_client.detach_program(
                 node_id=node1_id,
                 interface_name=iface1,
@@ -804,14 +704,14 @@ class TestDetachWithRulesInstalled:
             )
             time.sleep(_SETTLE_SECS)
 
-            pass_result = _send_icmp(node2, node1_ip, iface2, count=3)
+            pass_result = send_icmp(node2, node1_ip, iface2, count=3)
             assert pass_result["received"] > 0, (
                 f"Expected traffic to pass after detach; got {pass_result}"
             )
             logger.info(f"[step2/detached] ICMP passes: {pass_result}")
 
             # 3. Re-attach + push_config to restore enforcement
-            _wait_for_node_ready(controller_client, node1_id)
+            wait_for_node_ready(controller_client, node1_id)
             reattach = controller_client.attach_program(
                 node_id=node1_id,
                 interface_name=iface1,
@@ -821,19 +721,19 @@ class TestDetachWithRulesInstalled:
 
             push = controller_client.push_config(node1_id)
             assert push.success, f"push_config after re-attach failed: {push.message}"
-            _wait_for_node_ready(controller_client, node1_id)
+            wait_for_node_ready(controller_client, node1_id)
             time.sleep(_SETTLE_SECS)
 
-            redrop_result = _send_icmp(node2, node1_ip, iface2, count=5)
+            redrop_result = send_icmp(node2, node1_ip, iface2, count=5)
             logger.info(f"[step3/reattached] ICMP: {redrop_result}")
             assert redrop_result["lost"] > 0, (
                 f"Expected traffic to be dropped after re-attach + push_config; "
                 f"got {redrop_result}"
             )
         finally:
-            _flush_ingress_rules(node1)
-            _delete_controller_rules(controller_client, node1_id, iface1, "ingress")
-            _wait_for_node_ready(controller_client, node1_id)
+            flush_ingress_rules(node1)
+            delete_controller_rules(controller_client, node1_id, iface1, "ingress")
+            wait_for_node_ready(controller_client, node1_id)
             controller_client.detach_program(
                 node_id=node1_id,
                 interface_name=iface1,
@@ -871,14 +771,14 @@ class TestMultiNodeRuleStats:
 
         node1 = nodes["node1"]
         node2 = nodes["node2"]
-        iface1 = _data_iface(node1)
-        iface2 = _data_iface(node2)
+        iface1 = data_iface(node1)
+        iface2 = data_iface(node2)
 
         # Attach ingress and flush rules on both nodes
         for vm_name, node_id in test_nodes.items():
             node = nodes[vm_name]
-            iface = _data_iface(node)
-            _wait_for_node_ready(controller_client, node_id)
+            iface = data_iface(node)
+            wait_for_node_ready(controller_client, node_id)
             controller_client.attach_program(
                 node_id=node_id,
                 interface_name=iface,
@@ -911,20 +811,20 @@ class TestMultiNodeRuleStats:
         for vm_name in test_nodes:
             GraphQLPolicyClient(nodes[vm_name]).clear_all_stats()
 
-        node1_ip = _get_data_ip(node1)
-        node2_ip = _get_data_ip(node2)
+        node1_ip = get_data_ip(node1)
+        node2_ip = get_data_ip(node2)
 
         try:
             # node2 → node1: pings hit node1's ingress drop rule
-            _send_icmp(node2, node1_ip, iface2, count=5)
+            send_icmp(node2, node1_ip, iface2, count=5)
             # node1 → node2: pings hit node2's ingress drop rule
-            _send_icmp(node1, node2_ip, iface1, count=5)
+            send_icmp(node1, node2_ip, iface1, count=5)
             time.sleep(_SETTLE_SECS)
 
             for vm_name in test_nodes:
                 node = nodes[vm_name]
                 pe = GraphQLPolicyClient(node)
-                iface = _data_iface(node)
+                iface = data_iface(node)
 
                 local_rules = pe.list_rules(direction="ingress", interface=iface)
                 assert local_rules, (
@@ -950,9 +850,9 @@ class TestMultiNodeRuleStats:
         finally:
             for vm_name, node_id in test_nodes.items():
                 node = nodes[vm_name]
-                iface = _data_iface(node)
+                iface = data_iface(node)
                 GraphQLPolicyClient(node).flush_rules(direction="ingress")
-                _wait_for_node_ready(controller_client, node_id)
+                wait_for_node_ready(controller_client, node_id)
                 controller_client.detach_program(
                     node_id=node_id,
                     interface_name=iface,
@@ -980,15 +880,15 @@ class TestMultiNodeRuleStats:
 
         node1 = nodes["node1"]
         node2 = nodes["node2"]
-        iface1 = _data_iface(node1)
-        iface2 = _data_iface(node2)
-        node1_ip = _get_data_ip(node1)
+        iface1 = data_iface(node1)
+        iface2 = data_iface(node2)
+        node1_ip = get_data_ip(node1)
 
         # Attach and flush on both nodes
         for vm_name, node_id in test_nodes.items():
             node = nodes[vm_name]
-            iface = _data_iface(node)
-            _wait_for_node_ready(controller_client, node_id)
+            iface = data_iface(node)
+            wait_for_node_ready(controller_client, node_id)
             controller_client.attach_program(
                 node_id=node_id,
                 interface_name=iface,
@@ -1015,7 +915,7 @@ class TestMultiNodeRuleStats:
 
         try:
             # Send traffic only to node1 (from node2)
-            _send_icmp(node2, node1_ip, iface2, count=5)
+            send_icmp(node2, node1_ip, iface2, count=5)
             time.sleep(_SETTLE_SECS)
 
             # node1 must show hits
@@ -1047,9 +947,9 @@ class TestMultiNodeRuleStats:
         finally:
             for vm_name, node_id in test_nodes.items():
                 node = nodes[vm_name]
-                iface = _data_iface(node)
+                iface = data_iface(node)
                 GraphQLPolicyClient(node).flush_rules(direction="ingress")
-                _wait_for_node_ready(controller_client, node_id)
+                wait_for_node_ready(controller_client, node_id)
                 controller_client.detach_program(
                     node_id=node_id,
                     interface_name=iface,

@@ -26,7 +26,6 @@ Scenarios
 """
 
 import logging
-import re
 import threading
 import time
 from typing import Dict, List
@@ -37,6 +36,13 @@ from lib.policy_engine.controller.graphql.client import ControllerClient
 from lib.policy_engine.engine.graphql.client import GraphQLPolicyClient
 from tests.node import Node
 from tests.systemd_utils import get_service_status, restart_service, start_service
+from tests.multi_node.helpers import (
+    data_iface,
+    delete_controller_rules,
+    get_data_ip,
+    send_icmp,
+)
+from tests.multi_node.helpers import wait_for_node_ready as wait_for_node_ready_shared
 
 logger = logging.getLogger(__name__)
 
@@ -51,69 +57,16 @@ _CHURN_CYCLES = 5
 # ── Shared helpers ─────────────────────────────────────────────────────────────
 
 
-def _data_iface(node: Node) -> str:
-    for iface in node.interfaces.values():
-        if iface.network.name != "mgmt":
-            return iface.if_name
-    pytest.fail(f"No data interface found on {node.name}")
-
-
-def _get_data_ip(node: Node) -> str:
-    iface = _data_iface(node)
-    out = node.ssh_command(
-        f"ip -4 addr show {iface} | awk '/inet / {{print $2}}' | cut -d/ -f1",
-        timeout=10,
-    ).strip()
-    for line in out.splitlines():
-        addr = line.strip()
-        if addr:
-            return addr
-    pytest.fail(f"Could not determine data IP for {node.name} on {iface}")
-
-
-def _send_icmp(node: Node, target_ip: str, iface: str, count: int = 5) -> dict:
-    out = node.ssh_command(
-        f"ping -c {count} -I {iface} {target_ip} 2>&1 || true",
-        timeout=30,
-    )
-    match = re.search(
-        r"(\d+) packets transmitted, (\d+) received.*?(\d+(?:\.\d+)?)% packet loss",
-        out,
-    )
-    if match:
-        sent = int(match.group(1))
-        received = int(match.group(2))
-        return {
-            "sent": sent,
-            "received": received,
-            "lost": sent - received,
-            "output": out,
-        }
-    return {"sent": 0, "received": 0, "lost": 0, "output": out}
-
-
-def _wait_for_node_ready(
-    client: ControllerClient,
-    node_id: str,
-    timeout: int = _READY_TIMEOUT,
+def wait_for_node_ready(
+    client: ControllerClient, node_id: str, timeout: int = _READY_TIMEOUT
 ) -> None:
-    """Wait until the node has no pending generation and is online."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            pg = client.pending_generation(node_id)
-            online = set(client.online_nodes())
-            if pg is None and node_id in online:
-                return
-        except Exception as e:
-            logger.debug(f"_wait_for_node_ready poll error: {e}")
-        time.sleep(_POLL_INTERVAL)
-    pg = client.pending_generation(node_id)
-    online = set(client.online_nodes())
-    pytest.fail(
-        f"Node {node_id} did not reach ready state within {timeout}s "
-        f"(pending={pg}, online={node_id in online})"
-    )
+    """Readiness gate with the chaos suite's longer default window.
+
+    Thin wrapper over the shared helper that defaults ``timeout`` to
+    ``_READY_TIMEOUT``; chaos nodes recovering from induced failures need
+    longer than the 30 s default used elsewhere.
+    """
+    wait_for_node_ready_shared(client, node_id, timeout=timeout)
 
 
 def _wait_for_nodes_online(
@@ -138,10 +91,9 @@ def _wait_for_nodes_online(
 
 def _wait_for_ssh(node: Node, timeout: int = _REBOOT_TIMEOUT) -> None:
     """Poll until SSH is reachable on the node after a reboot."""
-    time.sleep(5)  # allow the reboot to initiate
+    time.sleep(5)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        # Evict the stale connection so paramiko attempts a fresh TCP connect
         with Node._ssh_lock:
             key = node._connection_key
             if key in Node._ssh_connections:
@@ -162,27 +114,13 @@ def _wait_for_ssh(node: Node, timeout: int = _REBOOT_TIMEOUT) -> None:
     )
 
 
-def _delete_controller_rules(
-    client: ControllerClient,
-    node_id: str,
-    iface: str,
-    direction: str,
-) -> None:
-    """Delete all controller-side rules for node/interface/direction."""
-    _wait_for_node_ready(client, node_id, timeout=30)
-    for rule in client.list_rules_for_node(node_id, iface, direction):
-        result = client.delete_rule(rule["id"])
-        if not result.success:
-            logger.warning(f"deleteRule {rule['id']} failed: {result.message}")
-
-
 def _attach_and_install_drop_icmp(
     client: ControllerClient,
     node_id: str,
     iface: str,
 ) -> dict:
     """Attach ingress program and create a drop-ICMP rule; return the rule dict."""
-    _wait_for_node_ready(client, node_id)
+    wait_for_node_ready(client, node_id)
     res = client.attach_program(
         node_id=node_id,
         interface_name=iface,
@@ -215,8 +153,8 @@ def _cleanup_node(
     except Exception as e:
         logger.warning(f"[{node.name}] flush_rules: {e}")
     try:
-        _delete_controller_rules(client, node_id, iface, "ingress")
-        _wait_for_node_ready(client, node_id, timeout=30)
+        delete_controller_rules(client, node_id, iface, "ingress")
+        wait_for_node_ready(client, node_id, timeout=30)
         client.detach_program(
             node_id=node_id, interface_name=iface, direction="ingress"
         )
@@ -244,15 +182,15 @@ class TestAgentRestartWithRulesInstalled:
         node1 = nodes["node1"]
         node2 = nodes["node2"]
         node1_id = enrolled_nodes["node1"]
-        iface1 = _data_iface(node1)
-        iface2 = _data_iface(node2)
-        node1_ip = _get_data_ip(node1)
+        iface1 = data_iface(node1)
+        iface2 = data_iface(node2)
+        node1_ip = get_data_ip(node1)
 
         GraphQLPolicyClient(node1).flush_rules(direction="ingress")
         _attach_and_install_drop_icmp(controller_client, node1_id, iface1)
 
         try:
-            pre = _send_icmp(node2, node1_ip, iface2, count=5)
+            pre = send_icmp(node2, node1_ip, iface2, count=5)
             assert pre["lost"] > 0, (
                 f"Expected ICMP drops before agent restart; got {pre}"
             )
@@ -264,10 +202,10 @@ class TestAgentRestartWithRulesInstalled:
             restart_service(node1, "policy-node-agent")
 
             _wait_for_nodes_online(controller_client, [node1_id])
-            _wait_for_node_ready(controller_client, node1_id)
+            wait_for_node_ready(controller_client, node1_id)
             time.sleep(_SETTLE_SECS)
 
-            post = _send_icmp(node2, node1_ip, iface2, count=5)
+            post = send_icmp(node2, node1_ip, iface2, count=5)
             assert post["lost"] > 0, (
                 f"Expected ICMP drops after agent restart; got {post}. "
                 "Controller should have re-pushed the drop rule on reconnect."
@@ -287,7 +225,7 @@ class TestAgentRestartWithRulesInstalled:
         """Local policy-engine rule list must be non-empty after agent reconnect."""
         node1 = nodes["node1"]
         node1_id = enrolled_nodes["node1"]
-        iface1 = _data_iface(node1)
+        iface1 = data_iface(node1)
         pe = GraphQLPolicyClient(node1)
 
         pe.flush_rules(direction="ingress")
@@ -300,7 +238,7 @@ class TestAgentRestartWithRulesInstalled:
 
             restart_service(node1, "policy-node-agent")
             _wait_for_nodes_online(controller_client, [node1_id])
-            _wait_for_node_ready(controller_client, node1_id)
+            wait_for_node_ready(controller_client, node1_id)
             time.sleep(_SETTLE_SECS)
 
             rules_after = pe.list_rules(direction="ingress")
@@ -324,9 +262,9 @@ class TestAgentRestartWithRulesInstalled:
         node1 = nodes["node1"]
         node2 = nodes["node2"]
         node1_id = enrolled_nodes["node1"]
-        iface1 = _data_iface(node1)
-        iface2 = _data_iface(node2)
-        node1_ip = _get_data_ip(node1)
+        iface1 = data_iface(node1)
+        iface2 = data_iface(node2)
+        node1_ip = get_data_ip(node1)
 
         GraphQLPolicyClient(node1).flush_rules(direction="ingress")
         _attach_and_install_drop_icmp(controller_client, node1_id, iface1)
@@ -336,10 +274,10 @@ class TestAgentRestartWithRulesInstalled:
                 logger.info(f"[node1] Agent restart cycle {i + 1}/3")
                 restart_service(node1, "policy-node-agent")
                 _wait_for_nodes_online(controller_client, [node1_id])
-                _wait_for_node_ready(controller_client, node1_id)
+                wait_for_node_ready(controller_client, node1_id)
                 time.sleep(_SETTLE_SECS)
 
-                result = _send_icmp(node2, node1_ip, iface2, count=5)
+                result = send_icmp(node2, node1_ip, iface2, count=5)
                 assert result["lost"] > 0, (
                     f"[node1] Expected drops after agent restart cycle {i + 1}; "
                     f"got {result}"
@@ -372,15 +310,15 @@ class TestEngineRestartWithRulesInstalled:
         node1 = nodes["node1"]
         node2 = nodes["node2"]
         node1_id = enrolled_nodes["node1"]
-        iface1 = _data_iface(node1)
-        iface2 = _data_iface(node2)
-        node1_ip = _get_data_ip(node1)
+        iface1 = data_iface(node1)
+        iface2 = data_iface(node2)
+        node1_ip = get_data_ip(node1)
 
         GraphQLPolicyClient(node1).flush_rules(direction="ingress")
         _attach_and_install_drop_icmp(controller_client, node1_id, iface1)
 
         try:
-            pre = _send_icmp(node2, node1_ip, iface2, count=5)
+            pre = send_icmp(node2, node1_ip, iface2, count=5)
             assert pre["lost"] > 0, f"Expected drops before engine restart; got {pre}"
             logger.info(f"[node1] Pre-restart: {pre['lost']}/{pre['sent']} dropped")
 
@@ -394,10 +332,10 @@ class TestEngineRestartWithRulesInstalled:
             restart_service(node1, "policy-node-agent")
 
             _wait_for_nodes_online(controller_client, [node1_id])
-            _wait_for_node_ready(controller_client, node1_id)
+            wait_for_node_ready(controller_client, node1_id)
             time.sleep(_SETTLE_SECS)
 
-            post = _send_icmp(node2, node1_ip, iface2, count=5)
+            post = send_icmp(node2, node1_ip, iface2, count=5)
             assert post["lost"] > 0, (
                 f"Expected drops after engine+agent restart; got {post}. "
                 "Controller should have re-pushed config on reconnect."
@@ -420,16 +358,16 @@ class TestEngineRestartWithRulesInstalled:
         node1 = nodes["node1"]
         node2 = nodes["node2"]
         node1_id = enrolled_nodes["node1"]
-        iface1 = _data_iface(node1)
-        iface2 = _data_iface(node2)
-        node1_ip = _get_data_ip(node1)
+        iface1 = data_iface(node1)
+        iface2 = data_iface(node2)
+        node1_ip = get_data_ip(node1)
 
         GraphQLPolicyClient(node1).flush_rules(direction="ingress")
         _attach_and_install_drop_icmp(controller_client, node1_id, iface1)
 
         try:
             # Confirm drops while everything is running
-            active = _send_icmp(node2, node1_ip, iface2, count=5)
+            active = send_icmp(node2, node1_ip, iface2, count=5)
             assert active["lost"] > 0, (
                 f"Expected drops before engine stop; got {active}"
             )
@@ -442,7 +380,7 @@ class TestEngineRestartWithRulesInstalled:
 
             # BPF programs remain attached (preserve-state default) — traffic
             # must still be dropped while the daemon is not running.
-            still_dropped = _send_icmp(node2, node1_ip, iface2, count=5)
+            still_dropped = send_icmp(node2, node1_ip, iface2, count=5)
             logger.info(
                 f"[node1] With engine stopped: "
                 f"{still_dropped['lost']}/{still_dropped['sent']} dropped"
@@ -460,11 +398,11 @@ class TestEngineRestartWithRulesInstalled:
             start_service(node1, "policy-node-agent")
 
             _wait_for_nodes_online(controller_client, [node1_id])
-            _wait_for_node_ready(controller_client, node1_id)
+            wait_for_node_ready(controller_client, node1_id)
             time.sleep(_SETTLE_SECS)
 
             # Drops must resume
-            resumed = _send_icmp(node2, node1_ip, iface2, count=5)
+            resumed = send_icmp(node2, node1_ip, iface2, count=5)
             assert resumed["lost"] > 0, (
                 f"Expected drops to resume after engine+agent restart; got {resumed}"
             )
@@ -483,7 +421,7 @@ class TestEngineRestartWithRulesInstalled:
         """policy-engine systemd unit must be healthy after restart."""
         node1 = nodes["node1"]
         node1_id = enrolled_nodes["node1"]
-        iface1 = _data_iface(node1)
+        iface1 = data_iface(node1)
 
         GraphQLPolicyClient(node1).flush_rules(direction="ingress")
         _attach_and_install_drop_icmp(controller_client, node1_id, iface1)
@@ -528,20 +466,20 @@ class TestConcurrentNodeServiceRestarts:
             pytest.skip("Need at least node1 and node2 enrolled")
 
         node2 = nodes["node2"]
-        iface2 = _data_iface(node2)
+        iface2 = data_iface(node2)
 
         # Install drop-ICMP on node1 and node2; verify initial drops
         for vm in test_vms:
             node = nodes[vm]
             node_id = enrolled_nodes[vm]
             GraphQLPolicyClient(node).flush_rules(direction="ingress")
-            _attach_and_install_drop_icmp(controller_client, node_id, _data_iface(node))
+            _attach_and_install_drop_icmp(controller_client, node_id, data_iface(node))
 
         try:
             for vm in test_vms:
                 node = nodes[vm]
-                node_ip = _get_data_ip(node)
-                pre = _send_icmp(node2, node_ip, iface2, count=5)
+                node_ip = get_data_ip(node)
+                pre = send_icmp(node2, node_ip, iface2, count=5)
                 logger.info(f"[{vm}] Pre-restart: {pre['lost']}/{pre['sent']} dropped")
                 # node2 is the sender so we only check its own ingress via node1
                 if vm != "node2":
@@ -574,14 +512,14 @@ class TestConcurrentNodeServiceRestarts:
             node_ids = [enrolled_nodes[vm] for vm in test_vms]
             _wait_for_nodes_online(controller_client, node_ids)
             for nid in node_ids:
-                _wait_for_node_ready(controller_client, nid)
+                wait_for_node_ready(controller_client, nid)
             time.sleep(_SETTLE_SECS)
 
             # Verify enforcement on each node
             for vm in test_vms:
                 node = nodes[vm]
-                node_ip = _get_data_ip(node)
-                result = _send_icmp(node2, node_ip, iface2, count=5)
+                node_ip = get_data_ip(node)
+                result = send_icmp(node2, node_ip, iface2, count=5)
                 logger.info(
                     f"[{vm}] Post-restart: {result['lost']}/{result['sent']} dropped"
                 )
@@ -593,7 +531,7 @@ class TestConcurrentNodeServiceRestarts:
             for vm in test_vms:
                 node = nodes[vm]
                 node_id = enrolled_nodes[vm]
-                _cleanup_node(controller_client, node, node_id, _data_iface(node))
+                _cleanup_node(controller_client, node, node_id, data_iface(node))
 
     def test_concurrent_engine_and_agent_restart(
         self,
@@ -610,7 +548,7 @@ class TestConcurrentNodeServiceRestarts:
             node = nodes[vm]
             node_id = enrolled_nodes[vm]
             GraphQLPolicyClient(node).flush_rules(direction="ingress")
-            _attach_and_install_drop_icmp(controller_client, node_id, _data_iface(node))
+            _attach_and_install_drop_icmp(controller_client, node_id, data_iface(node))
 
         try:
             errors: List[str] = []
@@ -639,7 +577,7 @@ class TestConcurrentNodeServiceRestarts:
             node_ids = [enrolled_nodes[vm] for vm in test_vms]
             _wait_for_nodes_online(controller_client, node_ids)
             for nid in node_ids:
-                _wait_for_node_ready(controller_client, nid)
+                wait_for_node_ready(controller_client, nid)
             time.sleep(_SETTLE_SECS)
 
             # All nodes must have their rules restored
@@ -658,7 +596,7 @@ class TestConcurrentNodeServiceRestarts:
             for vm in test_vms:
                 node = nodes[vm]
                 node_id = enrolled_nodes[vm]
-                _cleanup_node(controller_client, node, node_id, _data_iface(node))
+                _cleanup_node(controller_client, node, node_id, data_iface(node))
 
 
 # ── TestNodeReboot ────────────────────────────────────────────────────────────
@@ -682,16 +620,16 @@ class TestNodeReboot:
         node1 = nodes["node1"]
         node2 = nodes["node2"]
         node1_id = enrolled_nodes["node1"]
-        iface1 = _data_iface(node1)
-        iface2 = _data_iface(node2)
-        node1_ip = _get_data_ip(node1)
+        iface1 = data_iface(node1)
+        iface2 = data_iface(node2)
+        node1_ip = get_data_ip(node1)
 
         GraphQLPolicyClient(node1).flush_rules(direction="ingress")
         _attach_and_install_drop_icmp(controller_client, node1_id, iface1)
 
         try:
             # Confirm drops before reboot
-            pre = _send_icmp(node2, node1_ip, iface2, count=5)
+            pre = send_icmp(node2, node1_ip, iface2, count=5)
             assert pre["lost"] > 0, f"Expected drops before reboot; got {pre}"
             logger.info(f"[node1] Pre-reboot: {pre['lost']}/{pre['sent']} dropped")
 
@@ -709,11 +647,11 @@ class TestNodeReboot:
             _wait_for_nodes_online(
                 controller_client, [node1_id], timeout=_RECONNECT_TIMEOUT * 2
             )
-            _wait_for_node_ready(controller_client, node1_id)
+            wait_for_node_ready(controller_client, node1_id)
             time.sleep(_SETTLE_SECS)
 
             # Enforcement must be restored via controller reconciliation
-            post = _send_icmp(node2, node1_ip, iface2, count=5)
+            post = send_icmp(node2, node1_ip, iface2, count=5)
             assert post["lost"] > 0, (
                 f"Expected drops after reboot + service restart; got {post}. "
                 "Controller reconciliation should have re-pushed the drop rule."
@@ -731,7 +669,7 @@ class TestNodeReboot:
         """Rebooting a node must not change its controller status from Active."""
         node1 = nodes["node1"]
         node1_id = enrolled_nodes["node1"]
-        iface1 = _data_iface(node1)
+        iface1 = data_iface(node1)
 
         GraphQLPolicyClient(node1).flush_rules(direction="ingress")
         _attach_and_install_drop_icmp(controller_client, node1_id, iface1)
@@ -769,7 +707,7 @@ class TestNodeReboot:
         """Local policy-engine must list the drop rule after post-reboot reconnect."""
         node1 = nodes["node1"]
         node1_id = enrolled_nodes["node1"]
-        iface1 = _data_iface(node1)
+        iface1 = data_iface(node1)
         pe = GraphQLPolicyClient(node1)
 
         pe.flush_rules(direction="ingress")
@@ -789,7 +727,7 @@ class TestNodeReboot:
             start_service(node1, "policy-node-agent")
 
             _wait_for_nodes_online(controller_client, [node1_id])
-            _wait_for_node_ready(controller_client, node1_id)
+            wait_for_node_ready(controller_client, node1_id)
             time.sleep(_SETTLE_SECS)
 
             # The controller must have pushed the rule back
@@ -827,11 +765,11 @@ class TestRapidRuleChurn:
         node1 = nodes["node1"]
         node2 = nodes["node2"]
         node1_id = enrolled_nodes["node1"]
-        iface1 = _data_iface(node1)
-        iface2 = _data_iface(node2)
-        node1_ip = _get_data_ip(node1)
+        iface1 = data_iface(node1)
+        iface2 = data_iface(node2)
+        node1_ip = get_data_ip(node1)
 
-        _wait_for_node_ready(controller_client, node1_id)
+        wait_for_node_ready(controller_client, node1_id)
         res = controller_client.attach_program(
             node_id=node1_id,
             interface_name=iface1,
@@ -846,7 +784,7 @@ class TestRapidRuleChurn:
                 logger.info(f"[node1] Rule churn cycle {cycle + 1}/{_CHURN_CYCLES}")
 
                 # Install drop-ICMP rule
-                _wait_for_node_ready(controller_client, node1_id)
+                wait_for_node_ready(controller_client, node1_id)
                 rule = controller_client.create_rule(
                     node_id=node1_id,
                     interface_name=iface1,
@@ -858,7 +796,7 @@ class TestRapidRuleChurn:
                 time.sleep(_SETTLE_SECS)
 
                 # Traffic must be dropped
-                drop_result = _send_icmp(node2, node1_ip, iface2, count=5)
+                drop_result = send_icmp(node2, node1_ip, iface2, count=5)
                 assert drop_result["lost"] > 0, (
                     f"Cycle {cycle + 1}: expected drops with rule installed; "
                     f"got {drop_result}"
@@ -869,7 +807,7 @@ class TestRapidRuleChurn:
                 )
 
                 # Delete the rule
-                _wait_for_node_ready(controller_client, node1_id)
+                wait_for_node_ready(controller_client, node1_id)
                 del_result = controller_client.delete_rule(rule["id"])
                 assert del_result.success, (
                     f"Cycle {cycle + 1}: deleteRule failed: {del_result.message}"
@@ -878,7 +816,7 @@ class TestRapidRuleChurn:
                 time.sleep(_SETTLE_SECS)
 
                 # Traffic must pass again
-                pass_result = _send_icmp(node2, node1_ip, iface2, count=5)
+                pass_result = send_icmp(node2, node1_ip, iface2, count=5)
                 assert pass_result["received"] > 0, (
                     f"Cycle {cycle + 1}: expected traffic to pass after rule delete; "
                     f"got {pass_result}"
@@ -888,12 +826,12 @@ class TestRapidRuleChurn:
                     f"{pass_result['received']}/{pass_result['sent']} received (no rule)"
                 )
         finally:
-            _delete_controller_rules(controller_client, node1_id, iface1, "ingress")
+            delete_controller_rules(controller_client, node1_id, iface1, "ingress")
             try:
                 GraphQLPolicyClient(node1).flush_rules(direction="ingress")
             except Exception as e:
                 logger.warning(f"[node1] flush_rules during cleanup: {e}")
-            _wait_for_node_ready(controller_client, node1_id, timeout=30)
+            wait_for_node_ready(controller_client, node1_id, timeout=30)
             controller_client.detach_program(
                 node_id=node1_id, interface_name=iface1, direction="ingress"
             )
@@ -913,12 +851,12 @@ class TestRapidRuleChurn:
         node1 = nodes["node1"]
         node2 = nodes["node2"]
         node1_id = enrolled_nodes["node1"]
-        iface1 = _data_iface(node1)
-        iface2 = _data_iface(node2)
-        node1_ip = _get_data_ip(node1)
+        iface1 = data_iface(node1)
+        iface2 = data_iface(node2)
+        node1_ip = get_data_ip(node1)
         pe = GraphQLPolicyClient(node1)
 
-        _wait_for_node_ready(controller_client, node1_id)
+        wait_for_node_ready(controller_client, node1_id)
         res = controller_client.attach_program(
             node_id=node1_id,
             interface_name=iface1,
@@ -930,7 +868,7 @@ class TestRapidRuleChurn:
 
         try:
             # Rule A: drop ICMP
-            _wait_for_node_ready(controller_client, node1_id)
+            wait_for_node_ready(controller_client, node1_id)
             rule_a = controller_client.create_rule(
                 node_id=node1_id,
                 interface_name=iface1,
@@ -941,7 +879,7 @@ class TestRapidRuleChurn:
             assert rule_a.get("id"), "createRule(A) returned no id"
 
             # Rule B: drop TCP to an unused port — does not affect ICMP traffic
-            _wait_for_node_ready(controller_client, node1_id)
+            wait_for_node_ready(controller_client, node1_id)
             rule_b = controller_client.create_rule(
                 node_id=node1_id,
                 interface_name=iface1,
@@ -954,7 +892,7 @@ class TestRapidRuleChurn:
             time.sleep(_SETTLE_SECS)
 
             # Both rules present — ICMP must be dropped
-            with_both = _send_icmp(node2, node1_ip, iface2, count=5)
+            with_both = send_icmp(node2, node1_ip, iface2, count=5)
             assert with_both["lost"] > 0, (
                 f"Expected ICMP drops with both rules; got {with_both}"
             )
@@ -963,13 +901,13 @@ class TestRapidRuleChurn:
             )
 
             # Delete rule A (ICMP drop)
-            _wait_for_node_ready(controller_client, node1_id)
+            wait_for_node_ready(controller_client, node1_id)
             del_a = controller_client.delete_rule(rule_a["id"])
             assert del_a.success, f"deleteRule(A) failed: {del_a.message}"
             time.sleep(_SETTLE_SECS)
 
             # Rule B (TCP) remains — ICMP must now pass
-            after_delete_a = _send_icmp(node2, node1_ip, iface2, count=5)
+            after_delete_a = send_icmp(node2, node1_ip, iface2, count=5)
             assert after_delete_a["received"] > 0, (
                 f"Expected ICMP to pass after deleting ICMP rule; "
                 f"got {after_delete_a}. Rule B (TCP) must not affect ICMP."
@@ -988,12 +926,12 @@ class TestRapidRuleChurn:
                 f"[node1] {len(remaining)} rule(s) remaining after partial delete"
             )
         finally:
-            _delete_controller_rules(controller_client, node1_id, iface1, "ingress")
+            delete_controller_rules(controller_client, node1_id, iface1, "ingress")
             try:
                 pe.flush_rules(direction="ingress")
             except Exception as e:
                 logger.warning(f"[node1] flush_rules during cleanup: {e}")
-            _wait_for_node_ready(controller_client, node1_id, timeout=30)
+            wait_for_node_ready(controller_client, node1_id, timeout=30)
             controller_client.detach_program(
                 node_id=node1_id, interface_name=iface1, direction="ingress"
             )
@@ -1011,12 +949,12 @@ class TestRapidRuleChurn:
         node1 = nodes["node1"]
         node2 = nodes["node2"]
         node1_id = enrolled_nodes["node1"]
-        iface1 = _data_iface(node1)
-        iface2 = _data_iface(node2)
-        node1_ip = _get_data_ip(node1)
+        iface1 = data_iface(node1)
+        iface2 = data_iface(node2)
+        node1_ip = get_data_ip(node1)
         pe = GraphQLPolicyClient(node1)
 
-        _wait_for_node_ready(controller_client, node1_id)
+        wait_for_node_ready(controller_client, node1_id)
         res = controller_client.attach_program(
             node_id=node1_id,
             interface_name=iface1,
@@ -1030,7 +968,7 @@ class TestRapidRuleChurn:
         try:
             # Install _CHURN_CYCLES rules back-to-back with minimal delay
             for i in range(_CHURN_CYCLES):
-                _wait_for_node_ready(controller_client, node1_id)
+                wait_for_node_ready(controller_client, node1_id)
                 rule = controller_client.create_rule(
                     node_id=node1_id,
                     interface_name=iface1,
@@ -1046,7 +984,7 @@ class TestRapidRuleChurn:
             time.sleep(_SETTLE_SECS)
 
             # Add the ICMP drop rule last (only this one hits our ICMP probe)
-            _wait_for_node_ready(controller_client, node1_id)
+            wait_for_node_ready(controller_client, node1_id)
             icmp_rule = controller_client.create_rule(
                 node_id=node1_id,
                 interface_name=iface1,
@@ -1067,7 +1005,7 @@ class TestRapidRuleChurn:
             logger.info(f"[node1] {len(local_rules)} rules present after rapid install")
 
             # ICMP must be dropped
-            result = _send_icmp(node2, node1_ip, iface2, count=5)
+            result = send_icmp(node2, node1_ip, iface2, count=5)
             assert result["lost"] > 0, (
                 f"Expected ICMP drops after rapid rule install; got {result}"
             )
@@ -1076,12 +1014,12 @@ class TestRapidRuleChurn:
                 "after rapid rule install"
             )
         finally:
-            _delete_controller_rules(controller_client, node1_id, iface1, "ingress")
+            delete_controller_rules(controller_client, node1_id, iface1, "ingress")
             try:
                 pe.flush_rules(direction="ingress")
             except Exception as e:
                 logger.warning(f"[node1] flush_rules during cleanup: {e}")
-            _wait_for_node_ready(controller_client, node1_id, timeout=30)
+            wait_for_node_ready(controller_client, node1_id, timeout=30)
             controller_client.detach_program(
                 node_id=node1_id, interface_name=iface1, direction="ingress"
             )

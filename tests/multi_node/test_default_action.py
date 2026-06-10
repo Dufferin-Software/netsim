@@ -20,55 +20,12 @@ Run with:
 """
 
 import logging
-import time
 from typing import Dict
 
-import pytest
-
 from lib.policy_engine.controller.graphql.client import ControllerClient
+from tests.multi_node.helpers import data_iface, wait_for_node_ready
 
 logger = logging.getLogger(__name__)
-
-_READY_TIMEOUT = 30  # seconds to wait for a node to be clean and online
-_POLL_INTERVAL = 1
-
-
-def _wait_for_node_ready(
-    client: ControllerClient, node_id: str, timeout: int = _READY_TIMEOUT
-) -> None:
-    """Wait until the node has no pending generation AND is online.
-
-    Gated mutations from earlier tests can leave a pending generation in the
-    controller registry for up to 30 s (watchdog tick is 500 ms, but the
-    deadline itself is 30 s).  Calling this before any test that needs to
-    issue its own gated mutation prevents spurious BLOCKED_PENDING_CONFIRM
-    and 'not currently connected' failures.
-    """
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            pg = client.pending_generation(node_id)
-            online = set(client.online_nodes())
-            if pg is None and node_id in online:
-                return
-        except Exception as e:
-            logger.debug(f"_wait_for_node_ready poll error: {e}")
-        time.sleep(_POLL_INTERVAL)
-    # Surface the last known state in the failure message.
-    pg = client.pending_generation(node_id)
-    online = set(client.online_nodes())
-    pytest.fail(
-        f"Node {node_id} did not reach ready state within {timeout}s "
-        f"(pending={pg}, online={node_id in online})"
-    )
-
-
-def _data_iface(node) -> str:
-    """Return the name of the node's non-management interface."""
-    for iface in node.interfaces.values():
-        if iface.network.name != "mgmt":
-            return iface.if_name
-    pytest.fail(f"No data interface found on {node.name}")
 
 
 class TestPerInterfaceDefaultAction:
@@ -86,9 +43,9 @@ class TestPerInterfaceDefaultAction:
         """
         node1 = nodes["node1"]
         node1_id = enrolled_nodes["node1"]
-        iface = _data_iface(node1)
+        iface = data_iface(node1)
 
-        _wait_for_node_ready(controller_client, node1_id)
+        wait_for_node_ready(controller_client, node1_id)
 
         result = controller_client.set_interface_default_action(
             node_id=node1_id,
@@ -122,7 +79,7 @@ class TestPerInterfaceDefaultAction:
         """
         node1 = nodes["node1"]
         node1_id = enrolled_nodes["node1"]
-        iface = _data_iface(node1)
+        iface = data_iface(node1)
 
         # Attach ingress so the default action is active on the BPF program
         result = controller_client.attach_program(
@@ -146,7 +103,7 @@ class TestPerInterfaceDefaultAction:
         # may briefly drop and re-establish its gRPC session while applying
         # a full-restore push.  Wait until it is back online before handing
         # off to the next test.
-        _wait_for_node_ready(controller_client, node1_id)
+        wait_for_node_ready(controller_client, node1_id)
 
     def test_reset_ingress_default_to_pass(
         self,
@@ -160,9 +117,9 @@ class TestPerInterfaceDefaultAction:
         """
         node1 = nodes["node1"]
         node1_id = enrolled_nodes["node1"]
-        iface = _data_iface(node1)
+        iface = data_iface(node1)
 
-        _wait_for_node_ready(controller_client, node1_id)
+        wait_for_node_ready(controller_client, node1_id)
 
         result = controller_client.set_interface_default_action(
             node_id=node1_id,
@@ -197,9 +154,9 @@ class TestPerInterfaceDefaultAction:
         """Egress default action is stored and queryable independently of ingress."""
         node1 = nodes["node1"]
         node1_id = enrolled_nodes["node1"]
-        iface = _data_iface(node1)
+        iface = data_iface(node1)
 
-        _wait_for_node_ready(controller_client, node1_id)
+        wait_for_node_ready(controller_client, node1_id)
 
         result = controller_client.set_interface_default_action(
             node_id=node1_id,

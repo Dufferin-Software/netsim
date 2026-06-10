@@ -28,29 +28,16 @@ QUIC userspace consumer writes the verdict cache directly.
 """
 
 import logging
-import time
 
 import pytest
 
 from lib.policy_engine.engine.cli.client import AddRuleOptions
 from lib.policy_engine.engine.graphql.client import GraphQLPolicyClient
+from tests.sni_matching.helpers import policy_drops, wait_verdicts
 
 logger = logging.getLogger(__name__)
 
 _DPORT = 443
-_POLL_BUDGET_S = 5.0
-_POLL_INTERVAL_S = 0.25
-
-
-def _wait_verdicts(policy_client, baseline: int, want: int) -> int:
-    deadline = time.monotonic() + _POLL_BUDGET_S
-    last = baseline
-    while time.monotonic() < deadline:
-        last = policy_client.get_flow_verdicts(direction="egress").active_verdicts
-        if last >= baseline + want:
-            return last
-        time.sleep(_POLL_INTERVAL_S)
-    return last
 
 
 def _udp_actions(graphql_client: GraphQLPolicyClient):
@@ -67,12 +54,6 @@ def _udp_actions(graphql_client: GraphQLPolicyClient):
         for v in data.get("flowVerdictList", [])
         if not v.get("expired") and v.get("protocol", "").lower() == "udp"
     ]
-
-
-def _policy_drops(policy_client, interface: str) -> int:
-    return policy_client.get_stats(
-        interface, direction="egress"
-    ).global_stats.policy_drops
 
 
 @pytest.mark.usefixtures("tcp_sni_listener")
@@ -115,15 +96,15 @@ class TestTransportFallback:
         )
         assert r.success, f"add_rule failed: {r.message}"
 
-        drops_before = _policy_drops(policy_client, attached_egress)
+        drops_before = policy_drops(policy_client, attached_egress)
         verdicts_before = policy_client.get_flow_verdicts(
             direction="egress"
         ).active_verdicts
 
         self._drive_both(tls_sender, quic_sender, client_ip_v4, sni)
-        _wait_verdicts(policy_client, verdicts_before, want=1)
+        wait_verdicts(policy_client, verdicts_before, want=1)
 
-        drops_delta = _policy_drops(policy_client, attached_egress) - drops_before
+        drops_delta = policy_drops(policy_client, attached_egress) - drops_before
         udp_actions = _udp_actions(graphql_policy_client)
         logger.info(f"tcp-only rule: drops_delta={drops_delta} udp={udp_actions}")
 
@@ -164,15 +145,15 @@ class TestTransportFallback:
         )
         assert r.success, f"add_rule failed: {r.message}"
 
-        drops_before = _policy_drops(policy_client, attached_egress)
+        drops_before = policy_drops(policy_client, attached_egress)
         verdicts_before = policy_client.get_flow_verdicts(
             direction="egress"
         ).active_verdicts
 
         self._drive_both(tls_sender, quic_sender, client_ip_v4, sni)
-        _wait_verdicts(policy_client, verdicts_before, want=1)
+        wait_verdicts(policy_client, verdicts_before, want=1)
 
-        drops_delta = _policy_drops(policy_client, attached_egress) - drops_before
+        drops_delta = policy_drops(policy_client, attached_egress) - drops_before
         udp_actions = _udp_actions(graphql_policy_client)
         logger.info(f"udp-only rule: drops_delta={drops_delta} udp={udp_actions}")
 
@@ -216,15 +197,15 @@ class TestTransportFallback:
             )
             assert r.success, f"add_rule {proto} failed: {r.message}"
 
-        drops_before = _policy_drops(policy_client, attached_egress)
+        drops_before = policy_drops(policy_client, attached_egress)
         verdicts_before = policy_client.get_flow_verdicts(
             direction="egress"
         ).active_verdicts
 
         self._drive_both(tls_sender, quic_sender, client_ip_v4, sni)
-        _wait_verdicts(policy_client, verdicts_before, want=1)
+        wait_verdicts(policy_client, verdicts_before, want=1)
 
-        drops_delta = _policy_drops(policy_client, attached_egress) - drops_before
+        drops_delta = policy_drops(policy_client, attached_egress) - drops_before
         udp_actions = _udp_actions(graphql_policy_client)
         logger.info(f"both rules: drops_delta={drops_delta} udp={udp_actions}")
 

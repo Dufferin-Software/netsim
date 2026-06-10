@@ -23,6 +23,7 @@ import time
 import pytest
 
 from lib.policy_engine.engine.cli.client import AddRuleOptions
+from tests.sni_matching.helpers import rule_packets
 
 logger = logging.getLogger(__name__)
 
@@ -33,13 +34,6 @@ _DPORT = 443
 # ``server_name`` extension past it, but well under ``SNI_PULL_MAX``
 # (4 KiB) so the inspector should still resolve.
 _LARGE_CH_SIZE = 2400
-
-
-def _rule_packets(policy_client, rule_id: int) -> int:
-    stats = policy_client.get_rule_stats(rule_id=rule_id, direction="egress")
-    if not stats.rules or not stats.rules[0].stats:
-        return 0
-    return stats.rules[0].stats.packets
 
 
 @pytest.mark.usefixtures("tcp_sni_listener")
@@ -85,7 +79,7 @@ class TestLargeClientHello:
         )
 
         time.sleep(0.5)
-        count = _rule_packets(policy_client, rule_id)
+        count = rule_packets(policy_client, rule_id)
         logger.info(f"large-CH rule_stats packets: {count}")
         assert count >= 1, (
             f"Padded ClientHello ({_LARGE_CH_SIZE} B) did not match — "
