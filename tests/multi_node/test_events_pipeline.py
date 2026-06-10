@@ -180,7 +180,7 @@ def _flush_ingress_rules(node) -> None:
     client = GraphQLPolicyClient(node)
     for r in client.list_rules(direction="ingress"):
         try:
-            client.delete_rule(r.rule_id, direction="ingress")
+            client.delete_rule(r.interface, rule_id=r.rule_id, direction="ingress")
         except Exception as e:
             logger.debug(f"[{node.name}] delete_rule({r.rule_id}) failed: {e}")
 

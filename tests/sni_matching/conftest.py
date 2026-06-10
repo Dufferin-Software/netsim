@@ -23,7 +23,7 @@ import base64
 import logging
 import time
 from pathlib import Path
-from typing import Callable, Union
+from typing import Callable, Iterator, Union
 
 import netaddr
 import pytest
@@ -357,7 +357,7 @@ def tcp_sni_listener(nodes):
 
 
 @pytest.fixture(scope="package")
-def tls_sender(nodes, scapy_installed) -> Callable:
+def tls_sender(nodes, scapy_installed) -> Iterator[Callable]:
     """
     Return a callable that runs the scapy TLS ClientHello sender on the
     server (egress origin).  Returns the script's stdout for diagnostics.
@@ -386,7 +386,7 @@ def tls_sender(nodes, scapy_installed) -> Callable:
 
 
 @pytest.fixture(scope="package")
-def quic_sender(nodes, aioquic_installed) -> Callable:
+def quic_sender(nodes, aioquic_installed) -> Iterator[Callable]:
     """
     Return a callable that runs the QUIC Initial sender on the server
     (egress origin).  Supports v1 and v2 via the `version` kwarg.
@@ -416,7 +416,7 @@ def quic_sender(nodes, aioquic_installed) -> Callable:
 
 
 @pytest.fixture(scope="package")
-def quic_sender_ingress(nodes, install_packages) -> Callable:
+def quic_sender_ingress(nodes, install_packages) -> Iterator[Callable]:
     """
     Variant of `quic_sender` that runs from the *client* node (server-side
     XDP ingress inspector under test).  Kept separate so the ingress fixture

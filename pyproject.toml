@@ -54,6 +54,13 @@ exclude = ['^vulture_whitelist\.py$']
 module = "libvirt"
 ignore_missing_imports = true
 
+# scapy and aioquic are only installed on the simulated nodes that run the
+# SNI sender scripts (tests/sni_matching/*_sni_send.py), not in the dev venv,
+# and ship no type stubs.
+[[tool.mypy.overrides]]
+module = ["scapy.*", "aioquic.*"]
+ignore_missing_imports = true
+
 [tool.vulture]
 # Dead-code detection. Scans the netsim/ package only; vulture_whitelist.py
 # exempts names that are used from tests/ or via (de)serialization. See the
