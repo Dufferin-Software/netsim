@@ -108,6 +108,9 @@ class ControlledNode:
     # the agent-side renewal task fired (the cert_serial flip is the canonical
     # signal, but last_renewed_at is more readable in logs/asserts).
     last_renewed_at: Optional[str] = None
+    # Operator-configured metrics scrape/forward interval in seconds.
+    # None means no override (the agent uses its local default).
+    metrics_interval_secs: Optional[int] = None
 
 
 @dataclass
@@ -274,7 +277,7 @@ class ControllerClient:
         query ListNodes($status: String) {
             nodes(status: $status) {
                 id status label hostname dmiUuid tpmBacked agentVersion
-                certSerial certExpiry lastRenewedAt
+                certSerial certExpiry lastRenewedAt metricsIntervalSecs
             }
         }
         """
@@ -291,6 +294,7 @@ class ControllerClient:
                 cert_serial=n.get("certSerial"),
                 cert_expiry=n.get("certExpiry"),
                 last_renewed_at=n.get("lastRenewedAt"),
+                metrics_interval_secs=n.get("metricsIntervalSecs"),
             )
             for n in data.get("nodes", [])
         ]
@@ -885,7 +889,7 @@ class ControllerClient:
         query = """
         query NodeInterfaceStats($nodeId: ID!, $iface: String!, $dir: String!) {
             nodeInterfaceStats(nodeId: $nodeId, interfaceName: $iface, direction: $dir) {
-                interface direction policyDrops rxPackets rxBytes
+                interface direction policyDrops packets bytes
             }
         }
         """
@@ -899,8 +903,8 @@ class ControllerClient:
             interface=raw["interface"],
             direction=raw["direction"],
             policy_drops=raw["policyDrops"],
-            rx_packets=raw["rxPackets"],
-            rx_bytes=raw["rxBytes"],
+            rx_packets=raw["packets"],
+            rx_bytes=raw["bytes"],
         )
 
     def refresh_node_metrics(self, node_id: str) -> OperationResult:
@@ -918,6 +922,117 @@ class ControllerClient:
         data = self._execute(query, {"nodeId": node_id})
         r = data["refreshNodeMetrics"]
         return OperationResult(success=r["success"], message=r.get("message"))
+
+    def clear_interface_stats(
+        self,
+        node_id: str,
+        interface_name: str,
+        direction: Optional[str] = None,
+    ) -> OperationResult:
+        """Clear all stats (global + ethertype) for one interface on a node.
+
+        Fire-and-forget: the controller pushes a ClearStats message to the agent
+        and returns ok once delivered. ``direction`` is "ingress"/"egress"; pass
+        None to clear both directions.
+        """
+        query = """
+        mutation ClearInterfaceStats($nodeId: ID!, $iface: String!, $dir: String) {
+            clearInterfaceStats(nodeId: $nodeId, interfaceName: $iface, direction: $dir) {
+                success message
+            }
+        }
+        """
+        data = self._execute(
+            query, {"nodeId": node_id, "iface": interface_name, "dir": direction}
+        )
+        r = data["clearInterfaceStats"]
+        return OperationResult(success=r["success"], message=r.get("message"))
+
+    def clear_all_interface_stats(self, node_id: str) -> OperationResult:
+        """Clear interface stats for every attached interface on a node."""
+        query = """
+        mutation ClearAllInterfaceStats($nodeId: ID!) {
+            clearAllInterfaceStats(nodeId: $nodeId) { success message }
+        }
+        """
+        data = self._execute(query, {"nodeId": node_id})
+        r = data["clearAllInterfaceStats"]
+        return OperationResult(success=r["success"], message=r.get("message"))
+
+    def clear_rule_stats(
+        self,
+        node_id: str,
+        rule_id: str,
+        direction: Optional[str] = None,
+    ) -> OperationResult:
+        """Clear stats for a single policy rule on a node.
+
+        ``rule_id`` is the controller-assigned string ID (same value returned by
+        create_rule). ``direction`` is "ingress"/"egress"; pass None for both.
+        """
+        query = """
+        mutation ClearRuleStats($nodeId: ID!, $ruleId: ID!, $dir: String) {
+            clearRuleStats(nodeId: $nodeId, ruleId: $ruleId, direction: $dir) {
+                success message
+            }
+        }
+        """
+        data = self._execute(
+            query, {"nodeId": node_id, "ruleId": rule_id, "dir": direction}
+        )
+        r = data["clearRuleStats"]
+        return OperationResult(success=r["success"], message=r.get("message"))
+
+    def clear_all_policy_stats(self, node_id: str) -> OperationResult:
+        """Clear stats for every policy rule on a node (both directions)."""
+        query = """
+        mutation ClearAllPolicyStats($nodeId: ID!) {
+            clearAllPolicyStats(nodeId: $nodeId) { success message }
+        }
+        """
+        data = self._execute(query, {"nodeId": node_id})
+        r = data["clearAllPolicyStats"]
+        return OperationResult(success=r["success"], message=r.get("message"))
+
+    def clear_all_stats(self, node_id: str) -> OperationResult:
+        """Clear ALL stats on a node — every interface and every rule counter."""
+        query = """
+        mutation ClearAllStats($nodeId: ID!) {
+            clearAllStats(nodeId: $nodeId) { success message }
+        }
+        """
+        data = self._execute(query, {"nodeId": node_id})
+        r = data["clearAllStats"]
+        return OperationResult(success=r["success"], message=r.get("message"))
+
+    def set_node_metrics_interval(
+        self,
+        node_id: str,
+        seconds: Optional[int],
+    ) -> OperationResult:
+        """Set the node's metrics scrape/forward interval (seconds).
+
+        Pass None to clear the override so the agent reverts to its local
+        default. Persisted on the controller and re-sent to the agent on each
+        (re)connect; applied live to the running metrics forwarder.
+        """
+        query = """
+        mutation SetNodeMetricsInterval($nodeId: ID!, $seconds: Int) {
+            setNodeMetricsInterval(nodeId: $nodeId, seconds: $seconds) {
+                success message
+            }
+        }
+        """
+        data = self._execute(query, {"nodeId": node_id, "seconds": seconds})
+        r = data["setNodeMetricsInterval"]
+        return OperationResult(success=r["success"], message=r.get("message"))
+
+    def node_metrics_interval(self, node_id: str) -> Optional[int]:
+        """Return the node's configured metrics interval (seconds), or None."""
+        for n in self.list_nodes():
+            if n.id == node_id:
+                return n.metrics_interval_secs
+        return None
 
     def node_last_seen(self, node_id: str) -> Optional[str]:
         """Return the lastSeen timestamp (ISO-8601 string) for the node, or None."""

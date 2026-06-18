@@ -56,6 +56,11 @@ _DOCKER_BRIDGE = "scale_net"
 _DOCKER_DATA_BRIDGE = "scale_data"
 _SCALE_BASE_DIR = "/tmp/scale"
 
+# Fleet label stamped onto every node by the single ZTP enrollment token. The
+# controller applies this as each node's `label` on auto-approval, so it's the
+# value tests see in ControlledNode.label (not the synthetic scale-node-N name).
+SCALE_FLEET_LABEL = "netsim-scale"
+
 
 # ── Data types ────────────────────────────────────────────────────────────────
 
@@ -75,7 +80,7 @@ class ContainerPair:
 class EnrollmentResult:
     """Outcome of the full enrollment sequence."""
 
-    node_map: Dict[str, str]  # label → controller node ID
+    node_map: Dict[str, str]  # synthetic scale-node-N name → controller node ID
     seconds_to_active: float  # wall time: first container start → last Active
     seconds_to_online: float  # wall time: first container start → last online
 
@@ -534,7 +539,7 @@ def scale_containers(
         controller_url="https://policy-controller:7777",
         ttl_seconds=3600,
         max_uses=scale_node_count,
-        fleet_label="netsim-scale",
+        fleet_label=SCALE_FLEET_LABEL,
     )
     logger.info(
         f"Minted ZTP bundle (token_id={issued.token_id}, max_uses={scale_node_count})"

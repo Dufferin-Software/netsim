@@ -23,7 +23,11 @@ from typing import Dict, List
 import pytest
 
 from lib.policy_engine.controller.graphql.client import ControllerClient
-from tests.scale_test.conftest import ContainerPair, EnrollmentResult
+from tests.scale_test.conftest import (
+    SCALE_FLEET_LABEL,
+    ContainerPair,
+    EnrollmentResult,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -115,11 +119,17 @@ class TestEnrollmentScale:
         enrolled_scale_nodes: EnrollmentResult,
         controller_client: ControllerClient,
     ) -> None:
+        # Every node ZTP-enrolls through a single token carrying the fleet
+        # label, which the controller stamps onto each node's `label` on
+        # auto-approval. The scale-node-N keys in node_map are synthetic names
+        # derived from hostnames for test messaging — they're never sent to the
+        # controller, so the controller label is the shared fleet label.
         active_nodes = controller_client.list_nodes(status="active")
         label_map = {n.id: n.label for n in active_nodes}
-        for label, nid in enrolled_scale_nodes.node_map.items():
-            assert label_map.get(nid) == label, (
-                f"Controller label for {nid} is '{label_map.get(nid)}', expected '{label}'"
+        for synthetic_name, nid in enrolled_scale_nodes.node_map.items():
+            assert label_map.get(nid) == SCALE_FLEET_LABEL, (
+                f"Controller label for {synthetic_name} ({nid}) is "
+                f"'{label_map.get(nid)}', expected fleet label '{SCALE_FLEET_LABEL}'"
             )
 
 

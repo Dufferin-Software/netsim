@@ -123,8 +123,8 @@ def tenant2(nodes, controller_service, controller_client, enrolled_nodes):
     _sqlite_exec(
         controller,
         f"""
-        INSERT OR IGNORE INTO nodes (id, status, tenant_id)
-          VALUES ('{_TENANT2_NODE_ID}', 'active', '{_TENANT2_SLUG}');
+        INSERT OR IGNORE INTO nodes (id, status, tenant_id, public_key_der)
+          VALUES ('{_TENANT2_NODE_ID}', 'active', '{_TENANT2_SLUG}', '');
 
         INSERT OR IGNORE INTO node_interfaces
             (node_id, interface_name, last_reported)

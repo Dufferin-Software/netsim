@@ -950,18 +950,38 @@ class PolicyClient:
         return []
 
     def flush_rules(
-        self, direction: str, interface: str
+        self, direction: str = "ingress", interface: Optional[str] = None
     ) -> OperationResult:
         """
         Flush policy rules scoped to a single (interface, direction).
 
         Args:
             direction: Traffic direction ("ingress" or "egress")
-            interface: Interface name to flush
+            interface: Interface name to flush. If omitted, the helper
+                enumerates every interface attached in this direction and
+                flushes each — convenient for tests that just want a clean
+                slate on a single-interface node.
 
         Returns:
             OperationResult indicating success/failure
         """
+        if interface is None:
+            ifaces = [
+                a.interface
+                for a in self.list_interfaces()
+                if a.direction.lower() == direction.lower()
+            ]
+            total = 0
+            for iface in ifaces:
+                r = self.flush_rules(direction=direction, interface=iface)
+                if not r.success:
+                    return r
+                total += 1
+            return OperationResult(
+                success=True,
+                message=f"Flushed {direction} rules on {total} interface(s)",
+            )
+
         args = [
             "rule",
             "flush",

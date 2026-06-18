@@ -45,8 +45,14 @@ _pkg_excluded() {
 # list of real paths. Errors if any glob matches nothing.
 expand_pkgs() {
   local globs="$1" out="" pat matches kept m
+  # Split the glob list into patterns with pathname expansion OFF -- otherwise
+  # the patterns would expand against the *current* directory here, and with
+  # nullglob (set below) a non-match deletes them entirely before we ever
+  # reach the "$PKG_DIR"/$pat expansion, leaving us with an empty result.
+  local -a pats
+  set -f; pats=( $globs ); set +f
   shopt -s nullglob
-  for pat in $globs; do
+  for pat in "${pats[@]}"; do
     matches=( "$PKG_DIR"/$pat )
     # Drop dbgsym/dev/doc variants so a loose glob can't drag them in.
     kept=()
@@ -77,6 +83,7 @@ fi
 
 declare -A RESULT
 declare -A DURATION
+declare -A COUNTS
 overall=0
 current_topo=""
 interrupted=0
@@ -116,7 +123,14 @@ for suite in $SUITES; do
   start=$SECONDS
   status=PASS
 
-  if ! pkgs=$(expand_pkgs "$pkg_globs"); then
+  # expand_pkgs errors (rc 1) on a glob that matches nothing. The extra
+  # empty-string guard is belt-and-suspenders: an empty --install-packages
+  # silently installs nothing and skips every package-dependent test, which
+  # would otherwise be misreported as a pass.
+  if pkgs=$(expand_pkgs "$pkg_globs") && [[ -z "$pkgs" ]]; then
+    echo "ERROR: expand_pkgs returned no packages for '$pkg_globs'" >&2
+  fi
+  if [[ -z "$pkgs" ]]; then
     RESULT[$suite]=PKG_MISSING
     DURATION[$suite]=$((SECONDS - start))
     overall=1
@@ -131,6 +145,25 @@ for suite in $SUITES; do
         --install-packages "$pkgs" 2>&1 | tee -a "$log"; then
       status=FAIL
     fi
+    # Pull the pass/fail/skip counts out of pytest's final summary line
+    # (e.g. "==== 1 failed, 2 passed, 3 skipped in 4.56s ===="). A suite can
+    # exit 0 while skipping every test, so the counts matter beyond PASS/FAIL.
+    summary_line=$(grep -E '^=+ .*(passed|failed|skipped|error|no tests ran)' \
+      "$log" | tail -n1)
+    if [[ -n "$summary_line" ]]; then
+      counts=""
+      for kind in failed passed skipped error errors xfailed deselected; do
+        n=$(grep -oE "[0-9]+ $kind\b" <<<"$summary_line" | grep -oE '^[0-9]+')
+        [[ -n "$n" ]] && counts+="${counts:+, }$n $kind"
+      done
+      COUNTS[$suite]="$counts"
+      # Surface a suite that passed-but-skipped-everything: if there were
+      # skips and nothing actually passed, it didn't really test anything.
+      if [[ $status == PASS && "$summary_line" != *" passed"* \
+            && "$summary_line" == *" skipped"* ]]; then
+        status=ALL_SKIPPED
+      fi
+    fi
   fi
 
   # Always attempt teardown so the next suite starts clean.
@@ -140,18 +173,39 @@ for suite in $SUITES; do
   RESULT[$suite]=$status
   current_topo=""
   current_log=""
-  [[ $status == PASS ]] || overall=1
+  # ALL_SKIPPED is reported but, like an explicit SKIP, doesn't fail the run.
+  case "$status" in PASS|ALL_SKIPPED) ;; *) overall=1 ;; esac
 done
 
-echo
-echo "================================================================"
-echo "=== Summary"
-echo "================================================================"
-printf "%-22s %-12s %8s\n" "SUITE" "RESULT" "TIME(s)"
-for suite in $SUITES; do
-  printf "%-22s %-12s %8s\n" \
-    "$suite" "${RESULT[$suite]:-?}" "${DURATION[$suite]:-0}"
-done
-echo
-echo "Logs: $LOG_DIR/<suite>.log"
+summary_log="$LOG_DIR/summary.log"
+{
+  echo
+  echo "================================================================"
+  echo "=== Summary"
+  echo "================================================================"
+  printf "%-22s %-12s %8s  %s\n" "SUITE" "RESULT" "TIME(s)" "TESTS"
+  for suite in $SUITES; do
+    printf "%-22s %-12s %8s  %s\n" \
+      "$suite" "${RESULT[$suite]:-?}" "${DURATION[$suite]:-0}" \
+      "${COUNTS[$suite]:-}"
+  done
+
+  # Call out anything that didn't cleanly pass so failures/skips are easy to
+  # spot (and grep) in the persisted log. ALL_SKIPPED and SKIP both count as
+  # skips; everything else non-PASS is a failure.
+  failed="" skipped=""
+  for suite in $SUITES; do
+    case "${RESULT[$suite]:-?}" in
+      PASS)              ;;
+      SKIP|ALL_SKIPPED)  skipped+="$suite (${RESULT[$suite]}) " ;;
+      *)                 failed+="$suite (${RESULT[$suite]:-?}) " ;;
+    esac
+  done
+  echo
+  [[ -n "$failed" ]]  && echo "FAILED:  $failed"  || echo "FAILED:  none"
+  [[ -n "$skipped" ]] && echo "SKIPPED: $skipped" || echo "SKIPPED: none"
+  echo
+  echo "Logs: $LOG_DIR/<suite>.log"
+} | tee "$summary_log"
+
 exit $overall
