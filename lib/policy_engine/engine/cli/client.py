@@ -397,6 +397,8 @@ class GlobalStats:
     fib_forwarded_packets: int = 0
     fib_forwarded_bytes: int = 0
     fib_fallback_packets: int = 0
+    urpf_drop_packets: int = 0
+    urpf_drop_bytes: int = 0
 
     @classmethod
     def from_json(cls, data: dict) -> "GlobalStats":
@@ -422,6 +424,8 @@ class GlobalStats:
             fib_forwarded_packets=data.get("fibForwardedPackets", 0),
             fib_forwarded_bytes=data.get("fibForwardedBytes", 0),
             fib_fallback_packets=data.get("fibFallbackPackets", 0),
+            urpf_drop_packets=data.get("urpfDropPackets", 0),
+            urpf_drop_bytes=data.get("urpfDropBytes", 0),
         )
 
 

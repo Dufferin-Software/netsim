@@ -1,10 +1,11 @@
 # Copyright (c) Dufferin Software
 
 """
-Fixtures for XDP FIB forwarding integration tests.
+Fixtures for uRPF (unicast Reverse Path Forwarding) integration tests.
 
 Topology: client ↔ [transit: policy-engine] ↔ server
-Policy-engine runs on transit (the router), attached to both interfaces.
+Policy-engine runs on transit (the router), attached XDP-ingress to both
+interfaces. uRPF is configured per ingress interface on transit.
 """
 
 import logging
@@ -93,13 +94,20 @@ def policy_client(nodes, policy_engine_service) -> GraphQLPolicyClient:
     return GraphQLPolicyClient(nodes["transit"])
 
 
+@pytest.fixture(scope="package")
+def nmap_installed(nodes, install_packages):
+    """Ensure nmap is installed on the client node for nping (spoofed sends)."""
+    install_packages("client", ["nmap"])
+    yield
+
+
 @pytest.fixture(autouse=True, scope="class")
 def setup_routing(configure_node_interfaces, node_interfaces, topology, nodes):
     """
     Configure static routes on client/server.
 
-    This fixture mirrors the setup in three_node_iperf so that packets actually
-    reach the transit node and are processed by the XDP program.
+    Mirrors the xdp_forwarding / three_node_iperf setup so packets actually reach
+    the transit node and are processed by the XDP program.
     """
     # Client routes via transit net1 interface
     transit_net1_iface = node_interfaces["transit"]["net1"]
@@ -178,25 +186,40 @@ def attached_interfaces(policy_client, node_interfaces):
             logger.warning(f"Failed to detach ingress from {iface}: {e}")
 
 
-@pytest.fixture(scope="function")
-def fib_enabled(policy_client, attached_interfaces):
-    """Enable FIB forwarding on both transit ingress interfaces, disable after the test."""
+def _set_urpf_both(policy_client, attached_interfaces, mode: str):
+    """Set the given uRPF mode on both transit ingress interfaces."""
     for net, iface in attached_interfaces.items():
-        result = policy_client.set_fib_forwarding(iface, enabled=True)
+        result = policy_client.set_urpf(iface, mode)
         if not result.success:
             pytest.fail(
-                f"Failed to enable FIB forwarding on {iface} ({net}): {result.message}"
+                f"Failed to set uRPF {mode} on {iface} ({net}): {result.message}"
             )
-        logger.info(f"FIB forwarding enabled on transit/{net} ({iface})")
+        logger.info(f"uRPF {mode} enabled on transit/{net} ({iface})")
 
-    yield
 
+def _clear_urpf_both(policy_client, attached_interfaces):
     for net, iface in attached_interfaces.items():
         try:
-            policy_client.set_fib_forwarding(iface, enabled=False)
-            logger.info(f"FIB forwarding disabled on transit/{net} ({iface})")
+            policy_client.set_urpf(iface, "off")
+            logger.info(f"uRPF disabled on transit/{net} ({iface})")
         except Exception as e:
-            logger.warning(f"Failed to disable FIB forwarding on {iface}: {e}")
+            logger.warning(f"Failed to disable uRPF on {iface}: {e}")
+
+
+@pytest.fixture(scope="function")
+def urpf_strict(policy_client, attached_interfaces):
+    """Enable strict uRPF on both transit ingress interfaces, disable after the test."""
+    _set_urpf_both(policy_client, attached_interfaces, "strict")
+    yield
+    _clear_urpf_both(policy_client, attached_interfaces)
+
+
+@pytest.fixture(scope="function")
+def urpf_loose(policy_client, attached_interfaces):
+    """Enable loose uRPF on both transit ingress interfaces, disable after the test."""
+    _set_urpf_both(policy_client, attached_interfaces, "loose")
+    yield
+    _clear_urpf_both(policy_client, attached_interfaces)
 
 
 @pytest.fixture(scope="function")

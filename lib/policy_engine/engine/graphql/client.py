@@ -939,6 +939,8 @@ class GraphQLPolicyClient:
                 fibForwardedPackets
                 fibForwardedBytes
                 fibFallbackPackets
+                urpfDropPackets
+                urpfDropBytes
             }
             ethertypeStats(interface: $interface, direction: $direction) {
                 ethertype
@@ -1002,6 +1004,8 @@ class GraphQLPolicyClient:
             fib_forwarded_packets=stats_data.get("fibForwardedPackets", 0),
             fib_forwarded_bytes=stats_data.get("fibForwardedBytes", 0),
             fib_fallback_packets=stats_data.get("fibFallbackPackets", 0),
+            urpf_drop_packets=stats_data.get("urpfDropPackets", 0),
+            urpf_drop_bytes=stats_data.get("urpfDropBytes", 0),
         )
 
         ethertype_stats: List[EthertypeStats] = [
@@ -1672,6 +1676,63 @@ class GraphQLPolicyClient:
         return [
             (entry.get("interface", ""), entry.get("enabled", False))
             for entry in data.get("fibForwarding", [])
+        ]
+
+    # ========================================================================
+    # uRPF (unicast Reverse Path Forwarding)
+    # ========================================================================
+
+    def set_urpf(self, interface: str, mode: str) -> OperationResult:
+        """
+        Set the uRPF mode on an ingress interface.
+
+        Args:
+            interface: Name of the ingress interface
+            mode: One of "OFF", "LOOSE", or "STRICT" (case-insensitive)
+        """
+        mutation = """
+        mutation SetUrpf($input: SetUrpfInput!) {
+            setUrpf(input: $input) {
+                success
+                message
+            }
+        }
+        """
+        variables = {"input": {"interface": interface, "mode": mode.upper()}}
+        data = self._execute_graphql(mutation, variables)
+
+        if "__error__" in data:
+            return OperationResult(success=False, message=data["__error__"])
+
+        result = data.get("setUrpf", {})
+        return OperationResult(
+            success=result.get("success", False),
+            message=result.get("message", ""),
+        )
+
+    def get_urpf(self, interface: str) -> str:
+        """Query the uRPF mode for a specific interface. Returns "OFF" if unset."""
+        for iface, mode in self.list_urpf():
+            if iface == interface:
+                return mode
+        return "OFF"
+
+    def list_urpf(self) -> list[tuple[str, str]]:
+        """Return [(interface, mode), ...] for every interface with uRPF enabled."""
+        query = """
+        query {
+            urpf {
+                interface
+                mode
+            }
+        }
+        """
+        data = self._execute_graphql(query)
+        if "__error__" in data:
+            return []
+        return [
+            (entry.get("interface", ""), entry.get("mode", "OFF"))
+            for entry in data.get("urpf", [])
         ]
 
     # ========================================================================

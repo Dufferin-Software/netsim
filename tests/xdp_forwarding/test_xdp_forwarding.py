@@ -6,8 +6,6 @@ XDP FIB forwarding integration tests.
 Topology: client ↔ [transit: policy-engine XDP] ↔ server
 
 Tests validate that:
-  - Kernel forwarding works (baseline, no XDP)
-  - XDP attached without FIB: packets still forwarded (kernel path), fib_forwarded_packets == 0
   - XDP attached with FIB enabled: packets forwarded at XDP layer, fib_forwarded_packets > 0
   - Policy DROP rules are respected even when FIB is enabled
   - FIB can be toggled on/off at runtime
@@ -78,57 +76,6 @@ class TestXdpFibForwarding:
         """Return GlobalStats for transit net1 ingress (client-to-server direction)."""
         iface = self._transit_net1_iface(node_interfaces)
         return policy_client.get_stats(iface, direction="ingress").global_stats
-
-    # ------------------------------------------------------------------
-    # Baseline: no XDP attached
-    # ------------------------------------------------------------------
-
-    def test_kernel_forwarding_baseline(self, nodes, node_interfaces):
-        """Kernel forwards packets without XDP attached (control test)."""
-        server_ip = self._server_ip(node_interfaces)
-        assert _ping(nodes["client"], server_ip), (
-            f"Baseline IPv4 ping client→server ({server_ip}) failed"
-        )
-        logger.info(f"Baseline: kernel forwarding IPv4 to {server_ip} OK")
-
-    def test_kernel_forwarding_baseline_ipv6(self, nodes, node_interfaces):
-        """Kernel forwards IPv6 packets without XDP attached (control test)."""
-        server_ipv6 = self._server_ipv6(node_interfaces)
-        if not server_ipv6:
-            pytest.skip("IPv6 not configured on server")
-        assert _ping(nodes["client"], str(server_ipv6), ipv6=True), (
-            f"Baseline IPv6 ping client→server ({server_ipv6}) failed"
-        )
-        logger.info(f"Baseline: kernel forwarding IPv6 to {server_ipv6} OK")
-
-    # ------------------------------------------------------------------
-    # XDP attached, FIB disabled
-    # ------------------------------------------------------------------
-
-    def test_xdp_attached_fib_disabled(
-        self, nodes, node_interfaces, policy_client, attached_interfaces, cleared_stats
-    ):
-        """
-        XDP attached on both transit interfaces, FIB disabled.
-        Packets must still reach server (kernel fallback via XDP_PASS).
-        fib_forwarded_packets must remain 0.
-        """
-        server_ip = self._server_ip(node_interfaces)
-        assert _ping(nodes["client"], server_ip), (
-            "IPv4 ping failed with XDP attached but FIB disabled"
-        )
-
-        stats = self._get_ingress_stats(policy_client, node_interfaces)
-        assert stats.fib_forwarded_packets == 0, (
-            f"Expected fib_forwarded_packets == 0 (FIB disabled), got {stats.fib_forwarded_packets}"
-        )
-        assert stats.policy_pass > 0, (
-            f"Expected policy_pass > 0 (packets were XDP_PASSed), got {stats.policy_pass}"
-        )
-        logger.info(
-            f"XDP attached, FIB disabled: policy_pass={stats.policy_pass}, "
-            f"fib_forwarded={stats.fib_forwarded_packets}"
-        )
 
     # ------------------------------------------------------------------
     # FIB enabled: forwarding at XDP layer

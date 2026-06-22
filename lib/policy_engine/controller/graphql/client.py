@@ -149,6 +149,7 @@ class NodeInterface:
     xdp_attached: bool = False
     tc_attached: bool = False
     fib_forwarding: bool = False
+    urpf_mode: str = "off"
     ingress_default_action: Optional[str] = None
     egress_default_action: Optional[str] = None
 
@@ -559,6 +560,24 @@ class ControllerClient:
         r = data["setFibForwarding"]
         return OperationResult(success=r["success"], message=r.get("message"))
 
+    def set_urpf(
+        self, node_id: str, interface_name: str, mode: str
+    ) -> OperationResult:
+        """Set the uRPF mode ("off"/"loose"/"strict") on an ingress interface."""
+        query = """
+        mutation SetUrpf($nodeId: ID!, $interfaceName: String!, $mode: String!) {
+            setUrpf(nodeId: $nodeId, interfaceName: $interfaceName, mode: $mode) {
+                success message
+            }
+        }
+        """
+        data = self._execute(
+            query,
+            {"nodeId": node_id, "interfaceName": interface_name, "mode": mode},
+        )
+        r = data["setUrpf"]
+        return OperationResult(success=r["success"], message=r.get("message"))
+
     def set_interface_default_action(
         self,
         node_id: str,
@@ -613,7 +632,7 @@ class ControllerClient:
         query NodeInterfaces($nodeId: ID!) {
             nodeInterfaces(nodeId: $nodeId) {
                 nodeId name ifindex macAddress linkState addressesJson tag
-                xdpAttached tcAttached fibForwarding
+                xdpAttached tcAttached fibForwarding urpfMode
                 ingressDefaultAction egressDefaultAction
             }
         }
@@ -631,6 +650,7 @@ class ControllerClient:
                 xdp_attached=i.get("xdpAttached", False),
                 tc_attached=i.get("tcAttached", False),
                 fib_forwarding=i.get("fibForwarding", False),
+                urpf_mode=i.get("urpfMode", "off"),
                 ingress_default_action=i.get("ingressDefaultAction"),
                 egress_default_action=i.get("egressDefaultAction"),
             )
