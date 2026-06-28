@@ -29,7 +29,11 @@ import time
 import pytest
 
 from lib.policy_engine.engine.cli.client import AddRuleOptions
-from tests.sni_matching.helpers import wait_verdicts
+from tests.sni_matching.helpers import (
+    wait_for_verdict_entry,
+    wait_for_verdict_evicted,
+    wait_verdicts,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -193,4 +197,109 @@ class TestTcpVerdictCacheFastPath:
         assert pkts < sends, (
             f"Verdict cache did not short-circuit subsequent sends — "
             f"rule_stats.packets={pkts} after {sends} sends (expected < {sends})."
+        )
+
+
+class TestVerdictCacheListing:
+    """End-to-end coverage of the verdict-cache *contents* (not just the count).
+
+    Exercises the ``flowVerdictList`` / ``policy-client inspect verdicts --list``
+    surface — the entries an operator sees in the CLI and web UIs — and the
+    background evictor that removes them once their TTL elapses.
+    """
+
+    def test_list_exposes_entry_with_expected_verdict(
+        self,
+        policy_client,
+        attached_egress,
+        clean_egress_rules,
+        quic_sender,
+        client_ip_v4,
+        server_network_v4,
+    ):
+        """A DROP-SNI QUIC flow surfaces as a DROP entry on its own 5-tuple.
+
+        Validates the full read path: BPF map → engine ``flowVerdictList`` →
+        client. The fields (src port, dst port, protocol, action) must match the
+        flow we generated, not just an opaque count.
+        """
+        sni = "cache-list.example"
+        src_port = 50410
+        r = policy_client.add_rule(
+            AddRuleOptions(
+                interface=attached_egress,
+                src=server_network_v4,
+                protocol="udp",
+                dport=_DPORT,
+                actions=[("drop", 0)],
+                sni=sni,
+                rule_id=930_010,
+            ),
+            direction="egress",
+        )
+        assert r.success, f"add_rule failed: {r.message}"
+
+        # Clean slate so the only entry on our src port is the one we create.
+        policy_client.clear_flow_verdicts(direction="egress")
+
+        quic_sender(str(client_ip_v4), _DPORT, sni, src_port=src_port)
+
+        entry = wait_for_verdict_entry(policy_client, src_port, direction="egress")
+        assert entry is not None, (
+            f"no cached verdict appeared for src_port={src_port}; "
+            "flowVerdictList returned nothing for our flow"
+        )
+        logger.info(f"cached entry: {entry}")
+        assert entry.action == "DROP", f"expected DROP verdict, got {entry.action}"
+        assert entry.dst_port == _DPORT, f"unexpected dst_port {entry.dst_port}"
+        assert entry.protocol.lower() == "udp", f"expected udp, got {entry.protocol}"
+        assert not entry.expired, "freshly-written verdict should not be expired yet"
+
+    @pytest.mark.slow
+    def test_expired_verdicts_are_evicted(
+        self,
+        policy_client,
+        attached_egress,
+        clean_egress_rules,
+        quic_sender,
+        client_ip_v4,
+        server_network_v4,
+    ):
+        """A verdict that is never refreshed is swept out after its TTL.
+
+        Regression test for the evictor: BPF HASH maps don't auto-expire, so the
+        userspace ``FlowVerdictManager`` sweep is the only thing that removes
+        stale entries. With it disabled, entries accumulate forever (the entry
+        below would persist indefinitely). TTL is 60 s, swept every 30 s, so a
+        single un-refreshed flow disappears within ~90 s.
+        """
+        sni = "cache-evict.example"
+        src_port = 50411
+        r = policy_client.add_rule(
+            AddRuleOptions(
+                interface=attached_egress,
+                src=server_network_v4,
+                protocol="udp",
+                dport=_DPORT,
+                actions=[("drop", 0)],
+                sni=sni,
+                rule_id=930_011,
+            ),
+            direction="egress",
+        )
+        assert r.success, f"add_rule failed: {r.message}"
+
+        policy_client.clear_flow_verdicts(direction="egress")
+        quic_sender(str(client_ip_v4), _DPORT, sni, src_port=src_port)
+
+        entry = wait_for_verdict_entry(policy_client, src_port, direction="egress")
+        assert entry is not None, "verdict should have been written before eviction"
+
+        # Do not touch this 5-tuple again — let the TTL lapse and the sweep run.
+        evicted = wait_for_verdict_evicted(
+            policy_client, src_port, direction="egress", budget_s=120.0
+        )
+        assert evicted, (
+            f"verdict for src_port={src_port} was not evicted within 120 s — "
+            "the FlowVerdictManager cleanup loop may not be running"
         )

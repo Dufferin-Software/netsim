@@ -18,6 +18,7 @@ from lib.policy_engine.engine.cli.client import (
     BatchDeleteRulesResult,
     EthertypeStats,
     FlowExportStatus,
+    FlowVerdictEntry,
     FlowVerdictStats,
     GlobalStats,
     InspectStatus,
@@ -1589,6 +1590,38 @@ class GraphQLPolicyClient:
         return FlowVerdictStats(
             active_verdicts=d.get("activeVerdicts", 0),
         )
+
+    def list_flow_verdicts(
+        self, direction: str = "ingress", limit: int | None = None
+    ) -> list[FlowVerdictEntry]:
+        """
+        List individual cached flow verdict entries for a direction.
+
+        Entries come back soonest-expiring first, capped server-side at
+        ``limit`` (default 1000 when ``None``).
+
+        Args:
+            direction: Traffic direction ("ingress" or "egress")
+            limit: Max entries to return (None = server default)
+        """
+        gql_direction: str = "INGRESS" if direction.lower() == "ingress" else "EGRESS"
+        query = """
+        query FlowVerdictList($direction: GqlDirection!, $limit: Int) {
+            flowVerdictList(direction: $direction, limit: $limit) {
+                srcIp dstIp srcPort dstPort protocol action
+                expiresNs expired packets bytes
+            }
+        }
+        """
+        variables: dict = {"direction": gql_direction, "limit": limit}
+        data = self._execute_graphql(query, variables)
+
+        if "__error__" in data:
+            return []
+
+        return [
+            FlowVerdictEntry.from_json(e) for e in data.get("flowVerdictList", []) or []
+        ]
 
     def clear_flow_verdicts(self, direction: str = "ingress") -> OperationResult:
         """

@@ -37,3 +37,46 @@ def wait_verdicts(policy_client, baseline: int, want: int) -> int:
             return last
         time.sleep(_POLL_INTERVAL_S)
     return last
+
+
+def find_verdict_by_src_port(policy_client, src_port: int, direction: str = "egress"):
+    """Return the cached verdict entry for ``src_port``, or None if absent."""
+    for entry in policy_client.list_flow_verdicts(direction=direction):
+        if entry.src_port == src_port:
+            return entry
+    return None
+
+
+def wait_for_verdict_entry(
+    policy_client,
+    src_port: int,
+    direction: str = "egress",
+    budget_s: float = _POLL_BUDGET_S,
+):
+    """Poll the cache until an entry for ``src_port`` appears; return it or None."""
+    deadline = time.monotonic() + budget_s
+    while time.monotonic() < deadline:
+        entry = find_verdict_by_src_port(policy_client, src_port, direction)
+        if entry is not None:
+            return entry
+        time.sleep(_POLL_INTERVAL_S)
+    return None
+
+
+def wait_for_verdict_evicted(
+    policy_client,
+    src_port: int,
+    direction: str = "egress",
+    budget_s: float = 120.0,
+) -> bool:
+    """Poll until the entry for ``src_port`` is gone (evicted). Returns True if so.
+
+    Verdicts carry a 60 s TTL and the evictor sweeps every 30 s, so a flow that
+    is not refreshed disappears within ~90 s.
+    """
+    deadline = time.monotonic() + budget_s
+    while time.monotonic() < deadline:
+        if find_verdict_by_src_port(policy_client, src_port, direction) is None:
+            return True
+        time.sleep(2.0)
+    return False

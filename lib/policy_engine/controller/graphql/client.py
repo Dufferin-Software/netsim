@@ -155,6 +155,22 @@ class NodeInterface:
 
 
 @dataclass
+class NodeFlowVerdict:
+    """A single cached flow verdict entry read live from a node's BPF cache."""
+
+    src_ip: str
+    dst_ip: str
+    src_port: int
+    dst_port: int
+    protocol: str
+    action: str
+    expires_ns: str
+    expired: bool
+    packets: int
+    bytes: int
+
+
+@dataclass
 class PersistedEvent:
     """One row from the controller's persisted policy-event store."""
 
@@ -655,6 +671,45 @@ class ControllerClient:
                 egress_default_action=i.get("egressDefaultAction"),
             )
             for i in data.get("nodeInterfaces", [])
+        ]
+
+    def node_flow_verdicts(
+        self,
+        node_id: str,
+        direction: str = "ingress",
+        limit: Optional[int] = None,
+    ) -> List[NodeFlowVerdict]:
+        """Read a node's live flow verdict cache for one direction.
+
+        Issues an on-demand query to the node's agent, so the node must be
+        online. ``limit`` caps the entries (soonest-expiring first; None uses
+        the server default of 1000).
+        """
+        query = """
+        query NodeFlowVerdicts($nodeId: ID!, $direction: String!, $limit: Int) {
+            nodeFlowVerdicts(nodeId: $nodeId, direction: $direction, limit: $limit) {
+                srcIp dstIp srcPort dstPort protocol action
+                expiresNs expired packets bytes
+            }
+        }
+        """
+        data = self._execute(
+            query, {"nodeId": node_id, "direction": direction, "limit": limit}
+        )
+        return [
+            NodeFlowVerdict(
+                src_ip=v["srcIp"],
+                dst_ip=v["dstIp"],
+                src_port=v["srcPort"],
+                dst_port=v["dstPort"],
+                protocol=v["protocol"],
+                action=v["action"],
+                expires_ns=v["expiresNs"],
+                expired=v["expired"],
+                packets=v["packets"],
+                bytes=v["bytes"],
+            )
+            for v in data.get("nodeFlowVerdicts", []) or []
         ]
 
     def events(

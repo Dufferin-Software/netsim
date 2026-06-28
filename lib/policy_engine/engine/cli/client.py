@@ -544,6 +544,37 @@ class FlowVerdictStats:
 
 
 @dataclass
+class FlowVerdictEntry:
+    """A single cached flow verdict entry from ``flowVerdictList``."""
+
+    src_ip: str
+    dst_ip: str
+    src_port: int
+    dst_port: int
+    protocol: str
+    action: str
+    expires_ns: str
+    expired: bool
+    packets: int
+    bytes: int
+
+    @classmethod
+    def from_json(cls, data: dict) -> "FlowVerdictEntry":
+        return cls(
+            src_ip=data.get("srcIp", ""),
+            dst_ip=data.get("dstIp", ""),
+            src_port=data.get("srcPort", 0),
+            dst_port=data.get("dstPort", 0),
+            protocol=data.get("protocol", ""),
+            action=data.get("action", ""),
+            expires_ns=data.get("expiresNs", "0"),
+            expired=data.get("expired", False),
+            packets=data.get("packets", 0),
+            bytes=data.get("bytes", 0),
+        )
+
+
+@dataclass
 class WeeklyWindow:
     """A half-open weekly time window [start, end).
 
@@ -1286,6 +1317,28 @@ class PolicyClient:
         """
         data = self._run_command_json(["inspect", "verdicts", "--direction", direction])
         return FlowVerdictStats.from_json(data)
+
+    def list_flow_verdicts(
+        self, direction: str = "ingress", limit: Optional[int] = None
+    ) -> List[FlowVerdictEntry]:
+        """
+        List individual cached flow verdict entries for a direction.
+
+        Entries come back soonest-expiring first, capped at ``limit``
+        (default 1000 server-side when ``None``).
+
+        Args:
+            direction: Traffic direction ("ingress" or "egress")
+            limit: Max entries to return (None = CLI default of 1000)
+
+        Returns:
+            List of FlowVerdictEntry
+        """
+        args = ["inspect", "verdicts", "--direction", direction, "--list"]
+        if limit is not None:
+            args += ["--limit", str(limit)]
+        data = self._run_command_json(args)
+        return [FlowVerdictEntry.from_json(e) for e in data]
 
     def clear_flow_verdicts(self, direction: str = "ingress") -> OperationResult:
         """
