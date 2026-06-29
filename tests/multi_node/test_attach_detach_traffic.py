@@ -774,7 +774,9 @@ class TestMultiNodeRuleStats:
         iface1 = data_iface(node1)
         iface2 = data_iface(node2)
 
-        # Attach ingress and flush rules on both nodes
+        # Attach ingress and flush rules on both nodes. Defensively clear any
+        # stale controller-side rules a prior (possibly failed) run may have
+        # left behind, else createRulesMultiNode rejects them as duplicates.
         for vm_name, node_id in test_nodes.items():
             node = nodes[vm_name]
             iface = data_iface(node)
@@ -784,7 +786,8 @@ class TestMultiNodeRuleStats:
                 interface_name=iface,
                 direction="ingress",
             )
-            GraphQLPolicyClient(node).flush_rules(direction="ingress")
+            flush_ingress_rules(node)
+            delete_controller_rules(controller_client, node_id, iface, "ingress")
 
         time.sleep(_SETTLE_SECS)
 
@@ -851,7 +854,8 @@ class TestMultiNodeRuleStats:
             for vm_name, node_id in test_nodes.items():
                 node = nodes[vm_name]
                 iface = data_iface(node)
-                GraphQLPolicyClient(node).flush_rules(direction="ingress")
+                flush_ingress_rules(node)
+                delete_controller_rules(controller_client, node_id, iface, "ingress")
                 wait_for_node_ready(controller_client, node_id)
                 controller_client.detach_program(
                     node_id=node_id,
@@ -884,7 +888,9 @@ class TestMultiNodeRuleStats:
         iface2 = data_iface(node2)
         node1_ip = get_data_ip(node1)
 
-        # Attach and flush on both nodes
+        # Attach and flush on both nodes. Defensively clear any stale
+        # controller-side rules a prior (possibly failed) run may have left
+        # behind, else createRulesMultiNode rejects them as duplicates.
         for vm_name, node_id in test_nodes.items():
             node = nodes[vm_name]
             iface = data_iface(node)
@@ -894,7 +900,8 @@ class TestMultiNodeRuleStats:
                 interface_name=iface,
                 direction="ingress",
             )
-            GraphQLPolicyClient(node).flush_rules(direction="ingress")
+            flush_ingress_rules(node)
+            delete_controller_rules(controller_client, node_id, iface, "ingress")
 
         time.sleep(_SETTLE_SECS)
 
@@ -948,7 +955,8 @@ class TestMultiNodeRuleStats:
             for vm_name, node_id in test_nodes.items():
                 node = nodes[vm_name]
                 iface = data_iface(node)
-                GraphQLPolicyClient(node).flush_rules(direction="ingress")
+                flush_ingress_rules(node)
+                delete_controller_rules(controller_client, node_id, iface, "ingress")
                 wait_for_node_ready(controller_client, node_id)
                 controller_client.detach_program(
                     node_id=node_id,

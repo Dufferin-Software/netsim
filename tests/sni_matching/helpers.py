@@ -67,12 +67,15 @@ def wait_for_verdict_evicted(
     policy_client,
     src_port: int,
     direction: str = "egress",
-    budget_s: float = 120.0,
+    budget_s: float = 700.0,
 ) -> bool:
     """Poll until the entry for ``src_port`` is gone (evicted). Returns True if so.
 
-    Verdicts carry a 60 s TTL and the evictor sweeps every 30 s, so a flow that
-    is not refreshed disappears within ~90 s.
+    SNI/QUIC verdicts carry the 10-minute SNI_VERDICT_TTL_NS / QUIC_VERDICT_TTL_NS
+    (deliberately long: the verdict is keyed by the 5-tuple but decided by the SNI
+    hostname, so a reused 5-tuple must time out rather than mis-apply). The evictor
+    sweeps every 30 s, so an un-refreshed flow disappears within ~TTL + one sweep
+    (~630 s). The default budget allows for that plus margin.
     """
     deadline = time.monotonic() + budget_s
     while time.monotonic() < deadline:

@@ -4,10 +4,11 @@
 Verdict-cache fast-path behaviour.
 
 After the SNI inspector decides a verdict on a flow it writes a verdict
-into the verdict cache for 60 s.  Subsequent packets on the same 5-tuple
-short-circuit in BPF without re-running the SNI tail call (TCP) or
-re-emitting a ringbuf event (QUIC) — that's the whole point of the
-cache.
+into the verdict cache with the 10-minute SNI/QUIC TTL
+(SNI_VERDICT_TTL_NS / QUIC_VERDICT_TTL_NS).  Subsequent packets on the
+same 5-tuple short-circuit in BPF without re-running the SNI tail call
+(TCP) or re-emitting a ringbuf event (QUIC) — that's the whole point of
+the cache.
 
 Both transports are covered here:
 
@@ -270,8 +271,11 @@ class TestVerdictCacheListing:
         Regression test for the evictor: BPF HASH maps don't auto-expire, so the
         userspace ``FlowVerdictManager`` sweep is the only thing that removes
         stale entries. With it disabled, entries accumulate forever (the entry
-        below would persist indefinitely). TTL is 60 s, swept every 30 s, so a
-        single un-refreshed flow disappears within ~90 s.
+        below would persist indefinitely). SNI/QUIC verdicts use the 10-minute
+        SNI_VERDICT_TTL_NS / QUIC_VERDICT_TTL_NS (deliberately long — see the
+        constant's rationale in policy_common.h), swept every 30 s, so a single
+        un-refreshed flow disappears within ~TTL + one sweep. Marked ``slow``
+        accordingly.
         """
         sni = "cache-evict.example"
         src_port = 50411
@@ -296,10 +300,11 @@ class TestVerdictCacheListing:
         assert entry is not None, "verdict should have been written before eviction"
 
         # Do not touch this 5-tuple again — let the TTL lapse and the sweep run.
+        # SNI/QUIC TTL is 10 min + a 30 s sweep, so allow ~TTL + sweep + margin.
         evicted = wait_for_verdict_evicted(
-            policy_client, src_port, direction="egress", budget_s=120.0
+            policy_client, src_port, direction="egress", budget_s=700.0
         )
         assert evicted, (
-            f"verdict for src_port={src_port} was not evicted within 120 s — "
+            f"verdict for src_port={src_port} was not evicted within 700 s — "
             "the FlowVerdictManager cleanup loop may not be running"
         )

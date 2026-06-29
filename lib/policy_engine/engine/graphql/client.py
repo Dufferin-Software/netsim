@@ -241,6 +241,40 @@ class GraphQLPolicyClient:
             message=result.get("message", ""),
         )
 
+    def configure_stop_behavior(self, behavior: str) -> OperationResult:
+        """
+        Set the daemon stop behavior.
+
+        Args:
+            behavior: "clear-state" or "preserve-state". With "preserve-state"
+                the BPF programs stay attached when the daemon stops, so traffic
+                continues to be enforced while it is down.
+
+        Returns:
+            OperationResult indicating success/failure
+        """
+        mutation = """
+        mutation ConfigureStopBehavior($input: ConfigureStopBehaviorInput!) {
+            configureStopBehavior(input: $input) {
+                success
+                message
+            }
+        }
+        """
+        variables: dict[str, dict[str, str]] = {
+            "input": {"stopBehavior": behavior}
+        }
+        data = self._execute_graphql(mutation, variables)
+
+        if "__error__" in data:
+            return OperationResult(success=False, message=data["__error__"])
+
+        result = data.get("configureStopBehavior", {})
+        return OperationResult(
+            success=result.get("success", False),
+            message=result.get("message", ""),
+        )
+
     def attach_egress(self, interface: str) -> OperationResult:
         """
         Attach egress program to an interface.

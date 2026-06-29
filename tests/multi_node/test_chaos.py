@@ -351,9 +351,9 @@ class TestEngineRestartWithRulesInstalled:
         enrolled_nodes: Dict[str, str],
     ) -> None:
         """
-        While the engine is stopped, BPF programs remain attached (preserve-state
-        default) and traffic continues to be dropped.  After the engine and agent
-        restart, drops resume with controller-reconciled rules.
+        With preserve-state configured, BPF programs remain attached while the
+        engine is stopped and traffic continues to be dropped.  After the engine
+        and agent restart, drops resume with controller-reconciled rules.
         """
         node1 = nodes["node1"]
         node2 = nodes["node2"]
@@ -362,10 +362,17 @@ class TestEngineRestartWithRulesInstalled:
         iface2 = data_iface(node2)
         node1_ip = get_data_ip(node1)
 
-        GraphQLPolicyClient(node1).flush_rules(direction="ingress")
+        engine_client = GraphQLPolicyClient(node1)
+        engine_client.flush_rules(direction="ingress")
         _attach_and_install_drop_icmp(controller_client, node1_id, iface1)
 
         try:
+            # The engine default is clear-state, which detaches BPF programs on a
+            # clean shutdown.  This test verifies the preserve-state path (programs
+            # stay attached while the daemon is down), so enable it explicitly.
+            res = engine_client.configure_stop_behavior("preserve-state")
+            assert res.success, f"Failed to set preserve-state: {res.message}"
+
             # Confirm drops while everything is running
             active = send_icmp(node2, node1_ip, iface2, count=5)
             assert active["lost"] > 0, (
@@ -410,6 +417,11 @@ class TestEngineRestartWithRulesInstalled:
                 f"[node1] After restart: {resumed['lost']}/{resumed['sent']} dropped"
             )
         finally:
+            # Restore the default so later tests on this node aren't affected.
+            try:
+                GraphQLPolicyClient(node1).configure_stop_behavior("clear-state")
+            except Exception as e:
+                logger.warning(f"[node1] reset stop behavior: {e}")
             _cleanup_node(controller_client, node1, node1_id, iface1)
 
     def test_policy_engine_healthy_after_restart(
