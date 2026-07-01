@@ -179,9 +179,13 @@ class TestXdpFibForwarding:
 
         # Add a DROP rule for client source IP
         transit_iface = self._transit_net1_iface(node_interfaces)
+        drop_rule_id = 70001
         result = policy_client.add_rule(
             AddRuleOptions(
-                interface=transit_iface, src=client_prefix, actions=[("drop", 0)]
+                interface=transit_iface,
+                src=client_prefix,
+                actions=[("drop", 0)],
+                rule_id=drop_rule_id,
             ),
             direction="ingress",
         )
@@ -203,7 +207,7 @@ class TestXdpFibForwarding:
         finally:
             # Remove rule and verify traffic resumes
             del_result = policy_client.delete_rule(
-                transit_iface, src=client_prefix, direction="ingress"
+                transit_iface, rule_id=drop_rule_id, direction="ingress"
             )
             assert del_result.success, (
                 f"Failed to delete DROP rule: {del_result.message}"

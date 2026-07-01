@@ -685,25 +685,15 @@ class GraphQLPolicyClient:
     def delete_rule(
         self,
         interface: str,
-        rule_id: Optional[int] = None,
-        src: Optional[str] = None,
-        dst: Optional[str] = None,
-        sport: Optional[int] = None,
-        dport: Optional[int] = None,
-        protocol: Optional[str] = None,
+        rule_id: int,
         direction: str = "ingress",
     ) -> OperationResult:
         """
-        Delete a policy rule.
+        Delete a policy rule by ID.
 
         Args:
             interface: Interface the rule is scoped to (required)
-            rule_id: Rule ID to delete
-            src: Source prefix (alternative to id)
-            dst: Destination prefix
-            sport: Source port
-            dport: Destination port
-            protocol: Protocol
+            rule_id: Rule ID to delete (required)
             direction: Traffic direction ("ingress" or "egress")
 
         Returns:
@@ -724,25 +714,8 @@ class GraphQLPolicyClient:
         input_data: dict[str, Any] = {
             "interface": interface,
             "direction": gql_direction,
+            "id": str(rule_id),
         }
-        if rule_id is not None:
-            input_data["id"] = str(rule_id)
-        if src:
-            input_data["src"] = src
-        if dst:
-            input_data["dst"] = dst
-        if sport is not None:
-            input_data["sport"] = sport
-        if dport is not None:
-            input_data["dport"] = dport
-        if protocol:
-            proto_map: dict[str, str] = {
-                "any": "any",
-                "tcp": "tcp",
-                "udp": "udp",
-                "icmp": "icmp",
-            }
-            input_data["protocol"] = proto_map.get(protocol.lower(), "any")
 
         variables: dict[str, dict[str, str]] = {"input": input_data}
         data = self._execute_graphql(mutation, variables)

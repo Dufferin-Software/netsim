@@ -921,44 +921,30 @@ class PolicyClient:
     def delete_rule(
         self,
         interface: str,
-        rule_id: Optional[int] = None,
-        src: Optional[str] = None,
-        dst: Optional[str] = None,
-        sport: Optional[int] = None,
-        dport: Optional[int] = None,
-        protocol: Optional[str] = None,
+        rule_id: int,
         direction: str = "ingress",
     ) -> OperationResult:
         """
-        Delete a policy rule.
+        Delete a policy rule by ID.
 
         Args:
             interface: Interface the rule is scoped to (required)
-            rule_id: Rule ID to delete
-            src: Source prefix (alternative to id)
-            dst: Destination prefix
-            sport: Source port
-            dport: Destination port
-            protocol: Protocol
+            rule_id: Rule ID to delete (required)
             direction: Traffic direction ("ingress" or "egress")
 
         Returns:
             OperationResult indicating success/failure
         """
-        args = ["rule", "delete", "--interface", interface, "--direction", direction]
-
-        if rule_id is not None:
-            args.extend(["--id", str(rule_id)])
-        if src:
-            args.extend(["--src", src])
-        if dst:
-            args.extend(["--dst", dst])
-        if sport is not None:
-            args.extend(["--sport", str(sport)])
-        if dport is not None:
-            args.extend(["--dport", str(dport)])
-        if protocol:
-            args.extend(["--proto", protocol])
+        args = [
+            "rule",
+            "delete",
+            "--interface",
+            interface,
+            "--direction",
+            direction,
+            "--id",
+            str(rule_id),
+        ]
 
         data = self._run_command_json(args)
         return OperationResult.from_json(data)
