@@ -206,13 +206,13 @@ class TestFleetRuleNoLocalChangeEcho:
             # Each rule must land in its node's local engine before we judge the
             # detector — otherwise we'd measure an idle window.
             for vm, _node, node_id, iface, pe in targets:
-                rid = int(created_ids[vm])
+                rid_int = int(created_ids[vm])
                 _wait_until(
-                    lambda pe=pe, rid=rid: any(
+                    lambda pe=pe, rid=rid_int: any(
                         r.rule_id == rid for r in pe.list_rules(direction="ingress")
                     ),
                     timeout=_LAND_TIMEOUT_SECS,
-                    what=f"rule {rid} to load in {vm}'s local engine",
+                    what=f"rule {rid_int} to load in {vm}'s local engine",
                 )
 
             # Give the change detector several poll cycles to (mis)fire.
@@ -270,12 +270,14 @@ class TestFleetRuleNoLocalChangeEcho:
         finally:
             # Best-effort cleanup so re-runs start clean.
             for vm, _node, node_id, iface, _pe in targets:
-                rid = created_ids.get(vm)
-                if rid:
+                cleanup_rid = created_ids.get(vm)
+                if cleanup_rid:
                     try:
-                        controller_client.delete_rule(rid)
+                        controller_client.delete_rule(cleanup_rid)
                     except Exception as e:
-                        logger.debug(f"[{vm}] cleanup delete_rule({rid}) ignored: {e}")
+                        logger.debug(
+                            f"[{vm}] cleanup delete_rule({cleanup_rid}) ignored: {e}"
+                        )
                 try:
                     controller_client.detach_program(
                         node_id=node_id, interface_name=iface, direction="ingress"

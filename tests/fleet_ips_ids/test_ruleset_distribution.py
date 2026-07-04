@@ -29,9 +29,7 @@ _POLL = 2
 
 
 def _read_remote_file(node, path):
-    out = node.ssh_command(
-        f"sudo cat {path} 2>/dev/null || true", timeout=10
-    )
+    out = node.ssh_command(f"sudo cat {path} 2>/dev/null || true", timeout=10)
     return out
 
 
@@ -92,7 +90,10 @@ def test_ruleset_distributes_to_capable_nodes(
         assert _file_exists(nodes[vm], f"{_RULES_DIR}/custom.rules")
 
     # Update content → drift push reconverges both nodes.
-    new_content = content + 'alert udp any any -> any any (msg:"fleet extra"; sid:9200002; rev:1;)\n'
+    new_content = (
+        content
+        + 'alert udp any any -> any any (msg:"fleet extra"; sid:9200002; rev:1;)\n'
+    )
     controller_client.update_suricata_ruleset(rs["id"], new_content)
     for vm in ("node1", "node2"):
         deadline = time.monotonic() + _SETTLE_SECS

@@ -37,9 +37,7 @@ def _wait_controller_inspect_mode(client, node_id, expected, timeout=_SETTLE_SEC
     )
 
 
-def test_set_mode_and_interface_end_to_end(
-    nodes, controller_client, enrolled_nodes
-):
+def test_set_mode_and_interface_end_to_end(nodes, controller_client, enrolled_nodes):
     node_id = enrolled_nodes["node1"]
     engine = GraphQLPolicyClient(nodes["node1"])
     iface = data_iface(nodes["node1"])
