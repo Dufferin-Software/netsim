@@ -146,7 +146,7 @@ def policy_engine_service(nodes, install_user_packages):
         "systemctl cat policy-engine.service >/dev/null 2>&1 && echo EXISTS || echo MISSING"
     )
     if "MISSING" in check_result:
-        pytest.skip("policy-engine.service not installed (use --install-packages)")
+        pytest.skip("policy-engine.service not installed (check 'packages' in the topology yaml)")
 
     # Suricata must not be running during tests — it crash-loops when
     # unconfigured and saturates the VM.  Stop and disable it here so that

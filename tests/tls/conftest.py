@@ -161,7 +161,7 @@ def policy_engine_tls(nodes, tls_certs):
         "systemctl cat policy-engine.service >/dev/null 2>&1 && echo EXISTS || echo MISSING"
     )
     if "MISSING" in check:
-        pytest.skip("policy-engine.service not installed (use --install-packages)")
+        pytest.skip("policy-engine.service not installed (check 'packages' in the topology yaml)")
 
     # Stop Suricata to prevent crash-loops on VMs that have it pre-installed.
     try:

@@ -1,5 +1,6 @@
 name: "tls"
 version: "1.0"
+package_dir: "../../.."
 
 networks:
   - name: "net1"
@@ -17,3 +18,7 @@ nodes:
     vcpus: 2
     networks:
       - "net1"
+    packages:
+      - "policy-engine_*.deb"
+      - "policy-engine-client_*.deb"
+

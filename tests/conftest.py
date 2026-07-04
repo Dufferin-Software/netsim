@@ -170,10 +170,12 @@ def pytest_addoption(parser) -> None:
         help="Keep topology running and pause for debugging when tests fail",
     )
     parser.addoption(
-        "--install-packages",
+        "--package-dir",
         action="store",
         default=None,
-        help="Comma-separated list of paths to debian packages to install on all nodes",
+        help="Directory containing the .deb packages referenced by the "
+        "topology's per-node 'packages' lists (overrides the topology's "
+        "'package_dir')",
     )
     parser.addoption(
         "--scale-nodes",
@@ -227,25 +229,33 @@ def pytest_configure(config) -> None:
         logger_obj = logging.getLogger(logger_name)
         logger_obj.propagate = True
 
-    packages_opt = config.getoption("--install-packages", default=None)
-    if not packages_opt:
-        return
-
-    # Parse comma-separated package paths
-    package_paths = [p.strip() for p in packages_opt.split(",") if p.strip()]
-    if not package_paths:
-        return
-
-    # Validate all package paths exist before spinning up VMs
+    # Validate that every topology's per-node package globs resolve to real
+    # .deb files before spinning up VMs. Discovery is best-effort (it mirrors
+    # the topology_path fixture); anything missed here still fails cleanly in
+    # the install_user_packages fixture.
+    pkg_dir_override = config.getoption("--package-dir", default=None)
     errors = []
-    for pkg_path in package_paths:
-        if not Path(pkg_path).exists():
-            errors.append(f"Package file not found: {pkg_path}")
-        elif not pkg_path.endswith(".deb"):
-            errors.append(f"Package must be a .deb file: {pkg_path}")
+    for topo_path in _discover_topology_files(config):
+        try:
+            topo = TopologyParser.load(str(topo_path))
+            _resolve_node_packages(topo, topo_path, pkg_dir_override)
+        except Exception as e:
+            errors.append(str(e))
 
     if errors:
         raise pytest.UsageError("\n".join(errors))
+
+
+def _discover_topology_files(config) -> list:
+    """Find <suite>/<suite>.yaml topologies for the given test args."""
+    found = []
+    for arg in config.args:
+        path = Path(str(arg).split("::")[0])
+        test_dir = path if path.is_dir() else path.parent
+        topo_path = (test_dir / f"{test_dir.resolve().name}.yaml").resolve()
+        if topo_path.is_file() and topo_path not in found:
+            found.append(topo_path)
+    return found
 
 
 def pytest_sessionstart(session) -> None:
@@ -917,44 +927,110 @@ def apt_updated(nodes) -> None:
     )
 
 
+# Debug-symbol and -dev/-doc packages we never want pulled into a test VM,
+# even if a package glob accidentally matches them.
+_PKG_EXCLUDE_SUFFIXES = ("-dbgsym", "-dev", "-doc")
+
+
+def _pkg_excluded(filename: str) -> bool:
+    return filename.split("_")[0].endswith(_PKG_EXCLUDE_SUFFIXES)
+
+
+def _resolve_node_packages(
+    topology: Topology, topology_path, package_dir_override: str | None = None
+) -> Dict[str, list[Path]]:
+    """
+    Resolve each node's package globs to concrete .deb paths.
+
+    Globs come from the per-node 'packages' list in the topology YAML and are
+    resolved against the package directory (--package-dir overrides the
+    topology's 'package_dir'; a relative directory resolves against the YAML's
+    location). dbgsym/dev/doc packages are never matched, and when several
+    .debs match one glob (e.g. stale versions) the newest wins.
+
+    Raises ValueError on a missing package directory or an unmatched glob.
+    """
+    if not any(node.packages for node in topology.nodes):
+        return {}
+
+    if package_dir_override:
+        # CLI-supplied: relative to the invocation directory
+        pkg_dir = Path(package_dir_override).resolve()
+    elif topology.package_dir:
+        # From the YAML: relative to the YAML's directory
+        pkg_dir = Path(topology.package_dir)
+        if not pkg_dir.is_absolute():
+            pkg_dir = (Path(topology_path).parent / pkg_dir).resolve()
+    else:
+        raise ValueError(
+            f"{topology_path}: nodes declare 'packages' but no package "
+            "directory is set (add 'package_dir' to the topology or pass "
+            "--package-dir)"
+        )
+    if not pkg_dir.is_dir():
+        raise ValueError(f"{topology_path}: package directory not found: {pkg_dir}")
+
+    resolved: Dict[str, list[Path]] = {}
+    for node in topology.nodes:
+        paths: list[Path] = []
+        for pattern in node.packages:
+            matches = [
+                p
+                for p in pkg_dir.glob(pattern)
+                if p.name.endswith(".deb") and not _pkg_excluded(p.name)
+            ]
+            if not matches:
+                raise ValueError(
+                    f"{topology_path}: node '{node.name}': no .deb in "
+                    f"{pkg_dir} matches '{pattern}'"
+                )
+            paths.append(max(matches, key=lambda p: p.stat().st_mtime))
+        if paths:
+            resolved[node.name] = paths
+    return resolved
+
+
 @pytest.fixture(scope="package")
-def install_user_packages(nodes, apt_updated, request) -> None:
+def install_user_packages(topology, topology_path, nodes, apt_updated, request) -> None:
     """
-    Install debian packages on all nodes if --install-packages is specified.
+    Install each node's debian packages as declared in the topology YAML.
 
-    Packages are copied to each node and installed with apt, which resolves
-    any declared dependencies automatically.
-    Fails the test if any package installation fails.
-
-    Usage:
-        pytest --install-packages=/path/to/pkg1.deb,/path/to/pkg2.deb tests/
+    Per-node 'packages' globs are resolved against the topology's
+    'package_dir' (or --package-dir) and installed with apt, which resolves
+    any declared dependencies automatically. Nodes without a 'packages' list
+    get nothing installed. Fails the test if any package installation fails.
     """
-    packages_opt = request.config.getoption("--install-packages")
-    if not packages_opt:
-        logger.debug("No packages to install (--install-packages not specified)")
-        return
+    try:
+        node_packages = _resolve_node_packages(
+            topology, topology_path, request.config.getoption("--package-dir")
+        )
+    except ValueError as e:
+        pytest.fail(str(e))
 
-    # Parse comma-separated package paths
-    package_paths = [p.strip() for p in packages_opt.split(",") if p.strip()]
-    if not package_paths:
+    if not node_packages:
+        logger.debug("No packages declared in topology; nothing to install")
         return
 
     logger.info("=" * 60)
-    logger.info(f"Installing {len(package_paths)} package(s) on all nodes")
+    logger.info(
+        "Installing packages: "
+        + "; ".join(
+            f"{name}: {', '.join(p.name for p in pkgs)}"
+            for name, pkgs in node_packages.items()
+        )
+    )
     logger.info("=" * 60)
-
-    # Package paths already validated in pytest_configure
 
     def _install_packages_on_node(node_name, node) -> None:
-        """Install all packages on a single node."""
-        for pkg_path in package_paths:
-            pkg_name: str = Path(pkg_path).name
+        """Install this node's packages."""
+        for pkg_path in node_packages[node_name]:
+            pkg_name: str = pkg_path.name
 
             logger.info(f"  [{node_name}] Copying {pkg_name}...")
 
             # Copy package to node
             try:
-                remote_path = node.copy_file(pkg_path)
+                remote_path = node.copy_file(str(pkg_path))
             except FileNotFoundError as e:
                 pytest.fail(str(e))
             except subprocess.CalledProcessError as e:
@@ -985,9 +1061,11 @@ def install_user_packages(nodes, apt_updated, request) -> None:
                 logger.debug(f"  [{node_name}] diagnostics failed: {e}")
 
             # Kill any stale apt/dpkg processes so they cannot hold the lock.
+            # pkill takes a single ERE pattern; -x anchors it to the whole
+            # process name.
             try:
                 node.ssh_command(
-                    "sudo pkill -9 -x apt apt-get dpkg 2>/dev/null || true",
+                    "sudo pkill -9 -x 'apt|apt-get|dpkg' 2>/dev/null || true",
                     timeout=10,
                 )
             except Exception:
@@ -1013,14 +1091,14 @@ def install_user_packages(nodes, apt_updated, request) -> None:
             # Clean up the package file
             node.ssh_command(f"rm -f {remote_path}")
 
-    # Install packages on all nodes in parallel
+    # Install packages on the declaring nodes in parallel
     run_parallel_simple(
         _install_packages_on_node,
-        [(node_name, node) for node_name, node in nodes.items()],
+        [(node_name, nodes[node_name]) for node_name in node_packages],
     )
 
     logger.info("=" * 60)
-    logger.info("✓ All packages installed on all nodes")
+    logger.info("✓ All packages installed")
     logger.info("=" * 60)
 
 

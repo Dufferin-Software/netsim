@@ -1,5 +1,6 @@
 name: "multi-node"
 version: "1.0"
+package_dir: "../../.."
 
 networks:
   - name: "mgmt"
@@ -21,6 +22,9 @@ nodes:
     vcpus: 1
     networks:
       - "mgmt"
+    packages:
+      - "policy-controller_*.deb"
+      - "policy-controller-client_*.deb"
 
   # Node 1: runs policy-engine + policy-node-agent
   - name: "node1"
@@ -33,6 +37,10 @@ nodes:
     networks:
       - "mgmt"
       - "data"
+    packages:
+      - "policy-engine_*.deb"
+      - "policy-engine-client_*.deb"
+      - "policy-node-agent_*.deb"
 
   # Node 2: runs policy-engine + policy-node-agent
   - name: "node2"
@@ -45,6 +53,10 @@ nodes:
     networks:
       - "mgmt"
       - "data"
+    packages:
+      - "policy-engine_*.deb"
+      - "policy-engine-client_*.deb"
+      - "policy-node-agent_*.deb"
 
   # Node 3: runs policy-engine + policy-node-agent (used for decommission test)
   - name: "node3"
@@ -57,3 +69,8 @@ nodes:
     networks:
       - "mgmt"
       - "data"
+    packages:
+      - "policy-engine_*.deb"
+      - "policy-engine-client_*.deb"
+      - "policy-node-agent_*.deb"
+

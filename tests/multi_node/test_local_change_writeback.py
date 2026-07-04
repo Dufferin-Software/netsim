@@ -34,11 +34,11 @@ This test exercises the write-back wiring end-to-end:
 Run with:
   netsim start tests/multi_node/multi_node.yaml
   python3 -m pytest tests/multi_node/test_local_change_writeback.py -v \\
-      --install-packages \\
-      policy-engine.deb,policy-engine-client.deb,policy-node-agent.deb,policy-controller.deb
+      --package-dir ..
   netsim destroy tests/multi_node/multi_node.yaml
 
-The ``policy-engine-client.deb`` package is required on agent nodes — this
+The ``policy-engine-client.deb`` package is required on agent nodes
+(declared in the topology yaml) — this
 test drives the agent's local engine via the ``policy-client`` CLI to
 trigger a LocalChangeReport, and ``policy-engine`` only *Suggests* the
 client package so apt won't pull it in automatically.

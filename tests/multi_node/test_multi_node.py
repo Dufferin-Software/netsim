@@ -10,16 +10,14 @@ These tests exercise the complete controller ↔ agent workflow:
 4. Kill controller, verify nodes continue enforcing; restart → reconciliation
 5. Decommission node3 → cert is rejected on reconnect
 
-Requires the topology in multi_node.yaml and the following packages installed
-via --install-packages:
-  - policy-engine_*.deb
-  - policy-node-agent_*.deb
-  - policy-controller_*.deb
+Requires the topology in multi_node.yaml; each node's required packages
+are declared per node in the yaml ('packages') and installed automatically
+(resolve the .deb directory with --package-dir).
 
 Run with:
   netsim start tests/multi_node/multi_node.yaml
   python3 -m pytest tests/multi_node/ -v \\
-      --install-packages policy-engine.deb,policy-node-agent.deb,policy-controller.deb
+      --package-dir ..
   netsim destroy tests/multi_node/multi_node.yaml
 """
 

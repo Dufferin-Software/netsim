@@ -1,5 +1,6 @@
 name: "rotation"
 version: "1.0"
+package_dir: "../../.."
 
 networks:
   - name: "mgmt"
@@ -17,6 +18,9 @@ nodes:
     vcpus: 1
     networks:
       - "mgmt"
+    packages:
+      - "policy-controller_*.deb"
+      - "policy-controller-client_*.deb"
 
   # Managed nodes — run policy-engine + policy-node-agent.
   #
@@ -38,6 +42,11 @@ nodes:
     vcpus: 2
     networks:
       - "mgmt"
+    packages:
+      - "policy-engine_*.deb"
+      - "policy-engine-client_*.deb"
+      - "policy-node-agent_*.deb"
+
 
   - name: "node2"
     image:
@@ -48,6 +57,11 @@ nodes:
     vcpus: 2
     networks:
       - "mgmt"
+    packages:
+      - "policy-engine_*.deb"
+      - "policy-engine-client_*.deb"
+      - "policy-node-agent_*.deb"
+
 
   - name: "node3"
     image:
@@ -58,3 +72,8 @@ nodes:
     vcpus: 2
     networks:
       - "mgmt"
+    packages:
+      - "policy-engine_*.deb"
+      - "policy-engine-client_*.deb"
+      - "policy-node-agent_*.deb"
+

@@ -27,7 +27,7 @@ We prove this two ways from a single decommission event:
 Run with:
   netsim start tests/rotation/rotation.yaml
   python3 -m pytest tests/rotation/ -v \\
-      --install-packages policy-engine.deb,policy-node-agent.deb,policy-controller.deb
+      --package-dir ..
   netsim destroy tests/rotation/rotation.yaml
 """
 

@@ -1,5 +1,6 @@
 name: "urpf-topology"
 version: "1.0"
+package_dir: "../../.."
 
 networks:
   - name: "net1"
@@ -35,6 +36,9 @@ nodes:
     networks:
       - "net1"
       - "net2"
+    packages:
+      - "policy-engine_*.deb"
+      - "policy-engine-client_*.deb"
 
   # Server: connects to net2 only
   - name: "server"

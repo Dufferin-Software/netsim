@@ -1,5 +1,6 @@
 name: "sni-matching"
 version: "1.0"
+package_dir: "../../.."
 
 networks:
   - name: "net1"
@@ -19,6 +20,9 @@ nodes:
     vcpus: 2
     networks:
       - "net1"
+    packages:
+      - "policy-engine_*.deb"
+      - "policy-engine-client_*.deb"
 
   # Client: fires scapy-built TLS ClientHellos (TCP/443) and aioquic Initials
   # (UDP/443) at the server.  The server never replies meaningfully — we only

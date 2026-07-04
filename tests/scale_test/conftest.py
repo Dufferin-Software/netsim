@@ -459,7 +459,7 @@ def controller_service(
         "systemctl cat policy-controller.service >/dev/null 2>&1 && echo EXISTS || echo MISSING"
     )
     if "MISSING" in check:
-        pytest.skip("policy-controller.service not installed (use --install-packages)")
+        pytest.skip("policy-controller.service not installed (check 'packages' in the topology yaml)")
 
     status = restart_service(controller, "policy-controller")
     if not status.is_healthy:

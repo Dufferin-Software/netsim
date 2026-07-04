@@ -190,7 +190,7 @@ def controller_service(nodes, install_user_packages):
         "systemctl cat policy-controller.service >/dev/null 2>&1 && echo EXISTS || echo MISSING"
     )
     if "MISSING" in check:
-        pytest.skip("policy-controller.service not installed (use --install-packages)")
+        pytest.skip("policy-controller.service not installed (check 'packages' in the topology yaml)")
     # Drop short-TTL config *before* starting the service so the very first
     # node cert is minted with the test TTL.
     _write_controller_config(controller)

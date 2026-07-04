@@ -100,7 +100,7 @@ def policy_engine_service(nodes, install_user_packages):
         "systemctl cat policy-engine.service >/dev/null 2>&1 && echo EXISTS || echo MISSING"
     )
     if "MISSING" in check:
-        pytest.skip("policy-engine.service not installed (use --install-packages)")
+        pytest.skip("policy-engine.service not installed (check 'packages' in the topology yaml)")
 
     # Suricata can saturate the VM if unconfigured — stop it for the duration.
     try:

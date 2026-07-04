@@ -234,7 +234,7 @@ def controller_service(nodes, install_user_packages):
         "systemctl cat policy-controller.service >/dev/null 2>&1 && echo EXISTS || echo MISSING"
     )
     if "MISSING" in check:
-        pytest.skip("policy-controller.service not installed (use --install-packages)")
+        pytest.skip("policy-controller.service not installed (check 'packages' in the topology yaml)")
 
     status = restart_service(controller, "policy-controller")
     if not status.is_healthy:
@@ -319,7 +319,7 @@ def node_services(
             )
             if "MISSING" in check:
                 pytest.skip(
-                    f"{svc}.service not installed on {node_name} (use --install-packages)"
+                    f"{svc}.service not installed on {node_name} (check 'packages' in the topology yaml)"
                 )
 
         # /etc/hosts entry resolves the "policy-controller" SAN used in the bundle URLs.

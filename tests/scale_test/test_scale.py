@@ -10,7 +10,7 @@ has two interfaces:
 
 Run with:
   pytest tests/scale_test/ -v \\
-      --install-packages /path/to/policy-controller_0.1.0_amd64.deb \\
+      --package-dir /path/to/debs \\
       --engine-image policy-engine:0.1.0 \\
       --agent-image policy-node-agent:0.1.0 \\
       --scale-nodes 25

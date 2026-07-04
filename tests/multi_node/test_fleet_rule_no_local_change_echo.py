@@ -45,11 +45,11 @@ Scenario
 Run with:
   netsim start tests/multi_node/multi_node.yaml
   python3 -m pytest tests/multi_node/test_fleet_rule_no_local_change_echo.py -v \\
-      --install-packages \\
-      policy-engine.deb,policy-engine-client.deb,policy-node-agent.deb,policy-controller.deb
+      --package-dir ..
   netsim destroy tests/multi_node/multi_node.yaml
 
-``policy-engine-client.deb`` is needed on the agent nodes so this test can read
+``policy-engine-client.deb`` is needed on the agent nodes (declared in
+the topology yaml) so this test can read
 the local engine's rule table via ``policy-client``.
 """
 

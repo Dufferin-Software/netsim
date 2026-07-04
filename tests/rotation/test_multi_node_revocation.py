@@ -25,7 +25,7 @@ test_tls_revocation.py) regardless of pytest collection order.
 Run with:
   netsim start tests/rotation/rotation.yaml
   python3 -m pytest tests/rotation/test_multi_node_revocation.py -v \\
-      --install-packages policy-engine.deb,policy-node-agent.deb,policy-controller.deb
+      --package-dir ..
   netsim destroy tests/rotation/rotation.yaml
 """
 

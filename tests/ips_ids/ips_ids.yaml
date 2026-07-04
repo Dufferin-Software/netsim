@@ -1,5 +1,6 @@
 name: "ips-ids"
 version: "1.0"
+package_dir: "../../.."
 
 networks:
   - name: "net1"
@@ -18,6 +19,9 @@ nodes:
     vcpus: 2
     networks:
       - "net1"
+    packages:
+      - "policy-engine-ips_*.deb"
+      - "policy-engine-client_*.deb"
 
   # Client: generates traffic for IPS/IDS inspection
   - name: "client"

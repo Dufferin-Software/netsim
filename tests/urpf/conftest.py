@@ -59,7 +59,7 @@ def policy_engine_service(nodes, install_user_packages):
     )
     if "MISSING" in check_result:
         pytest.skip(
-            "policy-engine.service not installed on transit (use --install-packages)"
+            "policy-engine.service not installed on transit (check 'packages' in the topology yaml)"
         )
 
     # Stop suricata if present — it crash-loops when unconfigured.

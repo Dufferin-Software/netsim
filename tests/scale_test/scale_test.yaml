@@ -1,5 +1,6 @@
 name: "scale-test"
 version: "1.0"
+package_dir: "../../.."
 
 networks:
   - name: "mgmt"
@@ -17,6 +18,9 @@ nodes:
     vcpus: 2
     networks:
       - "mgmt"
+    packages:
+      - "policy-controller_*.deb"
+      - "policy-controller-client_*.deb"
 
   # Docker host — runs N policy-engine + policy-node-agent container pairs
   # Increase memory for larger --scale-nodes values:

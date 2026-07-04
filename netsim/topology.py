@@ -32,6 +32,9 @@ class Node:
     networks: List[str] = field(
         default_factory=list
     )  # List of network names; first is mgmt
+    packages: List[str] = field(
+        default_factory=list
+    )  # Debian package globs (resolved against Topology.package_dir)
 
 
 @dataclass
@@ -42,6 +45,9 @@ class Topology:
     version: str = "1.0"
     nodes: List[Node] = field(default_factory=list)
     networks: List[Network] = field(default_factory=list)
+    # Directory containing the .deb packages referenced by Node.packages.
+    # Relative paths are resolved against the topology YAML's directory.
+    package_dir: Optional[str] = None
 
     def get_node(self, name: str) -> Optional[Node]:
         """Get a node by name."""
@@ -87,6 +93,15 @@ class TopologyParser:
             # Get list of network names this node connects to
             node_networks: List[str] = node_data.get("networks", [])
 
+            node_packages = node_data.get("packages", [])
+            if not isinstance(node_packages, list) or not all(
+                isinstance(p, str) for p in node_packages
+            ):
+                raise ValueError(
+                    f"Node {node_data['name']}: 'packages' must be a list of "
+                    "package filename globs"
+                )
+
             nodes.append(
                 Node(
                     name=node_data["name"],
@@ -94,6 +109,7 @@ class TopologyParser:
                     memory=node_data.get("memory", 512),
                     vcpus=node_data.get("vcpus", 1),
                     networks=node_networks,
+                    packages=node_packages,
                 )
             )
 
@@ -105,6 +121,7 @@ class TopologyParser:
             version=data.get("version", "1.0"),
             nodes=nodes,
             networks=networks,
+            package_dir=data.get("package_dir"),
         )
 
     @staticmethod
