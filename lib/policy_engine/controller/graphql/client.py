@@ -594,6 +594,151 @@ class ControllerClient:
         r = data["setUrpf"]
         return OperationResult(success=r["success"], message=r.get("message"))
 
+    def set_inspect_mode(self, node_id: str, mode: str) -> OperationResult:
+        """Set the node-global Suricata inspect mode ("disabled"/"ips"/"ids")."""
+        query = """
+        mutation SetInspectMode($nodeId: ID!, $mode: String!) {
+            setInspectMode(nodeId: $nodeId, mode: $mode) { success message }
+        }
+        """
+        data = self._execute(query, {"nodeId": node_id, "mode": mode})
+        r = data["setInspectMode"]
+        return OperationResult(success=r["success"], message=r.get("message"))
+
+    def set_inspect_interface(
+        self, node_id: str, interface_name: str, enabled: bool
+    ) -> OperationResult:
+        """Enable or disable Suricata inspection on a single interface."""
+        query = """
+        mutation SetInspectInterface($nodeId: ID!, $interfaceName: String!, $enabled: Boolean!) {
+            setInspectInterface(nodeId: $nodeId, interfaceName: $interfaceName, enabled: $enabled) {
+                success message
+            }
+        }
+        """
+        data = self._execute(
+            query,
+            {"nodeId": node_id, "interfaceName": interface_name, "enabled": enabled},
+        )
+        r = data["setInspectInterface"]
+        return OperationResult(success=r["success"], message=r.get("message"))
+
+    def create_suricata_ruleset(self, name: str, content: str) -> dict:
+        """Create a fleet Suricata ruleset; returns the created ruleset dict."""
+        query = """
+        mutation CreateSuricataRuleset($name: String!, $content: String!) {
+            createSuricataRuleset(name: $name, content: $content) {
+                id name filename sha256 ruleCount assignedNodeIds
+            }
+        }
+        """
+        return self._execute(query, {"name": name, "content": content})[
+            "createSuricataRuleset"
+        ]
+
+    def update_suricata_ruleset(self, ruleset_id: str, content: str) -> dict:
+        """Replace a ruleset's content."""
+        query = """
+        mutation UpdateSuricataRuleset($id: ID!, $content: String!) {
+            updateSuricataRuleset(id: $id, content: $content) {
+                id name filename sha256 ruleCount
+            }
+        }
+        """
+        return self._execute(query, {"id": ruleset_id, "content": content})[
+            "updateSuricataRuleset"
+        ]
+
+    def delete_suricata_ruleset(self, ruleset_id: str) -> OperationResult:
+        query = """
+        mutation DeleteSuricataRuleset($id: ID!) {
+            deleteSuricataRuleset(id: $id) { success message }
+        }
+        """
+        r = self._execute(query, {"id": ruleset_id})["deleteSuricataRuleset"]
+        return OperationResult(success=r["success"], message=r.get("message"))
+
+    def assign_suricata_ruleset(
+        self, node_id: str, ruleset_id: str
+    ) -> OperationResult:
+        query = """
+        mutation AssignSuricataRuleset($nodeId: ID!, $rulesetId: ID!) {
+            assignSuricataRuleset(nodeId: $nodeId, rulesetId: $rulesetId) { success message }
+        }
+        """
+        r = self._execute(query, {"nodeId": node_id, "rulesetId": ruleset_id})[
+            "assignSuricataRuleset"
+        ]
+        return OperationResult(success=r["success"], message=r.get("message"))
+
+    def unassign_suricata_ruleset(
+        self, node_id: str, ruleset_id: str
+    ) -> OperationResult:
+        query = """
+        mutation UnassignSuricataRuleset($nodeId: ID!, $rulesetId: ID!) {
+            unassignSuricataRuleset(nodeId: $nodeId, rulesetId: $rulesetId) { success message }
+        }
+        """
+        r = self._execute(query, {"nodeId": node_id, "rulesetId": ruleset_id})[
+            "unassignSuricataRuleset"
+        ]
+        return OperationResult(success=r["success"], message=r.get("message"))
+
+    def push_suricata_rulesets(self, node_id: str) -> OperationResult:
+        query = """
+        mutation PushSuricataRulesets($nodeId: ID!) {
+            pushSuricataRulesets(nodeId: $nodeId) { success message }
+        }
+        """
+        r = self._execute(query, {"nodeId": node_id})["pushSuricataRulesets"]
+        return OperationResult(success=r["success"], message=r.get("message"))
+
+    def node_suricata_rulesets(self, node_id: str) -> List[dict]:
+        """Assigned rulesets for a node, each with an ``inSync`` flag."""
+        query = """
+        query NodeSuricataRulesets($nodeId: ID!) {
+            nodeSuricataRulesets(nodeId: $nodeId) {
+                id name filename sha256 ruleCount inSync
+            }
+        }
+        """
+        return self._execute(query, {"nodeId": node_id})["nodeSuricataRulesets"]
+
+    def suricata_alerts(
+        self,
+        node_id: Optional[str] = None,
+        min_severity: Optional[int] = None,
+        signature_id: Optional[int] = None,
+        limit: int = 200,
+    ) -> List[dict]:
+        """Query persisted Suricata alerts (newest first)."""
+        query = """
+        query SuricataAlerts($filter: SuricataAlertFilterInput, $limit: Int) {
+            suricataAlerts(filter: $filter, limit: $limit) {
+                id nodeId timestamp srcIp srcPort destIp destPort
+                protocol action signatureId signature category severity
+            }
+        }
+        """
+        filt: dict = {}
+        if node_id is not None:
+            filt["nodeId"] = node_id
+        if min_severity is not None:
+            filt["minSeverity"] = min_severity
+        if signature_id is not None:
+            filt["signatureId"] = signature_id
+        return self._execute(query, {"filter": filt, "limit": limit})["suricataAlerts"]
+
+    def node_inspect_state(self, node_id: str) -> dict:
+        """Node inspect_mode + capabilities + per-interface inspect flags."""
+        query = """
+        query NodeInspect($nodeId: ID!) {
+            node(id: $nodeId) { inspectMode capabilities }
+            nodeInterfaces(nodeId: $nodeId) { name inspectEnabled }
+        }
+        """
+        return self._execute(query, {"nodeId": node_id})
+
     def set_interface_default_action(
         self,
         node_id: str,
