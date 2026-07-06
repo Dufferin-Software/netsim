@@ -709,14 +709,15 @@ class ControllerClient:
         node_id: Optional[str] = None,
         min_severity: Optional[int] = None,
         signature_id: Optional[int] = None,
+        include_acked: bool = False,
         limit: int = 200,
     ) -> List[dict]:
-        """Query persisted Suricata alerts (newest first)."""
+        """Query persisted Suricata alerts (newest first, unacked only by default)."""
         query = """
         query SuricataAlerts($filter: SuricataAlertFilterInput, $limit: Int) {
             suricataAlerts(filter: $filter, limit: $limit) {
                 id nodeId timestamp srcIp srcPort destIp destPort
-                protocol action signatureId signature category severity
+                protocol action signatureId signature category severity acked
             }
         }
         """
@@ -727,7 +728,33 @@ class ControllerClient:
             filt["minSeverity"] = min_severity
         if signature_id is not None:
             filt["signatureId"] = signature_id
+        if include_acked:
+            filt["includeAcked"] = True
         return self._execute(query, {"filter": filt, "limit": limit})["suricataAlerts"]
+
+    def ack_suricata_alerts(self, node_id: Optional[str] = None) -> OperationResult:
+        """Acknowledge all unacked Suricata alerts, optionally scoped to one node.
+
+        Acked alerts stay stored (visible with ``include_acked=True``) until
+        the retention sweep deletes them.
+        """
+        query = """
+        mutation AckSuricataAlerts($nodeId: ID) {
+            ackSuricataAlerts(nodeId: $nodeId) { success message }
+        }
+        """
+        r = self._execute(query, {"nodeId": node_id})["ackSuricataAlerts"]
+        return OperationResult(success=r["success"], message=r.get("message"))
+
+    def clear_suricata_alerts(self, node_id: Optional[str] = None) -> OperationResult:
+        """Permanently delete persisted Suricata alerts (admin purge; prefer ack)."""
+        query = """
+        mutation ClearSuricataAlerts($nodeId: ID) {
+            clearSuricataAlerts(nodeId: $nodeId) { success message }
+        }
+        """
+        r = self._execute(query, {"nodeId": node_id})["clearSuricataAlerts"]
+        return OperationResult(success=r["success"], message=r.get("message"))
 
     def node_inspect_state(self, node_id: str) -> dict:
         """Node inspect_mode + capabilities + per-interface inspect flags."""
