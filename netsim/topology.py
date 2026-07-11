@@ -34,7 +34,37 @@ class Node:
     )  # List of network names; first is mgmt
     packages: List[str] = field(
         default_factory=list
-    )  # Debian package globs (resolved against Topology.package_dir)
+    )  # Feature-agnostic Debian package globs (resolved against
+    # Topology.package_dir); installed regardless of the selected feature
+    package_features: Dict[str, List[str]] = field(
+        default_factory=dict
+    )  # Feature name → package globs, from the nested
+    # 'packages: features: {...}' form; exactly one of packages /
+    # package_features is populated
+
+    def packages_for(self, feature: str) -> List[str]:
+        """
+        Package globs to install for the given feature set.
+
+        Nodes with a plain 'packages' list are feature-agnostic and return it
+        unchanged.  Nodes with 'packages: features: {...}' must declare the
+        requested feature explicitly — a missing entry is an error, not an
+        empty install, so a typo'd --feature can't silently skip the engine.
+        """
+        if self.package_features:
+            if feature not in self.package_features:
+                available = ", ".join(sorted(self.package_features))
+                raise ValueError(
+                    f"Node {self.name}: no package set for feature "
+                    f"'{feature}' (available: {available})"
+                )
+            return self.package_features[feature]
+        return self.packages
+
+    @property
+    def has_packages(self) -> bool:
+        """True if this node installs any packages (either form)."""
+        return bool(self.packages or self.package_features)
 
 
 @dataclass
@@ -93,14 +123,9 @@ class TopologyParser:
             # Get list of network names this node connects to
             node_networks: List[str] = node_data.get("networks", [])
 
-            node_packages = node_data.get("packages", [])
-            if not isinstance(node_packages, list) or not all(
-                isinstance(p, str) for p in node_packages
-            ):
-                raise ValueError(
-                    f"Node {node_data['name']}: 'packages' must be a list of "
-                    "package filename globs"
-                )
+            node_packages, node_package_features = TopologyParser._parse_packages(
+                node_data["name"], node_data.get("packages", [])
+            )
 
             nodes.append(
                 Node(
@@ -110,6 +135,7 @@ class TopologyParser:
                     vcpus=node_data.get("vcpus", 1),
                     networks=node_networks,
                     packages=node_packages,
+                    package_features=node_package_features,
                 )
             )
 
@@ -123,6 +149,55 @@ class TopologyParser:
             networks=networks,
             package_dir=data.get("package_dir"),
         )
+
+    @staticmethod
+    def _parse_packages(
+        node_name: str, raw: Any
+    ) -> tuple[List[str], Dict[str, List[str]]]:
+        """
+        Parse a node's 'packages' entry, which takes one of two forms:
+
+          packages:                      # flat: feature-agnostic
+            - "policy-engine_*.deb"
+
+          packages:                      # nested: per-feature package sets,
+            features:                    # selected with pytest --feature
+              vanilla:
+                - "policy-engine_*.deb"
+              ips:
+                - "policy-engine-ips_*.deb"
+
+        Returns (flat_globs, feature_globs); exactly one is non-empty.
+        """
+
+        def _check_globs(globs: Any, what: str) -> List[str]:
+            if not isinstance(globs, list) or not all(
+                isinstance(g, str) for g in globs
+            ):
+                raise ValueError(
+                    f"Node {node_name}: {what} must be a list of package filename globs"
+                )
+            return globs
+
+        if isinstance(raw, dict):
+            unknown = set(raw) - {"features"}
+            if unknown:
+                raise ValueError(
+                    f"Node {node_name}: unknown key(s) under 'packages': "
+                    f"{', '.join(sorted(unknown))} (expected 'features')"
+                )
+            features = raw.get("features")
+            if not isinstance(features, dict) or not features:
+                raise ValueError(
+                    f"Node {node_name}: 'packages.features' must be a "
+                    "non-empty mapping of feature name to package list"
+                )
+            return [], {
+                str(feat): _check_globs(globs, f"packages.features['{feat}']")
+                for feat, globs in features.items()
+            }
+
+        return _check_globs(raw, "'packages'"), {}
 
     @staticmethod
     def _validate(networks: List[Network], nodes: List[Node]) -> None:

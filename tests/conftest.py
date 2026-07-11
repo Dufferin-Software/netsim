@@ -178,6 +178,15 @@ def pytest_addoption(parser) -> None:
         "'package_dir')",
     )
     parser.addoption(
+        "--feature",
+        action="store",
+        default="vanilla",
+        help="Engine feature set to install on nodes whose topology declares "
+        "per-feature package sets ('packages: features: {...}'), e.g. "
+        "vanilla, ips, ipfix, ips-ipfix. Nodes with a plain 'packages' "
+        "list always install it, regardless of this flag (default: vanilla)",
+    )
+    parser.addoption(
         "--scale-nodes",
         action="store",
         type=int,
@@ -234,11 +243,12 @@ def pytest_configure(config) -> None:
     # the topology_path fixture); anything missed here still fails cleanly in
     # the install_user_packages fixture.
     pkg_dir_override = config.getoption("--package-dir", default=None)
+    feature = config.getoption("--feature", default="vanilla")
     errors = []
     for topo_path in _discover_topology_files(config):
         try:
             topo = TopologyParser.load(str(topo_path))
-            _resolve_node_packages(topo, topo_path, pkg_dir_override)
+            _resolve_node_packages(topo, topo_path, pkg_dir_override, feature)
         except Exception as e:
             errors.append(str(e))
 
@@ -937,20 +947,27 @@ def _pkg_excluded(filename: str) -> bool:
 
 
 def _resolve_node_packages(
-    topology: Topology, topology_path, package_dir_override: str | None = None
+    topology: Topology,
+    topology_path,
+    package_dir_override: str | None = None,
+    feature: str = "vanilla",
 ) -> Dict[str, list[Path]]:
     """
     Resolve each node's package globs to concrete .deb paths.
 
-    Globs come from the per-node 'packages' list in the topology YAML and are
-    resolved against the package directory (--package-dir overrides the
-    topology's 'package_dir'; a relative directory resolves against the YAML's
-    location). dbgsym/dev/doc packages are never matched, and when several
-    .debs match one glob (e.g. stale versions) the newest wins.
+    Globs come from the per-node 'packages' entry in the topology YAML —
+    either a flat feature-agnostic list, or the per-feature nested form
+    ('packages: features: {...}') from which the set named by --feature is
+    selected. Globs are resolved against the package directory
+    (--package-dir overrides the topology's 'package_dir'; a relative
+    directory resolves against the YAML's location). dbgsym/dev/doc packages
+    are never matched, and when several .debs match one glob (e.g. stale
+    versions) the newest wins.
 
-    Raises ValueError on a missing package directory or an unmatched glob.
+    Raises ValueError on a missing package directory, an unmatched glob, or
+    a feature the node does not declare.
     """
-    if not any(node.packages for node in topology.nodes):
+    if not any(node.has_packages for node in topology.nodes):
         return {}
 
     if package_dir_override:
@@ -972,8 +989,12 @@ def _resolve_node_packages(
 
     resolved: Dict[str, list[Path]] = {}
     for node in topology.nodes:
+        try:
+            node_globs = node.packages_for(feature)
+        except ValueError as e:
+            raise ValueError(f"{topology_path}: {e}") from e
         paths: list[Path] = []
-        for pattern in node.packages:
+        for pattern in node_globs:
             matches = [
                 p
                 for p in pkg_dir.glob(pattern)
@@ -1000,9 +1021,13 @@ def install_user_packages(topology, topology_path, nodes, apt_updated, request) 
     any declared dependencies automatically. Nodes without a 'packages' list
     get nothing installed. Fails the test if any package installation fails.
     """
+    feature = request.config.getoption("--feature")
     try:
         node_packages = _resolve_node_packages(
-            topology, topology_path, request.config.getoption("--package-dir")
+            topology,
+            topology_path,
+            request.config.getoption("--package-dir"),
+            feature,
         )
     except ValueError as e:
         pytest.fail(str(e))
@@ -1013,7 +1038,7 @@ def install_user_packages(topology, topology_path, nodes, apt_updated, request) 
 
     logger.info("=" * 60)
     logger.info(
-        "Installing packages: "
+        f"Installing packages (feature: {feature}): "
         + "; ".join(
             f"{name}: {', '.join(p.name for p in pkgs)}"
             for name, pkgs in node_packages.items()

@@ -6,3 +6,11 @@ and `tests/policy_sanity/test_sni_matching.py` are gone.
 
 Cert revocation lives in `tests/rotation/test_tls_revocation.py` and
 `tests/rotation/test_multi_node_revocation.py`.
+
+Topology `packages` supports per-feature package sets: nodes may declare
+`packages: features: {vanilla: [...], ips: [...], ipfix: [...],
+ips-ipfix: [...]}` and `pytest --feature <name>` (default `vanilla`)
+selects which set installs — this is how the general suites run against
+the IPS/IPFIX engine builds.  A plain `packages:` list is
+feature-agnostic and installs regardless of the flag (used by suites
+pinned to one build, e.g. `tests/ips_ids/`, and by controller nodes).

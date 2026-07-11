@@ -20,8 +20,19 @@ nodes:
     networks:
       - "net1"
     packages:
-      - "policy-engine_*.deb"
-      - "policy-engine-client_*.deb"
+      features:
+        vanilla:
+          - "policy-engine_*.deb"
+          - "policy-engine-client_*.deb"
+        ips:
+          - "policy-engine-ips_*.deb"
+          - "policy-engine-client_*.deb"
+        ipfix:
+          - "policy-engine-ipfix_*.deb"
+          - "policy-engine-client_*.deb"
+        ips-ipfix:
+          - "policy-engine-ips-ipfix_*.deb"
+          - "policy-engine-client_*.deb"
 
   # Node 2: traffic source/sink for MAC matching tests
   - name: "client"

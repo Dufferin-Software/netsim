@@ -38,9 +38,23 @@ nodes:
       - "mgmt"
       - "data"
     packages:
-      - "policy-engine_*.deb"
-      - "policy-engine-client_*.deb"
-      - "policy-node-agent_*.deb"
+      features:
+        vanilla:
+          - "policy-engine_*.deb"
+          - "policy-engine-client_*.deb"
+          - "policy-node-agent_*.deb"
+        ips:
+          - "policy-engine-ips_*.deb"
+          - "policy-engine-client_*.deb"
+          - "policy-node-agent_*.deb"
+        ipfix:
+          - "policy-engine-ipfix_*.deb"
+          - "policy-engine-client_*.deb"
+          - "policy-node-agent_*.deb"
+        ips-ipfix:
+          - "policy-engine-ips-ipfix_*.deb"
+          - "policy-engine-client_*.deb"
+          - "policy-node-agent_*.deb"
 
   # Node 2: runs policy-engine + policy-node-agent
   - name: "node2"
@@ -54,9 +68,23 @@ nodes:
       - "mgmt"
       - "data"
     packages:
-      - "policy-engine_*.deb"
-      - "policy-engine-client_*.deb"
-      - "policy-node-agent_*.deb"
+      features:
+        vanilla:
+          - "policy-engine_*.deb"
+          - "policy-engine-client_*.deb"
+          - "policy-node-agent_*.deb"
+        ips:
+          - "policy-engine-ips_*.deb"
+          - "policy-engine-client_*.deb"
+          - "policy-node-agent_*.deb"
+        ipfix:
+          - "policy-engine-ipfix_*.deb"
+          - "policy-engine-client_*.deb"
+          - "policy-node-agent_*.deb"
+        ips-ipfix:
+          - "policy-engine-ips-ipfix_*.deb"
+          - "policy-engine-client_*.deb"
+          - "policy-node-agent_*.deb"
 
   # Node 3: runs policy-engine + policy-node-agent (used for decommission test)
   - name: "node3"
@@ -70,7 +98,21 @@ nodes:
       - "mgmt"
       - "data"
     packages:
-      - "policy-engine_*.deb"
-      - "policy-engine-client_*.deb"
-      - "policy-node-agent_*.deb"
+      features:
+        vanilla:
+          - "policy-engine_*.deb"
+          - "policy-engine-client_*.deb"
+          - "policy-node-agent_*.deb"
+        ips:
+          - "policy-engine-ips_*.deb"
+          - "policy-engine-client_*.deb"
+          - "policy-node-agent_*.deb"
+        ipfix:
+          - "policy-engine-ipfix_*.deb"
+          - "policy-engine-client_*.deb"
+          - "policy-node-agent_*.deb"
+        ips-ipfix:
+          - "policy-engine-ips-ipfix_*.deb"
+          - "policy-engine-client_*.deb"
+          - "policy-node-agent_*.deb"
 

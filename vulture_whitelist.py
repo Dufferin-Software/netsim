@@ -12,10 +12,13 @@ cleanup_leftover_taps  # netsim/libvirt_utils.py
 cleanup_leftover_vms  # netsim/libvirt_utils.py
 log_vm_count  # netsim/libvirt_utils.py
 _.get_node  # netsim/topology.py — Topology.get_node()
+_.packages_for  # netsim/topology.py — Node.packages_for(--feature selection)
+_.has_packages  # netsim/topology.py — Node.has_packages
 
 # --- Dataclass fields read via attribute access / YAML (de)serialization ---
 ipv6_subnet  # netsim/topology.py — Network.ipv6_subnet
 version  # netsim/topology.py — Topology.version
+package_dir  # netsim/topology.py — Topology.package_dir, read by conftest
 
 # --- ElementTree idiom: `ET.SubElement(...).text = "..."` is a write that
 #     vulture sees as an unused attribute; the value is serialized into XML. ---
