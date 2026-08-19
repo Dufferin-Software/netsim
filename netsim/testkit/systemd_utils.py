@@ -240,7 +240,7 @@ def systemd_service(nodes: Dict[str, Node]):
 
     Usage:
         def test_example(systemd_service):
-            with systemd_service("server", "policy-engine") as status:
+            with systemd_service("server", "nginx") as status:
                 assert status.is_healthy
                 # Service is running here
             # Service is automatically stopped after the with block

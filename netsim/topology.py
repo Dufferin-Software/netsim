@@ -158,14 +158,14 @@ class TopologyParser:
         Parse a node's 'packages' entry, which takes one of two forms:
 
           packages:                      # flat: feature-agnostic
-            - "policy-engine_*.deb"
+            - "myapp_*.deb"
 
           packages:                      # nested: per-feature package sets,
             features:                    # selected with pytest --feature
               vanilla:
-                - "policy-engine_*.deb"
-              ips:
-                - "policy-engine-ips_*.deb"
+                - "myapp_*.deb"
+              tls:
+                - "myapp-tls_*.deb"
 
         Returns (flat_globs, feature_globs); exactly one is non-empty.
         """

@@ -1,21 +1,15 @@
 #!/usr/bin/env bash
-# Run every netsim test suite sequentially and summarise pass/fail.
+# Run netsim's own test suites sequentially and summarise pass/fail.
 #
 # Usage:
-#   tests/run_all.sh [PKG_DIR]
+#   tests/run_all.sh
 #
-# PKG_DIR defaults to ../  (where dpkg-buildpackage drops the .debs).
-# Override the suite list with SUITES="a b c" tests/run_all.sh.
-# Skip suites with SKIP="scale_test policy_performance" tests/run_all.sh.
-#
-# Which packages land on which node is declared per node in each suite's
-# topology yaml ('packages' globs, resolved against PKG_DIR via
-# --package-dir); pytest validates the globs before starting any VMs.
+# Override the suite list with SUITES="a b" tests/run_all.sh, or skip some
+# with SKIP="three_node_iperf" tests/run_all.sh.
 
 set -u
 cd "$(dirname "$0")/.."
 
-PKG_DIR="${1:-..}"
 SKIP="${SKIP:-}"
 LOG_DIR="${LOG_DIR:-pytest-logs}"
 mkdir -p "$LOG_DIR"
@@ -33,16 +27,12 @@ declare -A RESULT
 declare -A DURATION
 declare -A COUNTS
 overall=0
-current_topo=""
 interrupted=0
 
 on_interrupt() {
   interrupted=1
   echo
-  echo "=== interrupted, cleaning up..." >&2
-  if [[ -n "$current_topo" ]]; then
-    netsim destroy "$current_topo" >>"${current_log:-/dev/null}" 2>&1 || true
-  fi
+  echo "=== interrupted; run 'netsim destroy' on the topology if VMs remain" >&2
   trap - INT
   # Re-raise so the exit status reflects the signal.
   kill -INT $$
@@ -57,8 +47,6 @@ for suite in $SUITES; do
 
   topo="tests/$suite/$suite.yaml"
   log="$LOG_DIR/$suite.log"
-  current_topo="$topo"
-  current_log="$log"
 
   echo
   echo "================================================================"
@@ -69,41 +57,33 @@ for suite in $SUITES; do
   start=$SECONDS
   status=PASS
 
-  if ! netsim start "$topo" 2>&1 | tee "$log"; then
-    status=START_FAIL
-  else
-    if ! python3 -m pytest "tests/$suite/" -v \
-        --package-dir "$PKG_DIR" 2>&1 | tee -a "$log"; then
-      status=FAIL
-    fi
-    # Pull the pass/fail/skip counts out of pytest's final summary line
-    # (e.g. "==== 1 failed, 2 passed, 3 skipped in 4.56s ===="). A suite can
-    # exit 0 while skipping every test, so the counts matter beyond PASS/FAIL.
-    summary_line=$(grep -E '^=+ .*(passed|failed|skipped|error|no tests ran)' \
-      "$log" | tail -n1)
-    if [[ -n "$summary_line" ]]; then
-      counts=""
-      for kind in failed passed skipped error errors xfailed deselected; do
-        n=$(grep -oE "[0-9]+ $kind\b" <<<"$summary_line" | grep -oE '^[0-9]+')
-        [[ -n "$n" ]] && counts+="${counts:+, }$n $kind"
-      done
-      COUNTS[$suite]="$counts"
-      # Surface a suite that passed-but-skipped-everything: if there were
-      # skips and nothing actually passed, it didn't really test anything.
-      if [[ $status == PASS && "$summary_line" != *" passed"* \
-            && "$summary_line" == *" skipped"* ]]; then
-        status=ALL_SKIPPED
-      fi
+  # pytest owns the topology: the autouse running_topology fixture boots the
+  # VMs and destroys them again, including after a failure.
+  if ! python3 -m pytest "tests/$suite/" -v 2>&1 | tee "$log"; then
+    status=FAIL
+  fi
+  # Pull the pass/fail/skip counts out of pytest's final summary line
+  # (e.g. "==== 1 failed, 2 passed, 3 skipped in 4.56s ===="). A suite can
+  # exit 0 while skipping every test, so the counts matter beyond PASS/FAIL.
+  summary_line=$(grep -E '^=+ .*(passed|failed|skipped|error|no tests ran)' \
+    "$log" | tail -n1)
+  if [[ -n "$summary_line" ]]; then
+    counts=""
+    for kind in failed passed skipped error errors xfailed deselected; do
+      n=$(grep -oE "[0-9]+ $kind\b" <<<"$summary_line" | grep -oE '^[0-9]+')
+      [[ -n "$n" ]] && counts+="${counts:+, }$n $kind"
+    done
+    COUNTS[$suite]="$counts"
+    # Surface a suite that passed-but-skipped-everything: if there were
+    # skips and nothing actually passed, it didn't really test anything.
+    if [[ $status == PASS && "$summary_line" != *" passed"* \
+          && "$summary_line" == *" skipped"* ]]; then
+      status=ALL_SKIPPED
     fi
   fi
 
-  # Always attempt teardown so the next suite starts clean.
-  netsim destroy "$topo" >>"$log" 2>&1 || true
-
   DURATION[$suite]=$((SECONDS - start))
   RESULT[$suite]=$status
-  current_topo=""
-  current_log=""
   # ALL_SKIPPED is reported but, like an explicit SKIP, doesn't fail the run.
   case "$status" in PASS|ALL_SKIPPED) ;; *) overall=1 ;; esac
 done

@@ -73,6 +73,30 @@ netsim destroy examples/two-node-topology.yaml
 - `netsim destroy <topology.yaml>`
 - `netsim image list|download|remove|clear`
 
+## Writing Tests
+
+`netsim.testkit` is a pytest plugin that turns a topology into fixtures: booted
+VMs, SSH access, netplan-configured interfaces, and `.deb` installation. Install
+it with the extra, then opt in from your project's rootdir `conftest.py`:
+
+```bash
+pip install 'netsim[testkit] @ git+ssh://git@github.com/Dufferin-Software/netsim.git@v0.2.0'
+```
+
+```python
+# conftest.py
+pytest_plugins = ["netsim.testkit.plugin"]
+```
+
+A suite is a directory holding its topology, named after it — a test in
+`tests/mysuite/` loads `tests/mysuite/mysuite.yaml`. From there the fixtures
+`topology`, `nodes`, `node_interfaces`, `configure_node_interfaces` and
+`install_user_packages` are available, along with the options `--package-dir`,
+`--feature`, `--pause-on-failure` and `--tpm`. Inherit `BaseTopologyTests` to
+pick up the standard allocation, interface and connectivity assertions.
+
+`tests/two_node_iperf/` is the smallest complete example.
+
 ## Troubleshooting
 - Permission errors / Operation not permitted: ensure `setup-user-mode.sh` ran, re-login; check `id` for `libvirt` and `kvm` groups; verify `/etc/sudoers.d/netsim` exists.
 - Libvirt connection errors: `sudo systemctl start libvirtd`; set `NETSIM_LIBVIRT_URI` if using system libvirt.
