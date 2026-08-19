@@ -34,8 +34,12 @@ import pytest
 
 from lib.policy_engine.controller.graphql.client import ControllerClient
 from lib.policy_engine.engine.graphql.client import GraphQLPolicyClient
-from tests.node import Node
-from tests.systemd_utils import get_service_status, restart_service, start_service
+from netsim.testkit.node import Node
+from netsim.testkit.systemd_utils import (
+    get_service_status,
+    restart_service,
+    start_service,
+)
 from tests.multi_node.helpers import (
     data_iface,
     delete_controller_rules,

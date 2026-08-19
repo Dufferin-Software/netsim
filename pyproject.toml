@@ -62,10 +62,13 @@ module = ["scapy.*", "aioquic.*"]
 ignore_missing_imports = true
 
 [tool.vulture]
-# Dead-code detection. Scans the netsim/ package only; vulture_whitelist.py
-# exempts names that are used from tests/ or via (de)serialization. See the
-# `dead-code` target in the Makefile.
+# Dead-code detection. Scans the netsim/ package; vulture_whitelist.py exempts
+# names that are used from tests/ or via (de)serialization. See the `dead-code`
+# target in the Makefile.
 paths = ["netsim", "vulture_whitelist.py"]
+# netsim/testkit is a library for consumers, so most of its surface has no
+# caller inside this repo. Dead code there is found by the projects using it.
+exclude = ["netsim/testkit"]
 min_confidence = 60
 
 [build-system]

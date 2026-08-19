@@ -12,8 +12,8 @@ import json
 import time
 import logging
 import pytest
-from tests.conftest import BaseTopologyTests
-from tests.process_helpers import kill_process
+from netsim.testkit.base import BaseTopologyTests
+from netsim.testkit.process_helpers import kill_process
 
 logger = logging.getLogger(__name__)
 

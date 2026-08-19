@@ -24,8 +24,8 @@ import logging
 import time
 from typing import Dict
 
-from tests.node import Node
-from tests.systemd_utils import restart_service
+from netsim.testkit.node import Node
+from netsim.testkit.systemd_utils import restart_service
 from lib.policy_engine.controller.graphql.client import ControllerClient
 
 from tests.rotation.conftest import (

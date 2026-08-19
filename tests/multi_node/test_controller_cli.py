@@ -20,7 +20,7 @@ import json
 import logging
 
 
-from tests.node import Node
+from netsim.testkit.node import Node
 
 logger = logging.getLogger(__name__)
 

@@ -20,7 +20,7 @@ import logging
 import textwrap
 import time
 
-from tests.nping_utils import send_ping
+from netsim.testkit.nping_utils import send_ping
 
 logger = logging.getLogger(__name__)
 

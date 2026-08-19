@@ -11,7 +11,7 @@ import json
 import logging
 from typing import Any, List, Optional
 
-from tests.node import Node
+from netsim.testkit.node import Node
 from lib.policy_engine.engine.cli.client import (
     AddRuleOptions,
     BatchAddRulesResult,

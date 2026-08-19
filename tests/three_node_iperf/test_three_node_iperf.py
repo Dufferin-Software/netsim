@@ -14,10 +14,10 @@ import time
 import logging
 import pytest
 import netaddr
-from tests.conftest import BaseTopologyTests
-from tests.parallel_utils import run_parallel_simple
-from tests.network_helpers import enable_ip_forwarding, add_route
-from tests.process_helpers import kill_process
+from netsim.testkit.base import BaseTopologyTests
+from netsim.testkit.parallel_utils import run_parallel_simple
+from netsim.testkit.network_helpers import enable_ip_forwarding, add_route
+from netsim.testkit.process_helpers import kill_process
 
 logger = logging.getLogger(__name__)
 

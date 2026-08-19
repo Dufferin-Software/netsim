@@ -17,7 +17,7 @@ import logging
 import time
 
 
-from tests.nping_utils import send_ping, send_tcp_syn, send_udp_packets
+from netsim.testkit.nping_utils import send_ping, send_tcp_syn, send_udp_packets
 from lib.policy_engine.engine.cli.client import AddRuleOptions
 
 logger = logging.getLogger(__name__)

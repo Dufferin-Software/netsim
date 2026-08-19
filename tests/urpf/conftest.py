@@ -15,8 +15,8 @@ import netaddr
 import pytest
 
 from lib.policy_engine.engine.graphql.client import GraphQLPolicyClient
-from tests.network_helpers import add_route
-from tests.systemd_utils import restart_service, stop_service
+from netsim.testkit.network_helpers import add_route
+from netsim.testkit.systemd_utils import restart_service, stop_service
 
 
 logger = logging.getLogger(__name__)

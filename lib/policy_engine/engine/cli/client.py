@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Optional
 
-from tests.node import Node
+from netsim.testkit.node import Node
 
 logger = logging.getLogger(__name__)
 

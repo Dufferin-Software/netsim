@@ -16,7 +16,7 @@ import logging
 
 
 from lib.policy_engine.engine.cli.client import AddRuleOptions
-from tests.nping_utils import send_ping
+from netsim.testkit.nping_utils import send_ping
 
 logger = logging.getLogger(__name__)
 

@@ -24,7 +24,7 @@ import time
 
 from tenacity import retry, retry_if_exception_type, stop_after_delay, wait_fixed
 
-from tests.nping_utils import send_ping, send_tcp_syn
+from netsim.testkit.nping_utils import send_ping, send_tcp_syn
 
 logger: logging.Logger = logging.getLogger(__name__)
 

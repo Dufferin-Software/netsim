@@ -24,8 +24,8 @@ from typing import Union
 import netaddr
 import pytest
 
-from tests.conftest import BaseTopologyTests
-from tests.systemd_utils import get_service_status
+from netsim.testkit.base import BaseTopologyTests
+from netsim.testkit.systemd_utils import get_service_status
 from lib.policy_engine.engine.cli.client import (
     PolicyClient,
     AddRuleOptions,
@@ -34,7 +34,7 @@ from lib.policy_engine.engine.cli.client import (
     Protocol,
 )
 from lib.policy_engine.engine.graphql.client import GraphQLPolicyClient
-from tests.nping_utils import (
+from netsim.testkit.nping_utils import (
     send_icmp_with_type,
     send_ping,
     send_tcp_syn,

@@ -30,7 +30,7 @@ Tests cover:
 import logging
 import time
 
-from tests.nping_utils import send_tcp_syn
+from netsim.testkit.nping_utils import send_tcp_syn
 from lib.policy_engine.engine.cli.client import AddRuleOptions
 
 logger = logging.getLogger(__name__)

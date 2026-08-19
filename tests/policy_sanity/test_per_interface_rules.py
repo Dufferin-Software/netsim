@@ -19,7 +19,7 @@ import pytest
 
 from lib.policy_engine.engine.cli.client import AddRuleOptions, PolicyAction
 from lib.policy_engine.engine.graphql.client import GraphQLPolicyClient
-from tests.nping_utils import send_ping, send_tcp_syn, send_udp_packets
+from netsim.testkit.nping_utils import send_ping, send_tcp_syn, send_udp_packets
 
 logger = logging.getLogger(__name__)
 

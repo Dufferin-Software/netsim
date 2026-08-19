@@ -62,7 +62,7 @@ import pytest
 
 from lib.policy_engine.controller.graphql.client import ControllerClient
 from lib.policy_engine.engine.cli.client import PolicyClient
-from tests.node import Node
+from netsim.testkit.node import Node
 
 from .helpers import wait_for_node_ready
 

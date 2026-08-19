@@ -29,7 +29,7 @@ import time
 
 import netaddr
 
-from tests.nping_utils import NpingOptions, NpingProtocol, run_nping
+from netsim.testkit.nping_utils import NpingOptions, NpingProtocol, run_nping
 
 logger = logging.getLogger(__name__)
 

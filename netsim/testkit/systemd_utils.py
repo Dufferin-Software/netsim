@@ -10,7 +10,7 @@ from typing import Dict, Optional
 
 import pytest
 
-from tests.node import Node
+from .node import Node
 
 logger = logging.getLogger(__name__)
 

@@ -28,7 +28,7 @@ from typing import Callable, Iterator, Union
 import netaddr
 import pytest
 
-from tests.systemd_utils import restart_service, stop_service
+from netsim.testkit.systemd_utils import restart_service, stop_service
 from lib.policy_engine.engine.cli.client import PolicyClient, PolicyAction
 from lib.policy_engine.engine.graphql.client import GraphQLPolicyClient
 

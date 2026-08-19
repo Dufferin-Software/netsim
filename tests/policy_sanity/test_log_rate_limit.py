@@ -26,7 +26,7 @@ from typing import Union
 import netaddr
 
 from lib.policy_engine.engine.graphql.client import GraphQLPolicyClient
-from tests.nping_utils import send_ping
+from netsim.testkit.nping_utils import send_ping
 from lib.policy_engine.engine.cli.client import (
     AddRuleOptions,
     PolicyAction,

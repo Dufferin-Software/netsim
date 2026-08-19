@@ -27,7 +27,7 @@ from lib.policy_engine.engine.cli.client import (
     WeeklyWindow,
 )
 from lib.policy_engine.engine.graphql.client import GraphQLPolicyClient
-from tests.nping_utils import NpingResult, send_ping
+from netsim.testkit.nping_utils import NpingResult, send_ping
 
 logger: logging.Logger = logging.getLogger(__name__)
 

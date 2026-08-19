@@ -13,7 +13,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, List, Optional
 
-from tests.node import Node
+from netsim.testkit.node import Node
 
 logger: logging.Logger = logging.getLogger(__name__)
 

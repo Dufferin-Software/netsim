@@ -23,8 +23,8 @@ from typing import Dict, List
 
 import pytest
 
-from tests.node import Node
-from tests.systemd_utils import restart_service, stop_service
+from netsim.testkit.node import Node
+from netsim.testkit.systemd_utils import restart_service, stop_service
 from lib.policy_engine.controller.graphql.client import (
     ControllerClient,
     mint_api_token,

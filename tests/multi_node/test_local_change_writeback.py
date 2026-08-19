@@ -53,7 +53,7 @@ import pytest
 
 from lib.policy_engine.controller.graphql.client import ControllerClient
 from lib.policy_engine.engine.cli.client import AddRuleOptions, PolicyClient
-from tests.node import Node
+from netsim.testkit.node import Node
 
 logger = logging.getLogger(__name__)
 

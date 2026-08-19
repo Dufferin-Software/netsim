@@ -30,10 +30,10 @@ from typing import TYPE_CHECKING, List, Optional, Union
 import netaddr
 
 if TYPE_CHECKING:
-    from tests.node import Node
+    from netsim.testkit.node import Node
 
 from lib.policy_engine.engine.graphql.client import GraphQLPolicyClient
-from tests.nping_utils import (
+from netsim.testkit.nping_utils import (
     send_ping,
     send_tcp_packets,
     send_udp_packets,

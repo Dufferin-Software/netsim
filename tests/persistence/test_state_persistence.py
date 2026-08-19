@@ -13,7 +13,7 @@ pinned BPF map mechanism and does not require testing here.
 
 import logging
 
-from tests.nping_utils import send_ping
+from netsim.testkit.nping_utils import send_ping
 from tests.persistence.conftest import (
     reboot_node_and_wait,
     _wait_for_policy_engine_http,

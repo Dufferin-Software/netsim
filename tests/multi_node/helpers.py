@@ -14,7 +14,7 @@ import time
 
 import pytest
 
-from tests.node import Node
+from netsim.testkit.node import Node
 from lib.policy_engine.controller.graphql.client import ControllerClient
 from lib.policy_engine.engine.graphql.client import GraphQLPolicyClient
 

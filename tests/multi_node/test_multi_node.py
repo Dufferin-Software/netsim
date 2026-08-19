@@ -27,7 +27,7 @@ from typing import Dict
 
 import pytest
 
-from tests.systemd_utils import (
+from netsim.testkit.systemd_utils import (
     restart_service,
     stop_service,
     get_service_status,

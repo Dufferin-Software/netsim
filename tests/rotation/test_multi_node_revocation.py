@@ -33,7 +33,7 @@ import logging
 import time
 from typing import Dict
 
-from tests.systemd_utils import restart_service, stop_service
+from netsim.testkit.systemd_utils import restart_service, stop_service
 from lib.policy_engine.controller.graphql.client import ControllerClient
 
 from tests.rotation.conftest import (

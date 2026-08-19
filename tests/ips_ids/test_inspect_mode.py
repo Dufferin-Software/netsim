@@ -15,7 +15,7 @@ Tests the lifecycle of inspect mode (IPS/IDS):
 import logging
 
 
-from tests.conftest import BaseTopologyTests
+from netsim.testkit.base import BaseTopologyTests
 
 logger = logging.getLogger(__name__)
 
