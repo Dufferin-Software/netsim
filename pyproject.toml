@@ -5,6 +5,8 @@ description = "Network Topology Simulator for eBPF XDP Development"
 authors = ["Peter <peter@gmail.com>"]
 readme = "README.md"
 packages = [{include = "netsim"}]
+# netsim/py.typed: consumers type-check against these annotations.
+include = [{path = "netsim/py.typed", format = ["sdist", "wheel"]}]
 
 [tool.poetry.dependencies]
 python = ">=3.9,<4.0"

@@ -185,25 +185,6 @@ def pytest_addoption(parser) -> None:
         "list always install it, regardless of this flag (default: vanilla)",
     )
     parser.addoption(
-        "--scale-nodes",
-        action="store",
-        type=int,
-        default=10,
-        help="Number of policy-engine + policy-node-agent container pairs to spin up in scale tests",
-    )
-    parser.addoption(
-        "--engine-image",
-        action="store",
-        default="policy-engine:0.1.0",
-        help="Docker image name for policy-engine (must exist in local daemon)",
-    )
-    parser.addoption(
-        "--agent-image",
-        action="store",
-        default="policy-node-agent:0.1.0",
-        help="Docker image name for policy-node-agent (must exist in local daemon)",
-    )
-    parser.addoption(
         "--tpm",
         action="store_true",
         default=True,
