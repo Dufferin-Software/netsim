@@ -12,8 +12,8 @@ nodes:
   - name: "server"
     image:
       name: "debian-13-genericcloud"
-      url: "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2"
-      checksum: "ff30b54d70c1292f9ff1115b2ba95d171e067e784b72d02a1d4bc9d8a6a25ed9"
+      url: "https://cloud.debian.org/images/cloud/trixie/20260413-2447/debian-13-genericcloud-amd64-20260413-2447.qcow2"
+      checksum: "3d020c868339c8387f6f40f63e6b5ccb6174e6f2963510cb51cacfd6618244e96549d1b60b3d629df3963cb5350c6dfaf5cf34998301aa578b9d455a76d3c434"
     memory: 512
     vcpus: 1
     networks:
@@ -23,8 +23,8 @@ nodes:
   - name: "client"
     image:
       name: "debian-13-genericcloud"
-      url: "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2"
-      checksum: "ff30b54d70c1292f9ff1115b2ba95d171e067e784b72d02a1d4bc9d8a6a25ed9"
+      url: "https://cloud.debian.org/images/cloud/trixie/20260413-2447/debian-13-genericcloud-amd64-20260413-2447.qcow2"
+      checksum: "3d020c868339c8387f6f40f63e6b5ccb6174e6f2963510cb51cacfd6618244e96549d1b60b3d629df3963cb5350c6dfaf5cf34998301aa578b9d455a76d3c434"
     memory: 512
     vcpus: 1
     networks:
