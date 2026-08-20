@@ -97,6 +97,15 @@ pick up the standard allocation, interface and connectivity assertions.
 
 `tests/two_node_iperf/` is the smallest complete example.
 
+Run one suite at a time — `tests/` is a single package, so pytest sets up the
+package-scoped topology once and a second suite in the same session would reuse
+the first one's VMs:
+
+```bash
+make test-suite SUITE=two_node_iperf    # one suite
+make test                               # all of them, one pytest run each
+```
+
 ## Troubleshooting
 - Permission errors / Operation not permitted: ensure `setup-user-mode.sh` ran, re-login; check `id` for `libvirt` and `kvm` groups; verify `/etc/sudoers.d/netsim` exists.
 - Libvirt connection errors: `sudo systemctl start libvirtd`; set `NETSIM_LIBVIRT_URI` if using system libvirt.

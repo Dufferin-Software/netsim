@@ -40,6 +40,12 @@ Real consumers today: policy-engine, whose suites live in that repo under
 A suite is a directory; its topology is `<dir>/<dir>.yaml`. The `topology_path`
 fixture finds it by that convention alone.
 
+**One suite per pytest invocation.** `tests/` is a single Python package, so
+pytest resolves the package-scoped `running_topology` fixture once for the
+whole tree — point pytest at two suites and the second runs against the first
+one's VMs, silently. `make test` (via `tests/run_all.sh`) invokes pytest once
+per suite for this reason; `make test-suite SUITE=<name>` runs just one.
+
 Topology `packages` takes two forms. A plain list installs regardless of
 `--feature`. The nested form declares per-feature sets and `pytest --feature
 <name>` (default `vanilla`) picks one — that is how a suite runs against

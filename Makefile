@@ -1,4 +1,4 @@
-.PHONY: lint format type-check dead-code test clean help
+.PHONY: lint format type-check dead-code test test-suite clean help
 
 help:
 	@echo "Available commands:"
@@ -7,7 +7,8 @@ help:
 	@echo "  make type-check  - Run mypy type checker"
 	@echo "  make dead-code   - Find unused functions/methods/classes (vulture)"
 	@echo "  make lint-all    - Run all linting (ruff + mypy + dead-code)"
-	@echo "  make test        - Run tests"
+	@echo "  make test        - Run every suite (one pytest run each)"
+	@echo "  make test-suite SUITE=two_node_iperf - Run one suite"
 	@echo "  make clean       - Remove build artifacts"
 
 lint:
@@ -28,8 +29,15 @@ dead-code:
 
 lint-all: lint type-check dead-code
 
+# One pytest invocation per suite. They cannot share a session: tests/ is a
+# single package, so the package-scoped topology fixture is set up once and a
+# second suite would run against the first suite's VMs.
 test:
-	python3 -m pytest tests/ -v
+	tests/run_all.sh
+
+test-suite:
+	@test -n "$(SUITE)" || { echo "usage: make test-suite SUITE=<name>"; exit 1; }
+	poetry run pytest tests/$(SUITE)/ -v
 
 clean:
 	find . -type d -name __pycache__ -exec rm -rf {} +
