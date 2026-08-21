@@ -7,16 +7,16 @@ help:
 	@echo "  make type-check  - Run mypy type checker"
 	@echo "  make dead-code   - Find unused functions/methods/classes (vulture)"
 	@echo "  make lint-all    - Run all linting (ruff + mypy + dead-code)"
-	@echo "  make test        - Run every suite (one pytest run each)"
+	@echo "  make test        - Run every example suite (one pytest run each)"
 	@echo "  make test-suite SUITE=two_node_iperf - Run one suite"
 	@echo "  make clean       - Remove build artifacts"
 
 lint:
-	poetry run ruff check netsim/ tests/
+	poetry run ruff check netsim/ examples/
 
 format:
-	poetry run ruff format netsim/ tests/
-	poetry run ruff check --unsafe-fixes --fix netsim/ tests/
+	poetry run ruff format netsim/ examples/
+	poetry run ruff check --unsafe-fixes --fix netsim/ examples/
 
 type-check:
 	poetry run mypy .
@@ -29,15 +29,15 @@ dead-code:
 
 lint-all: lint type-check dead-code
 
-# One pytest invocation per suite. They cannot share a session: tests/ is a
+# One pytest invocation per suite. They cannot share a session: examples/ is a
 # single package, so the package-scoped topology fixture is set up once and a
 # second suite would run against the first suite's VMs.
 test:
-	tests/run_all.sh
+	examples/run_all.sh
 
 test-suite:
 	@test -n "$(SUITE)" || { echo "usage: make test-suite SUITE=<name>"; exit 1; }
-	poetry run pytest tests/$(SUITE)/ -v
+	poetry run pytest examples/$(SUITE)/ -v
 
 clean:
 	find . -type d -name __pycache__ -exec rm -rf {} +

@@ -36,21 +36,21 @@ sudo ./setup-user-mode.sh   # adds you to libvirt/kvm and configures sudoers for
 
 ## Quick Start
 ```bash
-# Start example topology (creates bridges/taps, cloud-init ISO, boots VMs)
-netsim start examples/two-node-topology.yaml
+# Start an example topology (creates bridges/taps, cloud-init ISO, boots VMs)
+netsim start examples/two_node_iperf/two_node_iperf.yaml
 
 # Show connection info (SSH ports, status)
-netsim connect examples/two-node-topology.yaml
+netsim connect examples/two_node_iperf/two_node_iperf.yaml
 
 # SSH to node1 (mgmt port 2200)
 ssh -p 2200 netsim@localhost
 
 # Stop / resume
-netsim stop examples/two-node-topology.yaml
-netsim start examples/two-node-topology.yaml
+netsim stop examples/two_node_iperf/two_node_iperf.yaml
+netsim start examples/two_node_iperf/two_node_iperf.yaml
 
 # Destroy (remove VMs, taps, bridges)
-netsim destroy examples/two-node-topology.yaml
+netsim destroy examples/two_node_iperf/two_node_iperf.yaml
 ```
 
 ## Topology Basics
@@ -58,7 +58,7 @@ netsim destroy examples/two-node-topology.yaml
 - Nodes: name, image (path or {name,url,checksum}), memory, vcpus, networks (list of network names to connect)
 - Interfaces: auto-allocated at start time. First network = eth0 (management), additional networks = eth1, eth2, etc.
 - IPs: auto-allocated from each subnet starting at .10 (gateway is .1)
-- Example: see `examples/two-node-topology.yaml`
+- Example: see `examples/two_node_iperf/two_node_iperf.yaml`
 
 ## Cloud-Init
 - A cached ISO is generated at `~/.netsim/cloud-init/cloud-init-netsim.iso`
@@ -136,13 +136,13 @@ class TestMySuite(BaseTopologyTests):
         nodes["alice"].ssh_command(f"ping -c 3 {bob_ip}", timeout=10)
 ```
 
-Run it with `make test-suite SUITE=mysuite`. `tests/two_node_iperf/` is the
+Run it with `make test-suite SUITE=mysuite`. `examples/two_node_iperf/` is the
 smallest complete example in this repo, and shows package installation and
 richer assertions on top of the same pattern.
 
-Run one suite at a time — `tests/` is a single package, so pytest sets up the
-package-scoped topology once and a second suite in the same session would reuse
-the first one's VMs:
+Run one suite at a time — a suite tree is a single package, so pytest sets up
+the package-scoped topology once and a second suite in the same session would
+reuse the first one's VMs:
 
 ```bash
 make test-suite SUITE=two_node_iperf    # one suite

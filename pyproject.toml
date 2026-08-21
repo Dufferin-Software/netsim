@@ -65,7 +65,7 @@ ignore_missing_imports = true
 
 [tool.vulture]
 # Dead-code detection. Scans the netsim/ package; vulture_whitelist.py exempts
-# names that are used from tests/ or via (de)serialization. See the `dead-code`
+# names that are used from examples/ or via (de)serialization. See the `dead-code`
 # target in the Makefile.
 paths = ["netsim", "vulture_whitelist.py"]
 # netsim/testkit is a library for consumers, so most of its surface has no

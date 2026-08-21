@@ -18,7 +18,7 @@ CLI options. A consuming project gets all of it with one line in its rootdir
 pytest_plugins = ["netsim.testkit.plugin"]
 ```
 
-`tests/` holds netsim's own suites, which use that same entry point. They are
+`examples/` holds netsim's own suites, which use that same entry point. They are
 deliberately small — `two_node_iperf` and `three_node_iperf` — and exist to
 prove the simulator and the plugin, not to test anything built on top.
 
@@ -40,10 +40,10 @@ Real consumers today: policy-engine, whose suites live in that repo under
 A suite is a directory; its topology is `<dir>/<dir>.yaml`. The `topology_path`
 fixture finds it by that convention alone.
 
-**One suite per pytest invocation.** `tests/` is a single Python package, so
+**One suite per pytest invocation.** `examples/` is a single Python package, so
 pytest resolves the package-scoped `running_topology` fixture once for the
 whole tree — point pytest at two suites and the second runs against the first
-one's VMs, silently. `make test` (via `tests/run_all.sh`) invokes pytest once
+one's VMs, silently. `make test` (via `examples/run_all.sh`) invokes pytest once
 per suite for this reason; `make test-suite SUITE=<name>` runs just one.
 
 Topology `packages` takes two forms. A plain list installs regardless of

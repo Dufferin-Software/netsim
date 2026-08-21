@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Run netsim's own test suites sequentially and summarise pass/fail.
+# Run netsim's own example suites sequentially and summarise pass/fail.
 #
 # Usage:
-#   tests/run_all.sh
+#   examples/run_all.sh
 #
-# Override the suite list with SUITES="a b" tests/run_all.sh, or skip some
-# with SKIP="three_node_iperf" tests/run_all.sh.
+# Override the suite list with SUITES="a b" examples/run_all.sh, or skip some
+# with SKIP="three_node_iperf" examples/run_all.sh.
 
 set -u
 cd "$(dirname "$0")/.."
@@ -14,10 +14,10 @@ SKIP="${SKIP:-}"
 LOG_DIR="${LOG_DIR:-pytest-logs}"
 mkdir -p "$LOG_DIR"
 
-# Auto-discover suites: any tests/<name>/<name>.yaml is a suite.
+# Auto-discover suites: any examples/<name>/<name>.yaml is a suite.
 if [[ -z "${SUITES:-}" ]]; then
   SUITES=""
-  for d in tests/*/; do
+  for d in examples/*/; do
     name="$(basename "$d")"
     [[ -f "$d/$name.yaml" ]] && SUITES+="$name "
   done
@@ -45,7 +45,7 @@ for suite in $SUITES; do
     continue
   fi
 
-  topo="tests/$suite/$suite.yaml"
+  topo="examples/$suite/$suite.yaml"
   log="$LOG_DIR/$suite.log"
 
   echo
@@ -59,7 +59,7 @@ for suite in $SUITES; do
 
   # pytest owns the topology: the autouse running_topology fixture boots the
   # VMs and destroys them again, including after a failure.
-  if ! poetry run pytest "tests/$suite/" -v 2>&1 | tee "$log"; then
+  if ! poetry run pytest "examples/$suite/" -v 2>&1 | tee "$log"; then
     status=FAIL
   fi
   # Pull the pass/fail/skip counts out of pytest's final summary line

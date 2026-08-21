@@ -5,8 +5,8 @@
 #
 # Run the lint with:  make dead-code
 
-# --- Public API exercised only from tests/ (not scanned by the lint) ---
-# tests/conftest.py drives these via libvirt_utils.* / topology.*
+# --- Public API exercised only from examples/ (not scanned by the lint) ---
+# examples/conftest.py drives these via libvirt_utils.* / topology.*
 preflight  # netsim/libvirt_utils.py
 cleanup_leftover_taps  # netsim/libvirt_utils.py
 cleanup_leftover_vms  # netsim/libvirt_utils.py
