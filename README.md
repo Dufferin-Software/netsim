@@ -95,7 +95,50 @@ A suite is a directory holding its topology, named after it — a test in
 `--feature`, `--pause-on-failure` and `--tpm`. Inherit `BaseTopologyTests` to
 pick up the standard allocation, interface and connectivity assertions.
 
-`tests/two_node_iperf/` is the smallest complete example.
+A minimal suite is three files:
+
+```yaml
+# tests/mysuite/mysuite.yaml
+name: "mysuite"
+version: "1.0"
+networks:
+  - name: "net1"
+    subnet: "10.1.1.0/24"
+nodes:
+  - name: "alice"
+    image:
+      name: "debian-13-genericcloud"
+      url: "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2"
+      checksum: "<sha512>"
+    networks: ["net1"]
+  - name: "bob"
+    image:
+      name: "debian-13-genericcloud"
+      url: "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2"
+      checksum: "<sha512>"
+    networks: ["net1"]
+```
+
+```python
+# tests/mysuite/__init__.py  (empty — makes the suite a package)
+```
+
+```python
+# tests/mysuite/test_mysuite.py
+from netsim.testkit.base import BaseTopologyTests
+
+
+class TestMySuite(BaseTopologyTests):
+    def test_alice_can_ping_bob(
+        self, configure_node_interfaces, node_interfaces, nodes
+    ):
+        bob_ip = node_interfaces["bob"]["net1"].get_ip_address()
+        nodes["alice"].ssh_command(f"ping -c 3 {bob_ip}", timeout=10)
+```
+
+Run it with `make test-suite SUITE=mysuite`. `tests/two_node_iperf/` is the
+smallest complete example in this repo, and shows package installation and
+richer assertions on top of the same pattern.
 
 Run one suite at a time — `tests/` is a single package, so pytest sets up the
 package-scoped topology once and a second suite in the same session would reuse
