@@ -155,6 +155,4 @@ make test                               # all of them, one pytest run each
 - Missing tools: `genisoimage`, `python3-libvirt`, and `qemu-system-x86` must be installed.
 
 ## Additional Docs
-- Implementation notes: docs/IMPLEMENTATION_SUMMARY.md
 - Image management: docs/IMAGE_MANAGEMENT.md
-- Visual summary: VISUAL_SUMMARY.txt
