@@ -1,4 +1,4 @@
-# Copyright (c) Dufferin Software
+# Copyright (c) Peter Morrow
 
 """
 NetSim - Network Topology Simulator for eBPF XDP Development

@@ -1,4 +1,4 @@
-# Copyright (c) Dufferin Software
+# Copyright (c) Peter Morrow
 
 """Load netsim's own test kit for the suites in ``examples/``."""
 

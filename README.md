@@ -80,7 +80,7 @@ VMs, SSH access, netplan-configured interfaces, and `.deb` installation. Install
 it with the extra, then opt in from your project's rootdir `conftest.py`:
 
 ```bash
-pip install 'netsim[testkit] @ git+ssh://git@github.com/Dufferin-Software/netsim.git@v0.2.0'
+pip install 'netsim[testkit] @ git+ssh://git@github.com/pdmorrow/netsim.git@v0.2.0'
 ```
 
 ```python
